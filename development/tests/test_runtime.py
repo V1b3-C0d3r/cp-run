@@ -55,17 +55,36 @@ class RuntimeTest(unittest.TestCase):
         self.assertLess(outer - result.elapsed_ns, 100_000_000)
 
     def test_fast_exit_before_spawn_returns_excludes_history_callback_latency(self):
-        spawn = runtime.os.posix_spawnp
-        def delayed_return(*args, **kwargs):
-            pid = spawn(*args, **kwargs)
-            time.sleep(.03)  # SIGCHLD arrives while Runner does not know the PID.
+        clock = mock.Mock(return_value=1_000_000_000)
+        pid, duration = 123456789, 30_000_000
+        usage = SimpleNamespace(ru_maxrss=0)
+        events = []
+
+        def spawn(*_args, **_options):
+            clock.return_value += duration
+            # Deliver exit before Runner receives the PID, deterministically.
+            signal.getsignal(signal.SIGCHLD)(signal.SIGCHLD, None)
             return pid
+
+        def wait(child_pid, options):
+            self.assertEqual((child_pid, options), (pid, os.WNOHANG))
+            events.append('reap')
+            return pid, 0, usage
+
+        def history():
+            events.append('history')
+            clock.return_value += 250_000_000  # This I/O delay is not program time.
+
         runner = runtime.Runner()
-        runner.on_launch = lambda: time.sleep(.25)
-        with mock.patch.object(runtime.os, 'posix_spawnp', side_effect=delayed_return):
-            result = runner.run(['/usr/bin/true'])
-        self.assertEqual(result.status, 0)
-        self.assertLess(result.elapsed_ns, 150_000_000, 'history callback must be outside the completed interval')
+        runner.on_launch = history
+        with mock.patch.object(runtime.time, 'monotonic_ns', clock), \
+                mock.patch.object(runtime.os, 'posix_spawnp', side_effect=spawn), \
+                mock.patch.object(runtime.os, 'wait4', side_effect=wait), \
+                mock.patch.object(runtime.os, 'killpg') as kill:
+            result = runner.run(['/controlled/child'])
+        self.assertEqual((result.status, result.elapsed_ns), (0, duration))
+        self.assertEqual(events, ['reap', 'history'])
+        kill.assert_not_called()
 
     def test_preparation_and_reused_runner_do_not_accumulate(self):
         # An exact virtual interval tests clock ownership independently of
