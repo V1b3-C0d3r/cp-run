@@ -1,6 +1,7 @@
 """Numerical timing and real-process regressions for the embedded observer."""
 
 import contextlib
+import errno
 import importlib.util
 import io
 import os
@@ -128,15 +129,34 @@ class RuntimeTest(unittest.TestCase):
         self.assertTrue(any(result.elapsed_ns % 1_000_000 for result in results))
 
     def test_exit_during_slow_memory_sample_does_not_inflate_time(self):
-        class SlowSampler:
-            def sample(self, _group):
-                time.sleep(.15)
-                return 0
+        clock = mock.Mock(return_value=1_000_000_000)
+        pid, exited = 123456789, False
+        usage = SimpleNamespace(ru_maxrss=0)
+
+        def sample(child_pid):
+            nonlocal exited
+            self.assertEqual(child_pid, pid)
+            clock.return_value += 30_000_000
+            exited = True
+            signal.getsignal(signal.SIGCHLD)(signal.SIGCHLD, None)
+            clock.return_value += 150_000_000  # Sampling continues after child exit.
+            return 0
+
+        def wait(child_pid, options):
+            self.assertEqual((child_pid, options), (pid, os.WNOHANG))
+            return (pid, 0, usage) if exited else (0, 0, None)
+
+        # Deliver completion inside the sample, without assuming a real child
+        # can start and finish inside a narrow window on a loaded CI worker.
         runner = runtime.Runner()
-        runner.sampler = SlowSampler()
-        result = runner.run(["/bin/sleep", ".03"])
-        self.assertGreaterEqual(result.elapsed_ns, 25_000_000)
-        self.assertLess(result.elapsed_ns, 140_000_000)
+        runner.sampler = SimpleNamespace(sample=sample)
+        with mock.patch.object(runtime.time, 'monotonic_ns', clock), \
+                mock.patch.object(runtime.os, 'posix_spawnp', return_value=pid), \
+                mock.patch.object(runtime.os, 'wait4', wait), \
+                mock.patch.object(runtime.os, 'killpg') as kill:
+            result = runner.run(['/controlled/child'])
+        self.assertEqual((result.status, result.elapsed_ns), (0, 30_000_000))
+        kill.assert_not_called()
 
     def test_exit_between_limit_check_and_kill_never_signals_reaped_group(self):
         pid, now, armed, exited = 123456789, 0, False, False
@@ -224,10 +244,67 @@ class RuntimeTest(unittest.TestCase):
         self.assertIn("exceeds 70 ms", errors.getvalue())
 
     def test_nominal_timeout_can_fail_before_double_budget(self):
-        with contextlib.redirect_stderr(io.StringIO()):
-            result = runtime.Runner(timeout_ms="90").run(["/bin/sleep", ".11"])
-        self.assertEqual(result.verdict, "TLE")
-        self.assertLess(result.elapsed_ns, 180_000_000)
+        clock = mock.Mock(return_value=1_000_000_000)
+        pid, duration = 123456789, 110_000_000
+        usage = SimpleNamespace(ru_maxrss=0)
+
+        def wait(child_pid, options):
+            self.assertEqual((child_pid, options), (pid, os.WNOHANG))
+            clock.return_value += duration
+            return pid, 0, usage  # Natural successful exit, before the kill threshold.
+
+        with mock.patch.object(runtime.time, 'monotonic_ns', clock), \
+                mock.patch.object(runtime.os, 'posix_spawnp', return_value=pid), \
+                mock.patch.object(runtime.os, 'wait4', wait), \
+                mock.patch.object(runtime.os, 'killpg') as kill, \
+                contextlib.redirect_stderr(io.StringIO()):
+            result = runtime.Runner(timeout_ms='90').run(['/controlled/child'])
+        self.assertEqual((result.status, result.verdict, result.elapsed_ns), (124, 'TLE', duration))
+        kill.assert_not_called()
+
+    def test_group_permission_error_requires_confirmed_child_exit(self):
+        # Model Darwin's EPERM for a zombie-only group separately from a real
+        # permission failure against a live child. Only the former is benign.
+        for completes in (True, False):
+            with self.subTest(child_completed=completes):
+                clock = mock.Mock(return_value=1_000_000_000)
+                pid, exited = 123456789, False
+                usage = SimpleNamespace(ru_maxrss=0)
+                denied = PermissionError(errno.EPERM, 'group signalling denied')
+                old_handler = signal.getsignal(signal.SIGCHLD)
+
+                def sample(child_pid):
+                    self.assertEqual(child_pid, pid)
+                    clock.return_value += 30_000_000  # Cross the 20 ms kill threshold.
+                    return 0
+
+                def wait(child_pid, options):
+                    self.assertEqual((child_pid, options), (pid, os.WNOHANG))
+                    return (pid, 0, usage) if exited else (0, 0, None)
+
+                def deny(child_pid, signum):
+                    nonlocal exited
+                    self.assertEqual((child_pid, signum), (pid, signal.SIGKILL))
+                    exited = completes
+                    raise denied
+
+                runner = runtime.Runner(timeout_ms='10')
+                runner.sampler = SimpleNamespace(sample=sample)
+                with mock.patch.object(runtime.time, 'monotonic_ns', clock), \
+                        mock.patch.object(runtime.os, 'posix_spawnp', return_value=pid), \
+                        mock.patch.object(runtime.os, 'wait4', wait), \
+                        mock.patch.object(runtime.os, 'killpg', side_effect=deny) as kill, \
+                        contextlib.redirect_stderr(io.StringIO()):
+                    if completes:
+                        result = runner.run(['/controlled/child'])
+                        self.assertEqual((result.status, result.verdict), (124, 'TLE'))
+                        kill.assert_called_once_with(pid, signal.SIGKILL)
+                    else:
+                        with self.assertRaises(PermissionError) as error:
+                            runner.run(['/controlled/child'])
+                        self.assertIs(error.exception, denied)
+                self.assertFalse(runner._running)
+                self.assertIs(signal.getsignal(signal.SIGCHLD), old_handler)
 
     def test_group_timeout_stops_grandchild(self):
         script = (

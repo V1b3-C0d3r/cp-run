@@ -185,6 +185,7 @@ class Runner:
                 return
             if signalling:
                 return  # A nested signal is covered by the pending deadline.
+            denied = None
             signalling = True
             try:
                 # Keep the leader unreaped through this short check+kill
@@ -194,8 +195,17 @@ class Runner:
                         os.killpg(pid, signum)
                     except ProcessLookupError:
                         pass
+                    except PermissionError as error:
+                        denied = error
             finally:
                 signalling = False
+            if denied is not None:
+                # Darwin can report EPERM for a group containing only zombies.
+                # Reap after releasing the signal guard; suppress the error only
+                # if this child really exited. Never hide a live-child denial.
+                collect_exit()
+                if outcome is None:
+                    raise denied
 
         def collect_exit():
             nonlocal collecting, outcome, finished_ns, pending_signal
