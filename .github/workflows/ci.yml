@@ -1,0 +1,80 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+
+      - name: Install Linux toolchains
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zsh g++ clang libc++-dev libc++abi-dev
+
+      - name: Install GNU GCC on macOS
+        if: runner.os == 'macOS'
+        run: brew list gcc >/dev/null 2>&1 || brew install gcc
+
+      - name: Select real compiler executables
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == macOS ]]; then
+            gcc_prefix=$(brew --prefix gcc)
+            for candidate in "$gcc_prefix"/bin/g++-[0-9]*; do
+              if [[ -x "$candidate" ]]; then
+                gcc_executable=$candidate
+                break
+              fi
+            done
+          else
+            gcc_executable=$(command -v g++)
+          fi
+          test -n "${gcc_executable:-}"
+          clang_executable=$(command -v clang++)
+          test -n "$clang_executable"
+          printf 'CP_RUN_GCC=%s\n' "$gcc_executable" >> "$GITHUB_ENV"
+          printf 'CP_RUN_CLANG=%s\n' "$clang_executable" >> "$GITHUB_ENV"
+
+      - name: Build and check generated script
+        run: |
+          python3 development/build.py
+          zsh -n cp-run.zsh
+          git diff --exit-code -- cp-run.zsh
+
+      - name: Run regressions
+        run: python3 -m unittest discover -s development/tests -v
+
+      - name: Check one-file install and removal
+        shell: bash
+        run: |
+          install_dir="$RUNNER_TEMP/cp-run install"
+          mkdir -p "$install_dir/bin"
+          install -m 755 cp-run.zsh "$install_dir/bin/cp-run"
+          printf 'int main() { return 0; }\n' > "$install_dir/main.cpp"
+          CXX="$CP_RUN_GCC" "$install_dir/bin/cp-run" "$install_dir/main.cpp" \
+            -o "$install_dir/main.out" -tm --TLE=5000 --MLE=128
+          "$install_dir/bin/cp-run" run "$install_dir/main.out" -tm
+          rm "$install_dir/bin/cp-run"
+          test ! -e "$install_dir/bin/cp-run"

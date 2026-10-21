@@ -1,0 +1,21 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+.venv/
+
+# Generated programs and checks, including runs inside examples.
+*.out
+*.o
+*.d
+*.dSYM/
+.cp-run-*/
+test_out
+real-out.txt
+stress-failure*/
+build/
+/cp-run-*.zip
+
+# Local tooling, transient files and optional personal preferences exports.
+.pytest_cache/
+.cp-run-*
+cp-run-settings*.json
