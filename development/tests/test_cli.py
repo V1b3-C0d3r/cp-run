@@ -697,7 +697,8 @@ class CliTest(unittest.TestCase):
 
     def test_test_default_files_and_report(self):
         self.data()
-        result = self.invoke("test", env={"FAKE_PROGRAM_STDIN": "1"})
+        # File routing is independent of cold interpreter startup on CI.
+        result = self.invoke("test", '--TLE=inf', env={"FAKE_PROGRAM_STDIN": "1"})
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((self.cwd / "real-out.txt").read_text(), "hello\n")
         self.assertIn("PASS", (self.cwd / "test_out").read_text())
@@ -705,7 +706,7 @@ class CliTest(unittest.TestCase):
 
     def test_test_auto_default_empty_line_separator_compiles_once(self):
         self.data("first\n\nsecond\n", "first\n\nsecond\n")
-        result = self.invoke("test=auto", env={"FAKE_PROGRAM_STDIN": "1"})
+        result = self.invoke("test=auto", '--TLE=inf', env={"FAKE_PROGRAM_STDIN": "1"})
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(len(self.calls()), 1)
         self.assertIn("2", (self.cwd / "test_out").read_text())
@@ -753,9 +754,11 @@ class CliTest(unittest.TestCase):
         self.assertIn("2", protocol)
 
     def test_stress_sources_compile_three_roles_once(self):
+        # These two tests count builds, not runtime limits. A freshly created
+        # Python fixture can start slowly on cold or loaded macOS workers.
         (self.cwd / "brute.cpp").write_text("int main(){}")
         (self.cwd / "gen.cpp").write_text("int main(){}")
-        result = self.invoke("stress", self.source.name, "brute.cpp", "gen.cpp", "--test-iters=2", "--seed=9",
+        result = self.invoke("stress", self.source.name, "brute.cpp", "gen.cpp", "--test-iters=2", "--seed=9", '--TLE=inf',
                              env={"FAKE_PROGRAM_STDOUT": "same\n"})
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(len(self.calls()), 3)
@@ -763,7 +766,7 @@ class CliTest(unittest.TestCase):
 
     def test_stress_identical_source_configuration_is_built_once(self):
         (self.cwd / "gen.cpp").write_text("int main(){}")
-        result = self.invoke("stress", self.source.name, self.source.name, "gen.cpp", "--test-iters=1",
+        result = self.invoke("stress", self.source.name, self.source.name, "gen.cpp", "--test-iters=1", '--TLE=inf',
                              env={"FAKE_PROGRAM_STDOUT": "same\n"})
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(len(self.calls()), 2)
@@ -988,14 +991,14 @@ class CliTest(unittest.TestCase):
     def test_warmup_applies_to_candidate_not_stress_helpers(self):
         self.data(incoming='same\n', expected='same\n')
         counter = self.root / 'starts'
-        result = self.invoke('test', self.source.name, '-tm', env={
+        result = self.invoke('test', self.source.name, '-tm', '--TLE=inf', env={
             'FAKE_PROGRAM_COUNTER': str(counter), 'FAKE_PROGRAM_STDOUT': 'same\n'})
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(counter.read_text(), '2')
         (self.cwd / 'brute.cpp').write_text('int main(){}')
         (self.cwd / 'gen.cpp').write_text('int main(){}')
         counter.unlink()
-        result = self.invoke('stress', self.source.name, 'brute.cpp', 'gen.cpp', '-tm', '--test-iters=1', env={
+        result = self.invoke('stress', self.source.name, 'brute.cpp', 'gen.cpp', '-tm', '--test-iters=1', '--TLE=inf', env={
             'FAKE_PROGRAM_COUNTER': str(counter), 'FAKE_PROGRAM_STDOUT': 'same\n'})
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(counter.read_text(), '4', 'candidate warms once; each helper runs once')

@@ -161,14 +161,14 @@ cp-run main.cpp --profile=pragma-native --show-command
 
 `pragma` uses `-O3` and loop unrolling without relaxing floating-point rules. `pragma-fast` adds aggressive floating-point optimization and removes the stack protector. Both keep the compiler's default CPU target. `pragma-native` additionally requests supported tuning for the machine doing compilation; it falls back when unavailable or when an explicit target is supplied. Inspect the actual command rather than assuming SSE/AVX exists on ARM. None guarantees a speedup; a native binary is intended for its build machine.
 
-To see the floating-point tradeoff, pass an actual NaN at runtime:
+The separate [nan.cpp](optimization/nan.cpp) demonstrates the floating-point tradeoff. Pass an actual NaN at runtime:
 
 ```sh
-cp-run main.cpp --profile=pragma -- -- nan
-cp-run main.cpp --profile=pragma-fast -- -- nan
+cp-run nan.cpp --profile=pragma -- -- nan
+cp-run nan.cpp --profile=pragma-fast -- -- nan
 ```
 
-Both print the same integer checksum. The first prints `isnan=1`; aggressive fast math can print `isnan=0` because it assumes non-finite values do not occur. Choose the ordinary profile when that assumption is invalid.
+The first prints `isnan=1`; aggressive fast math can print `isnan=0` because it assumes non-finite values do not occur. Clang may diagnose this deliberate violation with `-Wnan-infinity-disabled`; adding `-Werror` then correctly rejects it. Choose the ordinary profile when that assumption is invalid. The integer-only `main.cpp` remains valid with `-Werror` in all three profiles.
 
 [gcc-pragmas.hpp](optimization/gcc-pragmas.hpp) shows the corresponding literal GCC optimization pragmas. Its compiler guard avoids unknown-pragmas warnings on Clang; the profiles supply Clang's working driver options. These commands include the header before the source without editing it:
 

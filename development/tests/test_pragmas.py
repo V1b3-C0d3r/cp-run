@@ -169,7 +169,7 @@ class _RealPragmaCase(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory(prefix='cp-run-pragma-real-')
         self.cwd = Path(self.temporary.name)
         self.env = dict(os.environ, CXX=self.driver)
-        for name in ('main.cpp', 'gcc-pragmas.hpp'):
+        for name in ('main.cpp', 'nan.cpp', 'gcc-pragmas.hpp'):
             shutil.copy2(EXAMPLES / 'optimization' / name, self.cwd / name)
 
     def tearDown(self):
@@ -196,6 +196,22 @@ class _RealPragmaCase(unittest.TestCase):
                 result = self.run_source(name, source='nan.cpp', runtime=('nan',))
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(result.stdout, expected)
+
+    def check_nan_warning_remains_a_compiler_decision(self):
+        # Recent Linux Clang diagnoses isnan under fast math; other Clang
+        # versions/libraries may not. Compare with the same native compiler
+        # instead of suppressing its warning or requiring one header version.
+        direct = subprocess.run([self.driver, '-std=c++17', '-O3', '-ffast-math',
+                                 '-Werror', 'nan.cpp', '-o', 'direct.out'],
+                                cwd=self.cwd, capture_output=True, text=True, timeout=30)
+        wrapped = subprocess.run([str(SCRIPT), 'compile', 'nan.cpp', '--compiler=clang',
+                                  '-std=17', '--profile=pragma-fast', '--', '-Werror'],
+                                 cwd=self.cwd, env=self.env, capture_output=True,
+                                 text=True, timeout=30)
+        self.assertEqual(wrapped.returncode == 0, direct.returncode == 0, wrapped.stderr)
+        if direct.returncode:
+            self.assertIn('-Wnan-infinity-disabled', direct.stderr)
+            self.assertIn('-Wnan-infinity-disabled', wrapped.stderr)
 
     def check_guarded_literal_pragma_header_compiles_cleanly(self):
         for name, define in (('pragma', ()), ('pragma-fast', ('-DCP_RUN_FAST_PRAGMAS',))):
@@ -255,6 +271,7 @@ for _family in ('gcc', 'clang'):
     _name = ('Gcc' if _family == 'gcc' else 'Clang') + 'PragmaTest'
     if _family == 'clang':
         _methods['test_explicit_libcxx_profiles'] = _RealPragmaCase.check_explicit_libcxx_keeps_the_same_optimization_profiles
+        _methods['test_nan_warning_is_not_suppressed'] = _RealPragmaCase.check_nan_warning_remains_a_compiler_decision
     globals()[_name] = type(_name, (_RealPragmaCase,), _methods)
 
 

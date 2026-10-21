@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -66,12 +67,29 @@ class RuntimeTest(unittest.TestCase):
         self.assertLess(result.elapsed_ns, 150_000_000, 'history callback must be outside the completed interval')
 
     def test_preparation_and_reused_runner_do_not_accumulate(self):
-        runner = runtime.Runner()
-        time.sleep(.18)  # Stand-in for compile, imports or preparing a test.
-        results = [runner.run(["/bin/sleep", ".02"]) for _ in range(3)]
-        for result in results:
-            self.assertGreaterEqual(result.elapsed_ns, 15_000_000)
-            self.assertLess(result.elapsed_ns, 140_000_000)
+        # An exact virtual interval tests clock ownership independently of
+        # loaded CI workers, cold executable startup and scheduler pauses.
+        clock = mock.Mock(return_value=1_000_000_000)
+        usage = SimpleNamespace(ru_maxrss=0)
+        pid, duration = 123456789, 20_000_000
+
+        def completed_child(child_pid, _options):
+            self.assertEqual(child_pid, pid)
+            clock.return_value += duration
+            return pid, 0, usage
+
+        with mock.patch.object(runtime.time, 'monotonic_ns', clock), \
+                mock.patch.object(runtime.os, 'posix_spawnp', return_value=pid), \
+                mock.patch.object(runtime.os, 'wait4', completed_child), \
+                mock.patch.object(runtime.os, 'killpg') as kill:
+            runner = runtime.Runner()
+            results = []
+            for _ in range(3):
+                clock.return_value += 10_000_000_000  # Compilation/preparation is outside each run.
+                results.append(runner.run(['/controlled/child']))
+        self.assertEqual([result.elapsed_ns for result in results], [duration] * 3)
+        self.assertEqual([result.status for result in results], [0] * 3)
+        kill.assert_not_called()
 
     def test_silent_run_redirects_both_streams_and_hides_observer_reports(self):
         messages = io.StringIO()
@@ -121,22 +139,59 @@ class RuntimeTest(unittest.TestCase):
         self.assertLess(result.elapsed_ns, 140_000_000)
 
     def test_exit_between_limit_check_and_kill_never_signals_reaped_group(self):
-        clock, calls = time.monotonic_ns, 0
+        pid, now, armed, exited = 123456789, 0, False, False
+        usage = SimpleNamespace(ru_maxrss=0)
+
+        def sample(child_pid):
+            nonlocal armed
+            self.assertEqual(child_pid, pid)
+            armed = True
+            return 0
 
         def race_clock():
-            nonlocal calls
-            calls += 1
-            if calls == 3:
-                # Reproduce SIGCHLD after the loop's exit check but before an
-                # expired timeout branch. The PID's reuse is not required.
-                time.sleep(.09)
-            return clock()
+            nonlocal now, armed, exited
+            now += 10_000_000
+            if armed:
+                # Deliver SIGCHLD after the post-sample exit check but before
+                # the expired-deadline branch. No sleep assumes child speed.
+                armed, exited = False, True
+                signal.getsignal(signal.SIGCHLD)(signal.SIGCHLD, None)
+            return now
 
+        def wait(child_pid, options):
+            self.assertEqual((child_pid, options), (pid, os.WNOHANG))
+            return (pid, 0, usage) if exited else (0, 0, None)
+
+        runner = runtime.Runner(timeout_ms='10')
+        runner.sampler = SimpleNamespace(sample=sample)
         with mock.patch.object(runtime.time, 'monotonic_ns', race_clock), \
+                mock.patch.object(runtime.os, 'posix_spawnp', return_value=pid), \
+                mock.patch.object(runtime.os, 'wait4', wait), \
                 mock.patch.object(runtime.os, 'killpg') as kill, \
                 contextlib.redirect_stderr(io.StringIO()):
-            result = runtime.Runner(timeout_ms='10').run(['/bin/sleep', '.03'])
+            result = runner.run(['/controlled/child'])
+        self.assertTrue(exited, 'the controlled SIGCHLD race must have occurred')
         self.assertEqual(result.verdict, 'TLE')
+        kill.assert_not_called()
+
+    def test_signal_after_reaping_before_publication_never_signals_reaped_group(self):
+        # A cancellation may interrupt wait4 after the kernel has reaped the
+        # leader but before Runner has stored its outcome. Defer that signal
+        # and discard it once the completed identity is known.
+        pid = 123456789
+        usage = SimpleNamespace(ru_maxrss=0)
+
+        def wait(child_pid, options):
+            self.assertEqual((child_pid, options), (pid, os.WNOHANG))
+            signal.getsignal(signal.SIGTERM)(signal.SIGTERM, None)
+            kill.assert_not_called()
+            return pid, 0, usage
+
+        with mock.patch.object(runtime.os, 'posix_spawnp', return_value=pid), \
+                mock.patch.object(runtime.os, 'wait4', wait), \
+                mock.patch.object(runtime.os, 'killpg') as kill:
+            result = runtime.Runner().run(['/controlled/child'])
+        self.assertEqual((result.status, result.verdict), (143, 'INTERRUPTED'))
         kill.assert_not_called()
 
     def test_signal_during_reap_is_deferred_until_child_identity_is_known(self):
