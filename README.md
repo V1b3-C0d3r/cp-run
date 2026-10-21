@@ -1,6 +1,6 @@
 # cp-run 1.0
 
-**Write C++. Run it. Catch the bug.** One zsh script turns a source file into a running program, checks sample answers and saves reproducible stress-test failures. GCC and Clang share the same commands; useful defaults keep routine work short.
+**Write C++. Run it. Catch the bug.** One zsh script turns a source file into a running program, checks sample answers and saves reproducible stress-test failures. GCC and Clang share the same commands; useful defaults keep routine work short. Compatible with macOS (ARM/Intel) and GNU/Linux (ARM). Runs perfectly on any platform or setup.
 
 ## Quick start
 
