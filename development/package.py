@@ -20,6 +20,9 @@ def release_files():
         (docs if workspace else RELEASE) / 'LICENSE': 'LICENSE',
         docs / 'CLI.md': 'docs/CLI.md', docs / 'TESTING.md': 'docs/TESTING.md',
     }
+    for path in docs.glob('*.md'):
+        if path.name != 'README.md': files[path] = 'docs/' + path.name
+    if (ROOT / 'JOURNAL.md').exists(): files[ROOT / 'JOURNAL.md'] = 'development/JOURNAL.md'
     for name in ('build.py', 'package.py'):
         files[ROOT / name] = 'development/' + name
     for name in ('src', 'tests'):

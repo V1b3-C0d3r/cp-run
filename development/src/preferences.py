@@ -18,6 +18,8 @@ def validate_preferences(values):
             raise ValueError('invalid text in ' + key + '; use visible \\n escapes')
     data['DEFAULT_COMPILER'] = _settings_compiler(data['DEFAULT_COMPILER'])
     _settings_standard(data['DEFAULT_STANDARD'])
+    if data['C_STANDARD'] != 'auto' and not re.fullmatch(r'(?:[0-9]+|(?:gnu|c)[0-9][A-Za-z0-9]*|iso9899:[0-9]+)', data['C_STANDARD']): raise ValueError('invalid C standard')
+    for key in ('DEFAULT_INPUT_TEMPLATE', 'DEFAULT_ANSWER_TEMPLATE'): case_template(data[key], 'main', 1)
     _settings_filename(data['DEFAULT_SOURCE'])
     for key in ('DEFAULT_BRUTE', 'DEFAULT_GENERATOR'):
         _settings_filename(data[key])
@@ -29,7 +31,7 @@ def validate_preferences(values):
     _settings_seed(data['DEFAULT_SEED'])
     _settings_separator(data['DEFAULT_SEPARATOR'])
     _settings_macro(data['DEFAULT_MACRO'])
-    _settings_choice('macro', 'auto')(data['DEFAULT_F_MODE'])
+    _settings_choice('macro', 'auto', 'in', 'out')(data['DEFAULT_F_MODE'])
     _settings_choice('0', '1')(data['DEFAULT_WARMUP'])
     for key in ('TIME_KILL_FACTOR', 'MEMORY_KILL_FACTOR'):
         _factor(data[key])
@@ -41,9 +43,33 @@ def validate_preferences(values):
         _settings_destination(data[key])
     for key in ('DEFAULT_WORKSPACE', 'DEFAULT_INPUT', 'DEFAULT_OUTPUT', 'DEFAULT_ANSWER', 'DEFAULT_REPORT'):
         if not data[key]: raise ValueError('empty setting: ' + key)
+    # Optional map entries inherit; an explicit zero remains a real override.
+    actions = {'ordinary', 'compile', 'debug', 'run', 'test', 'test-auto', 'test-mult', 'stress', 'companion'}
+    for key in ('ACTION_DEST_DIR', 'ACTION_SAVE_RELPATH', 'ACTION_SAVE_TEST_RELPATH'):
+        if set(data[key]) - actions: raise ValueError('unknown action in ' + key)
+    for key in ('MODE_DEST_DIR', 'MODE_SAVE_RELPATH', 'MODE_SAVE_TEST_RELPATH'):
+        data[key] = {name: value for name, value in data[key].items() if value != ''}
+    for key in ('ACTION_DEST_DIR', 'MODE_DEST_DIR'):
+        for value in data[key].values():
+            if not value: raise ValueError('empty destination override')
+            _settings_destination(value)
+    for key in ('ACTION_SAVE_RELPATH', 'ACTION_SAVE_TEST_RELPATH', 'MODE_SAVE_RELPATH', 'MODE_SAVE_TEST_RELPATH'):
+        for value in data[key].values(): _settings_choice('0', '1')(value)
+    for key in ('DEFAULT_TEST_DIR',):
+        if data[key]: _settings_destination(data[key])
+    for key in ('C_SOURCE', 'PYTHON_SOURCE'): _settings_filename(data[key])
+    _settings_separator(data['MANUAL_SEPARATOR'])
+    _settings_choice('all', 'failed')(data['DEFAULT_REPORT_TESTS'])
+    for key in ('COMPANION_PORT', 'COMPANION_WAIT', 'MINIMIZE_ATTEMPTS', 'MINIMIZE_SECONDS', 'MAX_FAILURES'):
+        _settings_positive(data[key])
+    if int(data['COMPANION_PORT']) > 65535: raise ValueError('port must be 1..65535')
+    if not data['DEFAULT_INTERPRETER']: raise ValueError('empty interpreter')
+    flag_units(data['PYTHON_FLAGS'])
     names = data['MODE_NAMES']
+    for key in PROFILE_KEYS:
+        if key not in values: data[key] = {name: value for name, value in data[key].items() if name in names}
     if len(set(names)) != len(names): raise ValueError('duplicate profile name')
-    reserved = {'compile', 'run', 'test', 'stress', 'tr', 'sr', 'none', 'plain'}
+    reserved = {'companion', 'compile', 'run', 'test', 'stress', 'tr', 'sr', 'none', 'plain'}
     for name in names:
         if not re.fullmatch(r'[A-Za-z][A-Za-z0-9_-]{0,31}', name) or name in reserved:
             raise ValueError('invalid profile name: ' + name)
@@ -67,7 +93,7 @@ def export_preferences(path, data, script_path):
     if destination.resolve() == Path(script_path).resolve():
         raise ValueError('settings export must not overwrite the script')
     data = validate_preferences(data)
-    record = {'format': 'cp-run-settings', 'schema': 1, 'settings': data}
+    record = {'format': 'cp-run-settings', 'schema': 2, 'settings': data}
     temporary = None
     try:
         with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=destination.parent,
@@ -96,7 +122,7 @@ def load_preferences(path):
         raise ValueError('settings export is too deeply nested') from None
     if (not isinstance(record, dict) or set(record) != {'format', 'schema', 'settings'}
             or record['format'] != 'cp-run-settings' or type(record['schema']) is not int
-            or record['schema'] != 1):
+            or record['schema'] not in (1, 2)):
         raise ValueError('unsupported settings export format/schema')
     return validate_preferences(record['settings'])
 
@@ -121,7 +147,10 @@ def remember_launch(config):
     try:
         with tempfile.NamedTemporaryFile(dir=Path(path).parent, prefix='.launch-', delete=False) as stream:
             temporary = Path(stream.name)
-            stream.write(os.fsencode(config['executable']) + b'\0')
+            fields = [config['executable']]
+            if config['executable'].endswith('.py'):
+                fields.extend(['CP_RUN_ARGV_V1', *config.get('main_argv', [config['executable']])])
+            stream.write(b''.join(os.fsencode(value) + b'\0' for value in fields))
         os.replace(temporary, path)
     except OSError as error:
         print('cp-run: warning: launch history not saved: ' + str(error), file=sys.stderr)

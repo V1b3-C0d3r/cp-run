@@ -1,0 +1,11 @@
+{
+  "name": "Add two numbers",
+  "group": "Local demonstration",
+  "url": "https://example.com/problem",
+  "interactive": false,
+  "memoryLimit": 256,
+  "timeLimit": 1500,
+  "tests": [{"input": "2 3\n", "output": "5\n"}, {"input": "7 8\n", "output": "15\n"}],
+  "testType": "single",
+  "batch": {"id": "cp-run-example", "size": 1}
+}

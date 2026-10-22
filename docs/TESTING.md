@@ -1,222 +1,199 @@
-# Test a solution
+# Testing, imports and counterexamples
 
-Start with one input file and one expected answer. Independent cases and stress testing are optional. Ready-to-run examples live in [Examples](../examples/README.md).
+## One complete input: `test`
 
-## One input, one answer
+Create `main.py`:
 
-Save this as `main.cpp`:
-
-```cpp
-#include <iostream>
-int main() {
-    long long a, b;
-    while (std::cin >> a >> b) std::cout << a + b << '\n';
-}
+```python
+import sys
+numbers = list(map(int, sys.stdin.read().split()))
+print(sum(numbers))
 ```
 
-Create `input.txt`:
-
-```text
-2 3
-```
-
-Create `ans.txt`:
-
-```text
-5
-```
-
-Run:
+`input.txt` contains `2 3` followed by a newline. `ans.txt` contains `5` followed by a newline.
 
 ```sh
-cp-run test main.cpp
+cp-run test --cout
 ```
 
-| File | Who writes it? | Contents in this example |
-| --- | --- | --- |
-| `main.cpp` | You | Program to compile |
-| `input.txt` | You | `2 3` followed by a newline; sent to program stdin |
-| `ans.txt` | You | `5` followed by a newline; expected stdout |
-| `main.out` | Compiler | Generated executable |
-| `real-out.txt` | cp-run | Actual stdout: `5` followed by a newline |
-| `test_out` | cp-run | Human-readable protocol below |
+This is **one test**, even if input contains blank lines or an internal testcase count. Program output is kept in `real-out.txt`; the protocol goes to `test_out`, or stdout with `--cout`.
 
 ```text
-cp-run test: selected 1 of 1 cases
-Test 1: OK
-PASS: 1 selected cases executed; 0 failed
-```
-
-You may omit `main.cpp` using the usual source-discovery rule. `test` treats the complete input as one run; a count or multiple cases inside it belong to your C++ program.
-
-### Change files or reuse a binary
-
-```sh
-cp-run test main.cpp sample.in correct.ans report.txt
-cp-run test "" sample.in correct.ans           # Discover source; keep other named slots
-cp-run compile main.cpp
-cp-run test run ./main.out input.txt ans.txt
-cp-run test run "" input.txt ans.txt --find=main
-cp-run test main.cpp --cout                   # Protocol to stdout
-```
-
-The four positional slots are **FILE IN ANS REPORT**. Missing or `""` slots use defaults. In `test run`, FILE is an existing binary; `--find` fills an omitted FILE. `--cout` moves the protocol to stdout, but `real-out.txt` is still written. Data paths start at the invocation directory; their parent directories must exist. `-f` is unavailable because the harness already controls stdin/stdout.
-
-### Read a failure
-
-Change `ans.txt` to `6` and run the test again. The report contains:
-
-```text
-Test 1: WA
+TEST 1
 input:
     input:1 | "2 3"
 real-out.txt:
-  ! real-out.txt:1 | "5"
+    real-out.txt:1 | "5"
 ans:
-  ! ans:1 | "6"
+    ans:1 | "5"
+Test 1: AC
+  TIME: ...    MEMORY: ...
+FINAL VERDICT: AC
 ```
 
-`!` marks a differing line. `real-out.txt:1` and `ans:1` are independent line numbers; inserted/deleted lines are shown as `<missing line>`. Display quotes and escapes make control characters visible; they are not added to the raw files. See [a ready-made failing answer](../examples/testing/wrong.ans).
+Each section has its own line numbering. `!` marks differing output/answer lines. An inserted/deleted line has an explicit missing counterpart; empty files and a missing final newline are labeled. Comparisons preserve spaces and blank rows, normalize CRLF, and tolerate one optional final newline. Input is displayed, not compared to the answer.
 
-Comparison preserves spaces, tabs and blank lines; it treats LF/CRLF line endings alike and accepts a final line without its newline. The comparison budget defaults to **10000 aligned rows per case/iteration**; successful earlier cases do not consume the next allowance. Reaching it with unchecked output produces **INCOMPLETE** (exit 4), never PASS. Factory caps also bound each row to 1 MiB, total compared bytes per case (both streams) to 64 MiB and diagnostic payload to 256 KiB with at most 10000 rows per section. Oversized comparison data is INCOMPLETE; shortening the displayed diff never changes a completed verdict. All caps are editable in settings. These protect checker memory, not the disk space produced by an unlimited child.
+```sh
+cp-run test main.py samples.in correct.ans report.txt
+cp-run test "" samples.in correct.ans       # Discover FILE; retain positional slots
+cp-run test run ./solution.out --cout
+cp-run test main.cpp -- -DTESTING -- --verbose
+```
 
-## Independent cases: `test=auto`
+`FILE`, `IN`, `ANS`, `REPORT` are positional slots. Use `""` to leave one at its default. The first `--` starts backend options; the second starts program arguments. For `test run`, one `--` starts program arguments.
 
-Use the same program. Put this in `input.txt`:
+## Separate files: `test=mult`
+
+Keep the same main.py and create:
+
+```text
+tests/
+  1.in     contains: 2 3 + newline
+  1.ans    contains: 5 + newline
+  2.in     contains: 7 8 + newline
+  2.ans    contains: 15 + newline
+```
+
+```sh
+cp-run test=mult main.py --cout
+cp-run test=mult 2 1 main.py --cout         # Test 2, then test 1
+cp-run test=mult main.py --test-iters=1     # Only first selected test
+```
+
+The directory defaults to `tests`; set `--dest-dir=DIR` or a separate `--test-dir=DIR`. IDs are positive integers, sorted numerically unless selected explicitly. Gaps are accepted: 1 and 3 do not require 2. `1.in` plus `01.in` is ambiguous and rejected. Missing inputs/answers fail before compilation/execution.
+
+Templates are literal paths with `{n}` (test ID) and `{stem}` (source basename without extension):
+
+```sh
+cp-run test=mult sum.cpp --dest-dir=tests \
+  --in-tmp='{stem}/{n}.in' --ans-tmp='{stem}/{n}.ans'
+```
+
+This reads `tests/sum/1.in` and `tests/sum/1.ans`. Quotes protect braces/spaces from shell interpretation; they are not part of the path. `{filename-noExt}`, `{file-name-no-ext}`, `{filename-no-ext}` are accepted stem aliases. No other expressions/placeholders are evaluated.
+
+`--save-relpath` routes binaries under their workspace-relative source directory. `--save-test-relpath` does the same independently for data. For workspace `/project`, source `/project/tasks/A/main.cpp`, and data root `tests`, the latter reads `/project/tests/tasks/A/1.in`. `run --find` uses the corresponding invocation-relative artifact subtree.
+
+## Separated blocks: `test=auto`
+
+The internal delimiter is LF, ASCII **Record Separator** (byte 0x1E), LF. It is written `\n\x1e\n` in settings; pack/unpack insert it automatically. Do not manually type an invisible RS character.
+
+For a hand-written bundle, use a visible marker and an explicit separator. Example `samples.in`:
 
 ```text
 2 3
-
+###
 7 8
 ```
 
-Put this in `ans.txt`:
+Corresponding `samples.ans`:
 
 ```text
 5
-
+###
 15
 ```
 
 ```sh
-cp-run test=auto main.cpp
-cp-run test=auto run ./main.out              # Same bundle, existing binary
+cp-run test=auto main.py samples.in samples.ans --sep='\n###\n' --cout
+cp-run test=auto 2 main.py samples.in samples.ans --sep='\n###\n'
 ```
 
-The blank line is the default separator: **`\n\n` means two newline bytes**. Both files split into two corresponding blocks. A new process receives each input block; no case count is inserted. Input/answer block counts must match, even when you select only some cases. A mismatch stops before compilation or output creation.
+Here `\n` is a newline escape decoded by cp-run; `###` is literal text. The separator's surrounding newlines belong to the delimiter. Test 1 input is exactly `2 3`, not `2 3` plus a trailing newline. Choose mult files when exact boundary whitespace matters. Legacy auto input has **no header count**, and drops one terminal delimiter as in 1.0.
 
-No separator means one case; an empty file is one empty case. One separator at the end closes the previous case without creating an extra one. Leading/interior empty blocks remain cases. Separators consume their bytes, including boundary newlines; payload whitespace is otherwise unchanged. Bundle separators use LF exactly, so save these files with LF line endings.
+Auto and mult run each test independently, compare it independently, and apply TLE/MLE independently. A mismatch, crash or resource failure does not prevent the next test.
 
-`real-out.txt` preserves stdout from selected runs and inserts the separator between them. Programs may already print a final newline; the combined file preserves that too. Each case is compared separately, so joining cannot mix case answers.
+## Pack/unpack without losing blank lines
 
-### Select cases
+A counted bundle starts with the decimal record count and LF. Remaining records are joined with the internal delimiter; payloads are never trimmed or given an extra final newline. The count disambiguates empty final records. Under the RS codec, RS is reserved in payloads; ambiguous custom markers are rejected before writing.
 
 ```sh
-cp-run test=auto 2 main.cpp                 # Only case 2
-cp-run test=auto 2 1 main.cpp                # Case 2, then case 1
-cp-run test=auto 2 1 main.cpp --test-iters=1 # Only the first selected case: 2
+cp-run --pack=in tests inputs.bundle --source=main.py
+cp-run --pack ans tests answers.bundle --source main.py
+cp-run test=auto main.py inputs.bundle answers.bundle --bundle-format=counted
+cp-run --unpack=in inputs.bundle restored --source=main.py
+cp-run --unpack=ans answers.bundle restored --source=main.py
 ```
 
-Numbers are **1-based original case IDs**, typed immediately after `test=auto` (or after its `run` modifier). Duplicates are removed in requested order. `0` becomes `1` with a notice; negative/out-of-range IDs fail. `--test-iters=N` limits how many selected cases run; it does not choose case N. Numbered selection requires `test=auto`.
+The templates also apply to packing/unpacking. Files 1 and 3 are packed in numerical order as container records 1 and 2; the mapping is printed. A plain counted container does not retain sparse filename IDs. Existing conflicting files are refused; use `--overwrite` for planned replacements. Missing DIR/BUNDLE uses routed test root and `input.bundle`/`ans.bundle` (derived from saved input/answer names).
 
-### Keep blank lines inside a case
-
-Use [custom.in](../examples/testing/custom.in) and [custom.ans](../examples/testing/custom.ans):
+For manual editing, use a separate configurable text marker. `manual.in`:
 
 ```text
+2
 2 3
-
+###
 7 8
-###
-10 20
-
--5 8
 ```
 
-Each case contains two pairs, including an internal blank line. The first sums `2 3` and `7 8`; the second sums `10 20` and `-5 8`. Expected answer:
-
-```text
-5
-15
-###
-30
-3
-```
+The **first 2 is container metadata**, not part of the first program input. Convert in either direction:
 
 ```sh
-cp-run test=auto main.cpp custom.in custom.ans --sep='\n###\n'
+cp-run --pack=in manual.in inputs.bundle --text-sep='\n###\n'
+cp-run --unpack=in inputs.bundle editable.in --text-sep='\n###\n'
 ```
 
-In `--sep='\n###\n'`, `=` attaches the value; shell quotes keep it literal and are removed by the shell; each `\n` becomes one newline; the three `#` characters are literal. The separator is therefore a line containing exactly `###`, including the newline before and after it. The internal blank lines stay in the cases.
+Use `--text` to select the saved manual marker, or an explicit `--text-sep` to override it. This selects a single manual file instead of a numbered directory. The marker is configurable in defaults. Conversion parses records, checks their count and lossless framing, then writes the other representation. It never globally replaces marker text inside payloads. If a marker collides with data or a partial boundary, choose another one; previous outputs remain intact on validation errors.
 
-A separator starts/ends with newline and otherwise permits ASCII letters, digits, spaces and `#=_.:+-`. Only visible `\n` is decoded. Quotes, `$`, `@`, other escapes and shell operators are not separator content. Save another default separator in Checking & limits.
-
-## Read input and answer from the console
+## Console input
 
 ```sh
-cp-run test main.cpp --cin --cout <<'EOF'
+cp-run test main.py --cin --cout <<'EOF'
 2 3
 :::answer:::
 5
 EOF
 ```
 
-The shell's `<<'EOF'` sends the block literally; its closing `EOF` is not data. The line **`:::answer:::`** separates program input from expected output, then EOF finishes both. Exactly one marker line is required. `--cin` selects stdin; `--cout` selects the report destination. Neither changes `real-out.txt`.
+`:::answer:::` on its own line separates input from answer. Prefix it with a backslash (`\:::answer:::`) to include that literal marker line in a payload. `--cin` is for whole-file/auto tests, not mult or stress. `--cout` redirects only the protocol; raw program stdout still goes to real-out.txt.
 
-For interactive entry, run `cp-run test --cin`, enter the same lines and finish with Ctrl-D. For a saved frame, use `cp-run test --cin < console.txt`. In `test=auto`, separate cases on both sides of the marker using the selected separator; [console-auto.txt](../examples/testing/console-auto.txt) shows two cases.
+## Verdicts and resource statistics
 
-For a program that needs a literal `:::answer:::` input/answer line, write **`\:::answer:::`** instead. That leading backslash is removed. No other payload escapes are decoded.
+Each full block shows input/output/answer, then verdict, elapsed time and peak RSS. `--report-tests=failed` hides AC payload bodies while retaining all verdict/metric rows. Compiler warnings/errors always remain live on console; runtime stderr is included completely in the checking report, with terminal controls escaped safely.
 
-Try [console-literal.txt](../examples/testing/console-literal.txt) with an echoing binary:
-
-```sh
-cp-run test run /bin/cat --cin < console-literal.txt
-```
-
-## Compiler and runtime arguments
+Public verdicts: **AC, WA, TLE, MLE, RE, CE**. The final summary lists every affected test ID. Its deterministic headline uses CE > MLE > TLE > RE > WA > AC. A compiler failure marks tests NOT RUN; partial crash output cannot turn RE/TLE/MLE into WA. Checker limits, broken generator/oracle and cancellation are separately identified as unfinished/infrastructure states, never AC.
 
 ```sh
-cp-run test main.cpp -- -DTESTING -- --verbose
-cp-run test main.cpp -- -- --verbose
-cp-run test run ./main.out -- --verbose
-cp-run test main.cpp --profile=extra --TLE=1000 --MLE=256
+cp-run test=mult main.py -tm --average=3 --warm-up=1 --cout
+cp-run test=mult main.py --TLE=1500 --MLE=256
 ```
 
-For source tests, the first `--` starts compiler arguments and the second starts program arguments. Adjacent `-- --` means no extra compiler flags. For binary tests, the first `--` starts program arguments. The sum example ignores arguments; [runtime examples](../examples/README.md#runtime-and-profiles) show a program that reads them.
+Every independent test gets its own warm-up and measured series. Only the first measured stdout is canonical; time is the median, RSS the maximum, and a later failed repeat is reported separately. Generator/reference run once per stress iteration. Limits apply independently to every launch, not to the median or the sum of tests.
 
-Factory test/stress budgets are 1500 ms and 256 MiB per execution; `--TLE=inf --MLE=inf` disables them. `-t --average=3` optionally warms and checks three measured candidate runs per case, with median time and maximum RSS. No program stdout is duplicated: the harness still stores one result; a failing repeat replaces it for useful diagnostics. Reference and generator run once per stress iteration. Each independent case has its own [resource budgets](CLI.md#measurements-limits-and-streams). Wrong answers and candidate runtime/limit failures do not skip remaining cases. Cancellation/infrastructure errors stop the job. Aggregate failures prioritize TLE, MLE, the first runtime failure, then WA; an actual comparison cutoff produces INCOMPLETE. A child's exit status `3` is a runtime failure, not automatically WA.
+Ordinary test remains one process/measurement/verdict. If it internally processes 10 cases, `--test-iters=10` multiplies the whole-process time allowance by 10; it does not identify internal boundaries or multiply memory. Native cutoff is the saved multiplier (default x2), but exceeding the nominal allowance already means TLE/MLE. Reported durations include Python startup/imports; compilation and diff work are excluded.
 
-## Stress testing
+Comparison defaults: 10000 aligned rows, 1 MiB per row, 64 MiB total checked bytes per case. Diagnostic payload display has separate limits. An unfinished comparison is INCOMPLETE, not AC/WA. Full raw first stdout remains available; report truncation is explicit. Checking limits do not constitute a disk quota on arbitrary user-program output.
 
-Provide three programs: **MAIN** is your candidate; **BRUTE** is a trusted implementation of the same task; **GEN** generates one input. [The complete stress example](../examples/README.md#stress) includes a correct candidate, an intentionally buggy candidate, a reference and a deterministic generator.
+## Stress and smaller counterexamples
 
 ```sh
-cp-run stress main.cpp brute.cpp gen.cpp
-cp-run stress buggy.cpp brute.cpp gen.cpp --seed=4 --test-iters=20
+cp-run stress main.cpp brute.py gen.py --seed=4 --test-iters=100
+cp-run stress run ./main.out ./brute.out ./gen.out --test-iters=100
+cp-run stress --stop-on-failure
 ```
 
-Each source is compiled once. For every iteration, GEN receives the decimal seed as `argv[1]`; its stdout becomes the identical stdin for BRUTE and MAIN. BRUTE's stdout is the expected answer. The default starting seed is **4** and the ceiling is **1000 iterations**, both editable in Stress settings. `--seed=N` requires a value in `0…18446744073709551615`; iteration i uses `(seed + i - 1) modulo 2^64`. GEN must actually use that argument for deterministic generation.
+GEN receives the seed as its first program argument; seeds increment modulo 2^64. BRUTE and MAIN receive identical generated stdin. Default source names are main/brute/gen with discovered supported extensions. Runtime arguments after the second boundary apply to MAIN.
 
-For example, GEN may output `4 2` for seed `4`; BRUTE should output `6`. A candidate that outputs `7` produces the first counterexample. The job stops and saves:
-
-| Saved file | Contents |
-| --- | --- |
-| `stress-failure/input.txt` | Generated input, such as `4 2` |
-| `stress-failure/ans.txt` | BRUTE stdout, such as `6` |
-| `stress-failure/real-out.txt` | MAIN stdout, such as `7` |
-| `stress-failure/test_out` | Verdict and numbered differences |
-| `stress-failure/manifest.json` | Seed, iteration, exact argv, limits/statuses, hashes and replay argv |
-
-Existing bundles get a free suffix instead of being overwritten. A replay command is printed on stderr; it uses the saved input rather than requiring generation to repeat. For the example binaries:
+Candidate failures do not stop later requested iterations by default. `--stop-on-failure` enables quick-stop. Failure bundles (`stress-failure`, `stress-failure-1`, ...) preserve input, answer, output, seed, role commands/tool metadata and a replay command in manifest.json. The saved bundle count is bounded in defaults; all failures remain in the summary. A generator/oracle failure is reported by role, not called candidate WA.
 
 ```sh
-cp-run test run ./buggy.out stress-failure/input.txt stress-failure/ans.txt replay-report.txt
-cp-run stress run ./main.out ./brute.out ./gen.out --test-iters=20
-cp-run stress main.cpp brute.cpp gen.cpp -- -O2 -- --verbose
+cp-run stress --minimize=sequence --stop-on-failure
+cp-run stress --minimize=sequence --validator=validate.py --stop-on-failure
 ```
 
-Binary stress requires all three executables; `--find` can fill only omitted MAIN: `cp-run stress run "" ./brute.out ./gen.out --find=main`. Shared compiler-tail flags apply to all builds; runtime-tail arguments and a selected profile apply to MAIN only. Every role has an independent runtime budget. Generator/reference failures are labeled separately. `--cin` and `-f` are unavailable.
+Sequence grammar: first token N, then exactly N integer tokens. Example `6\n1 2 7 3 4 5\n`. The reducer removes groups, repairs N and simplifies values, accepting only confirmed valid wrong answers. A validator reads proposed stdin and exits 0 for valid input; use it for bounds/sortedness/other problem constraints. `cases` means T followed by T single-line independent records; `lines` means declared independent lines. Both require a validator.
 
-The regular `real-out.txt` contains the latest candidate output; `test_out` is the protocol unless `--cout` prints it. Failure bundles are retained even with `--cout`. “No difference in N generated cases” means exactly that tested sample, not a proof of correctness.
+The original bundle is immutable. Confirmed results are saved as reduced-input.txt, reduced-ans.txt, reduced-out.txt and reduction.json. Search is bounded by attempts/time, uses no warm-up, checks failures twice and confirms again with original repetition settings. Large or unreproducible inputs are retained without a false reduction claim. Graph/tree structure is not inferred; no globally smallest-input guarantee.
 
-`test` indexes input/answer byte ranges and validates counts before running. Console input is spooled once (factory 256 MiB cap), not consumed again during execution; bundles are limited to 100000 cases. Source, input, answer, executable and output paths cannot collide; concurrent test/stress writers in the same directory are rejected. Cancelled jobs clean scratch files while preserving available counterexamples and captured stdout.
+The strategy follows [delta debugging](https://www.cs.purdue.edu/homes/xyzhang/fall07/Papers/delta-debugging.pdf); [hierarchical delta debugging](https://www.cs.ucdavis.edu/~su/publications/icse06-hdd.pdf) motivates keeping structured validity in grammar adapters. See the runnable [reduction example](../examples/reduction/README.md).
+
+## Competitive Companion
+
+1. Install [Competitive Companion](https://github.com/jmerle/competitive-companion#installation).
+2. Extension settings → Custom ports: add **27122**.
+3. Beside your source, run `cp-run companion main.py`.
+4. Open one problem page and click the extension. The foreground receiver saves numbered samples and exits.
+5. Run `cp-run test=mult main.py --cout`.
+
+Port and wait seconds: `--port=27122 --wait=120`. Templates and data routing are shared with mult; use identical options for importing and checking. Imports preserve the received strings, including blank lines and empty answers. Remote file paths/limits are not applied. A site's internal testcase count is program input and remains untouched.
+
+The listener binds loopback only, accepts bounded JSON, and performs no compilation/formatting inside requests. It accepts one problem; a contest batch is rejected before writes. Repeated identical samples are idempotent. Changed files need `--overwrite`; stale extra samples require a clean destination to avoid accidentally mixing problems. Requests and imports never overwrite sources or binaries. On WSL, verify browser localhost forwarding for your setup.

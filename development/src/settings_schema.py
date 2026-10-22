@@ -21,9 +21,11 @@ SETTINGS_GROUPS = {
     'common': 'MODE_FLAGS', 'gcc': 'MODE_GCC', 'clang': 'MODE_CLANG',
     'libstdc++': 'MODE_LIBSTDCXX', 'libc++': 'MODE_LIBCPP',
     'warnings-gcc': 'MODE_WARNINGS_GCC', 'warnings-clang': 'MODE_WARNINGS_CLANG',
+    'cpython': 'MODE_CPYTHON', 'pypy': 'MODE_PYPY',
 }
 # Keep metadata in the same copy/reset/delete transaction as compiler flags.
-PROFILE_KEYS = ('MODE_KIND', 'MODE_CPU', *SETTINGS_GROUPS.values())
+PROFILE_KEYS = ('MODE_KIND', 'MODE_CPU', 'MODE_DEST_DIR', 'MODE_SAVE_RELPATH',
+                'MODE_SAVE_TEST_RELPATH', *SETTINGS_GROUPS.values())
 PROFILE_DEFAULTS = {'MODE_KIND': 'flags', 'MODE_CPU': 'default'}
 
 # These defaults mirror the native block. A regression test checks equality so
@@ -33,7 +35,18 @@ FACTORY_SETTINGS = {
     'DEFAULT_SOURCE': 'main.cpp', 'DEFAULT_TIMEOUT': 'inf',
     'DEFAULT_MEMORY_LIMIT': 'inf', 'DEFAULT_INPUT': 'input.txt',
     'DEFAULT_OUTPUT': 'output.txt', 'DEFAULT_ANSWER': 'ans.txt',
-    'DEFAULT_REPORT': 'test_out', 'DEFAULT_SEPARATOR': r'\n\n',
+    'DEFAULT_REPORT': 'test_out', 'DEFAULT_SEPARATOR': r'\n\x1e\n',
+    'MANUAL_SEPARATOR': r'\n###\n', 'DEFAULT_INTERPRETER': 'python3',
+    'C_STANDARD': 'auto', 'C_SOURCE': 'main.c', 'PYTHON_SOURCE': 'main.py',
+    'PYTHON_FLAGS': [], 'MODE_CPYTHON': {'debug': '-X dev -W default', 'extra': '-X dev -W error'},
+    'MODE_PYPY': {'debug': '-W default -X track-resources', 'extra': '-W error -X track-resources'},
+    'ACTION_DEST_DIR': {'test-mult': 'tests', 'companion': 'tests'}, 'ACTION_SAVE_RELPATH': {},
+    'ACTION_SAVE_TEST_RELPATH': {}, 'MODE_DEST_DIR': {},
+    'MODE_SAVE_RELPATH': {}, 'MODE_SAVE_TEST_RELPATH': {},
+    'DEFAULT_INPUT_TEMPLATE': './{n}.in', 'DEFAULT_ANSWER_TEMPLATE': './{n}.ans',
+    'DEFAULT_TEST_DIR': '', 'NATIVE_FORMATTER': 'clang-format', 'PYTHON_FORMATTER': 'ruff', 'DEFAULT_REPORT_TESTS': 'all',
+    'COMPANION_PORT': '27122', 'COMPANION_WAIT': '120',
+    'MINIMIZE_ATTEMPTS': '200', 'MINIMIZE_SECONDS': '30', 'MAX_FAILURES': '10',
     'DEFAULT_LINE_LIMIT': '10000', 'DEFAULT_F_MODE': 'macro',
     'DEFAULT_MACRO': 'FILEO', 'DEFAULT_WORKSPACE': '.',
     'DEFAULT_DESTINATION': '.', 'DEFAULT_RELPATH_DESTINATION': '.',
@@ -59,9 +72,9 @@ FACTORY_SETTINGS = {
     'MODE_FLAGS': {
         'debug': '-O2 -g2 -fsanitize=address,undefined -fsanitize=float-cast-overflow -fno-sanitize-recover=all -fno-omit-frame-pointer -DLOCAL',
         'extra': '-Og -g2 -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -fno-optimize-sibling-calls -DLOCAL',
-        'pragma': '-O3 -funroll-loops',
-        'pragma-fast': '-funroll-loops -fno-stack-protector -ffast-math',
-        'pragma-native': '-funroll-loops -fno-stack-protector -ffast-math',
+        'pragma': '-O3 -funroll-loops -Wunknown-pragmas',
+        'pragma-fast': '-funroll-loops -fno-stack-protector -ffast-math -Wunknown-pragmas',
+        'pragma-native': '-funroll-loops -fno-stack-protector -ffast-math -Wunknown-pragmas',
     },
     'MODE_GCC': {'debug': '', 'extra': '-fsanitize=float-cast-overflow,bounds-strict',
                  'pragma-fast': '-Ofast', 'pragma-native': '-Ofast'},
@@ -137,8 +150,8 @@ def settings_text(data):
 
 def _settings_separator(value):
     """Decode only visible \\n, then validate the deliberately literal format."""
-    decoded = value.replace(r'\n', '\n')
-    allowed = set('\n abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789#=_.:+-')
+    decoded = value.replace(r'\n', '\n').replace(r'\x1e', '\x1e')
+    allowed = set('\n\x1e abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789#=_.:+-')
     if not decoded or decoded[0] != '\n' or decoded[-1] != '\n' or any(c not in allowed for c in decoded):
         raise ValueError(r'separator must start/end with \n; use ASCII letters, digits, spaces or #=_.:+-')
     return decoded

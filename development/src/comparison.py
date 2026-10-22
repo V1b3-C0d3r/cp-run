@@ -104,6 +104,10 @@ def _section(report, title, path, different=None, display_limit=10000):
             report.detail('  ... ' + str(error) + '; raw data retained')
     if not found:
         report.emit("  <empty>")
+    elif Path(path).stat().st_size:
+        with open(path, 'rb') as ending:
+            ending.seek(-1, 2)
+            if ending.read(1) != b'\n': report.detail('  [no final newline]')
 
 
 def _failure_details(report, incoming, actual, answer, comparison, display_limit):

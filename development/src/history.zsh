@@ -39,16 +39,29 @@ history_warn() {
 }
 
 history_read() {
-    [[ -f $history_directory/$1 && ! -L $history_directory/$1 ]] &&
-        IFS= read -r -d $'\0' value < "$history_directory/$1" || fail "no last $1 in this workspace" 1
+    local marker= field
+    [[ -f $history_directory/$1 && ! -L $history_directory/$1 ]] || fail "no last $1 in this workspace" 1
+    {
+        IFS= read -r -d $'\0' value || fail 'invalid history record' 1
+        if [[ $1 == binary ]] && IFS= read -r -d $'\0' marker; then
+            [[ $marker == CP_RUN_ARGV_V1 ]] || fail 'unsupported launch history record' 1
+            while IFS= read -r -d $'\0' field; do
+                (( ${#recalled_launch} < 256 )) || fail 'launch history has too many arguments' 1
+                recalled_launch+=("$field")
+            done
+        fi
+    } < "$history_directory/$1"
     [[ -n $value && -f $value && -r $value ]] || fail "last $1 is missing or unreadable: $value" 1
-    [[ $1 != binary || -x $value ]] || fail "last binary is no longer executable: $value" 126
+    [[ $1 != binary || $value == *.py || -x $value ]] || fail "last binary is no longer executable: $value" 126
+    if (( ${#recalled_launch} )); then
+        [[ ${recalled_launch[-1]} == "$value" && -x ${recalled_launch[1]} ]] || fail 'recorded interpreter/source is no longer available' 1
+    fi
 }
 
 history_write() {
     history_location || return 0
     local temporary="$history_directory/.$1.$$.${RANDOM}${RANDOM}" target="$history_directory/$1"
-    (umask 077; setopt NO_CLOBBER; printf '%s\0' "$2" > "$temporary" && zf_mv -f -- "$temporary" "$target") 2>/dev/null || {
+    (umask 077; setopt NO_CLOBBER; printf '%s\0' "${@:2}" > "$temporary" && zf_mv -f -- "$temporary" "$target") 2>/dev/null || {
         zf_rm -f -- "$temporary" 2>/dev/null; history_warn
     }
     return 0

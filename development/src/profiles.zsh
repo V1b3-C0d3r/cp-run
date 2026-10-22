@@ -35,7 +35,7 @@ append_native_cpu() {
     # Generate an empty translation unit: accepting an option without running
     # the backend is insufficient. Failure only omits optional native tuning;
     # diagnostics/status from the actual user compilation still pass through.
-    if "$compiler" "$candidate" -Werror -x c++ -S /dev/null -o /dev/null >/dev/null 2>&1; then
+    if "$compiler" "$candidate" -Werror -x "$language" -S /dev/null -o /dev/null >/dev/null 2>&1; then
         flags+=("$candidate")
     fi
     return 0
@@ -70,7 +70,7 @@ build_flags() {
         if [[ $DEFAULT_STANDARD == auto ]]; then detect_standard
         else
             value=$DEFAULT_STANDARD
-            if [[ $value == <-> ]]; then value="c++$value"; fi
+            if [[ $value == <-> ]]; then value="$language$value"; fi
             flags+=("-std=$value")
         fi
     fi
@@ -91,7 +91,7 @@ build_flags() {
         if (( ! no_warnings )); then append_flags "${MODE_WARNINGS_CLANG[$profile]-}"; fi
     fi
     append_native_cpu
-    if [[ -n ${MODE_LIBSTDCXX[$profile]-}${MODE_LIBCPP[$profile]-} ]]; then detect_library || return $?; fi
+    if [[ $language == c++ && -n ${MODE_LIBSTDCXX[$profile]-}${MODE_LIBCPP[$profile]-} ]]; then detect_library || return $?; fi
     (( debug_mode )) || return 0
 
     # The configured mode supplies the floor. Managed user levels may make it

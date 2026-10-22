@@ -1,14 +1,14 @@
 #!/bin/zsh -f
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 cp-run contributors
-# One C++ source, one selected output, and an optional run. Requires zsh 5.9.
+# One C, C++ or Python source, one selected output, and an optional run. Requires zsh 5.9.
 
 # Start from native, predictable options instead of inheriting interactive
 # customizations. Expected failures are checked explicitly, without ERR_EXIT.
 emulate -LR zsh
 setopt NO_UNSET PIPE_FAIL EXTENDED_GLOB
 unsetopt ALIASES
-typeset -r PROGRAM=cp-run VERSION=1.0
+typeset -r PROGRAM=cp-run VERSION=1.1
 typeset -r SCRIPT_PATH=${0:A} # Settings follow the real script when invoked through a symlink.
 
 # @NATIVE_SETTINGS@

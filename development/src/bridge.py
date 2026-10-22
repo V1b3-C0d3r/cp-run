@@ -10,12 +10,16 @@ def _bridge_config(values):
     config['runtime_args'] = [next(values) for _ in range(runtime_count)]
     protected_count = int(next(values))
     config['protected'] = [next(values) for _ in range(protected_count)]
-    for key in ('auto', 'cin', 'cout', 'show_time', 'show_memory', 'show_command', 'warmup'):
+    for key in ('auto', 'cin', 'cout', 'show_time', 'show_memory', 'show_command', 'warmup', 'mult', 'save_test_relpath', 'overwrite', 'text_conversion', 'stop_on_failure'):
         config[key] = config.get(key, '0') == '1'
     config['cases'] = [int(value) for value in config.get('cases', '').split(',') if value]
     for key in ('num_test', 'seed'):
         if config.get(key, '') == '':
             config.pop(key, None)
+    for role in ('main', 'brute', 'generator'):
+        count = int(config.get('launch_' + role + '_count', 0))
+        if count:
+            config[role + '_argv'] = [config['launch_{}_{}'.format(role, i)] for i in range(1, count + 1)]
     return config
 
 
@@ -29,6 +33,11 @@ def _bridge_main():
     if action in ('import', 'export'):
         return transfer_preferences(action, sys.argv[2], sys.argv[3])
     config = _bridge_config(sys.argv[2:])
+    if action == 'companion': return execute_companion(config)
+    if action == 'format': return execute_format(config)
+    if action == 'doctor': return execute_doctor(config)
+    if action in ('pack', 'unpack'): return execute_bundle(config)
+    if action == 'ce': return compilation_report(config)
     if action == 'preflight':
         preflight_check(config)
         return 0

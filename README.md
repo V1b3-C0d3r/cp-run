@@ -1,71 +1,119 @@
-# cp-run 1.0
+# cp-run
 
-**Write C++. Run it. Catch the bug.** One zsh script turns a source file into a running program, checks sample answers and saves reproducible stress-test failures. GCC and Clang share the same commands; useful defaults keep routine work short. Compatible with macOS (ARM/Intel) and GNU/Linux (x86-64/ARM). Runs perfectly on any platform or setup.
-
-## Quick start
+**From source to a checked answer in one command.** Compile C++ or C, run Python or PyPy, check samples, and find smaller counterexamples — with one installable script.
 
 ```sh
-cp-run main.cpp                 # Compile and run
-cp-run debug main.cpp           # Run with sanitizers and library checks
-cp-run compile main.cpp         # Compile only; print the binary's absolute path
+cp-run main.cpp                       # Build and run
+cp-run debug main.cpp                 # Sanitizers and library assertions
+cp-run compile main.cpp               # Build without running
 ```
 
-Omit `main.cpp` when it is the only local `.cpp` file. With several candidates, cp-run uses `main.cpp` or your saved fallback. The language standard defaults to the newest ISO C++ mode advertised by the selected compiler.
-
-## From sample to counterexample
+C and Python work the same way:
 
 ```sh
-cp-run test                     # input.txt → program → compare with ans.txt
-cp-run test=auto 2 5             # Rerun just cases 2 and 5 from a test bundle
-cp-run stress main.cpp brute.cpp gen.cpp   # Compare against a trusted solution
-cp-run main.cpp -tm              # Warm once, then report time/memory
-cp-run main.cpp -tm --average=5   # Median time, maximum memory, one visible stdout
+cp-run main.c --compiler=clang
+cp-run main.py --interpreter=pypy3
+cp-run test                           # Discover source; use input.txt + ans.txt
+cp-run stress                         # Discover main, brute and gen
+cp-run main.cpp -tm --average=5        # One visible stdout; median time, peak RSS
 ```
 
-Failed checks show the input, actual output and expected answer with numbered differences. Stress failures include the seed, saved files and a replay command. Start with ordinary text files; learn independent test bundles only when you need them. [Testing examples →](docs/TESTING.md)
+No project configuration is required. Optional settings live inside the script and can be exported/imported.
 
-## Try optimization profiles
+## Install
 
-```sh
-cp-run main.cpp --profile=pragma          # O3 and loop unrolling; keep the target ISA
-cp-run main.cpp --profile=pragma-fast     # Aggressive floating-point optimizations
-cp-run main.cpp --profile=pragma-native -tm # Also tune for this machine, when supported
-```
-
-Profiles adapt to GCC/Clang without changing your source. Measure your workload: stronger optimization is not always faster, and fast math can change answers. Native builds are for the compiling machine. [Profile details](docs/CLI.md#optimization-profiles) · [Runnable examples](examples/README.md#optimization-profiles)
-
-## Install one file
-
-Download `cp-run.zsh`, then:
+Download `cp-run.zsh` from the [latest release](https://github.com/V1b3-C0d3r/cp-run/releases/latest), then:
 
 ```sh
 mkdir -p ~/.local/bin
 install -m 755 cp-run.zsh ~/.local/bin/cp-run
 ```
 
-Add `export PATH="$HOME/.local/bin:$PATH"` to `~/.zshrc` if that directory is not already in `PATH`.
+Add `~/.local/bin` to PATH if needed. Remove `~/.local/bin/cp-run` to uninstall. Dependencies are feature-specific: zsh 5.9+, a C/C++ compiler for native sources, a Python interpreter for Python sources. Tests, measurements, settings and integrations also need Python 3.9+ for the embedded standard-library services.
 
-You need **zsh 5.9+** and **GCC or Clang**. Python 3.9+ runs settings, answer checking, measurements and limits; its support code is embedded, so there is no second project file to install. macOS ARM is the primary target. To use Apple's Clang, add `--compiler=clang++` or save that choice below.
+### macOS
 
-```sh
-cp-run --set-defaults            # Edit compiler, files, checks and profiles
-rm ~/.local/bin/cp-run           # Uninstall, including its embedded preferences
-```
-
-Settings stay inside the installed script. Save them before an upgrade and restore them afterward:
+Install [Apple Command Line Tools](https://developer.apple.com/xcode/resources/) with `xcode-select --install` for Apple Clang. With [Homebrew](https://docs.brew.sh/Installation):
 
 ```sh
-cp-run --export-settings=cp-run-settings.json
-cp-run --import-settings=cp-run-settings.json
+brew install zsh python gcc
 ```
 
-No config file is loaded on ordinary launches. `cp-run -` reuses the last built source; `cp-run run -` reuses the last primary binary in the same workspace. Launch history is small, separate user data.
+Select Apple Clang with `--compiler=clang`; GNU GCC is the native default. Package availability depends on macOS/architecture, especially Intel Macs. For Python/PyPy, select the actual installed interpreter executable.
 
-## Go further
+### Debian / Ubuntu
 
-- [CLI reference](docs/CLI.md): every command and option, argument passing, profiles, resource limits and settings.
-- [Testing guide](docs/TESTING.md): complete file contents, independent cases, readable failures and stress testing.
-- [Runnable examples](examples/README.md): file I/O, arguments, profiles, resource limits and every testing mode.
-- [MIT license](LICENSE).
+```sh
+sudo apt update
+sudo apt install zsh build-essential clang python3
+```
 
-<sub>Vibe-coded with AI assistance; reviewed changes and reproducible tests remain part of the workflow.</sub>
+Check `zsh --version`; use a supported distribution with zsh 5.9+. Optional packages: `pypy3`, `clang-format`, `clang-tidy`. [PyPy downloads](https://pypy.org/download.html) cover additional platforms.
+
+### Windows
+
+Use [WSL2 with Ubuntu or Debian](https://learn.microsoft.com/en-us/windows/wsl/install), then follow the Linux instructions inside WSL. Native Windows is not supported. Browser-to-WSL Companion forwarding depends on the WSL networking setup.
+
+### Optional tools
+
+- **Formatting:** [clang-format](https://clang.llvm.org/docs/ClangFormat.html) for C/C++; [Ruff](https://docs.astral.sh/ruff/installation/) for Python. Black can be selected in defaults.
+- **Further diagnostics:** [clang-tidy](https://clang.llvm.org/extra/clang-tidy/) and [Ruff check](https://docs.astral.sh/ruff/linter/) are useful separate tools; formatting does not enable automatic lint fixes.
+- **Browser samples:** [Competitive Companion](https://github.com/jmerle/competitive-companion#installation). Add custom port **27122**, run `cp-run companion main.cpp`, then click the extension on one problem.
+
+Run `cp-run --doctor` to see which tools are available. Nothing is installed automatically.
+
+## Check your answer
+
+Put one complete input in `input.txt` and its expected stdout in `ans.txt`:
+
+```sh
+cp-run test main.cpp --cout
+```
+
+For numbered samples, use `tests/1.in`, `tests/1.ans`, `tests/2.in`, `tests/2.ans`:
+
+```sh
+cp-run test=mult main.cpp --cout
+```
+
+Every test shows numbered input, actual output and answer, marked differences, a verdict, time and peak memory. Independent tests keep running after failures. The default report file is `test_out`; raw first-run output is `real-out.txt`.
+
+Stress compares your solution with a reference on generated input:
+
+```sh
+cp-run stress main.cpp brute.py gen.py --test-iters=100
+cp-run stress main.cpp brute.py gen.py --minimize=sequence --stop-on-failure
+```
+
+Failures preserve seeds, exact input/output and replay metadata. Sequence reduction repairs counts and keeps a confirmed wrong answer; add a validator for problem-specific constraints. [Test formats and complete examples](docs/TESTING.md).
+
+## Debugging and control
+
+`debug` uses native sanitizers and assertions from the **actual selected C++ library**. `debug=extra` adds stricter warnings/checks. Python profiles use interpreter diagnostics; they do not pretend to provide native sanitizers. `pragma`, `pragma-fast` and `pragma-native` are native optimization flag profiles with explicit unknown-pragma warnings; fast-math changes floating-point semantics.
+
+```sh
+cp-run debug=extra main.cpp
+cp-run main.py -f=in data.txt -- -- --verbose
+cp-run main.cpp --profile=pragma-native
+cp-run --make-prettier                 # Format discovered source only
+cp-run main.cpp --make-prettier        # Format, then build/run
+cp-run --set-defaults                  # Edit tools, profiles, routing and limits
+```
+
+See [CLI](docs/CLI.md) for argument boundaries, priorities and exact contracts. [Examples](examples/README.md) contain small runnable projects.
+
+## Build from modules
+
+From a cloned repository, edit `development/src/`, then:
+
+```sh
+python3 -B development/build.py
+python3 -B -m unittest discover -s development/tests -v
+python3 -B development/package.py
+```
+
+The build generates **`cp-run.zsh`**; packaging creates **`cp-run-1.1.zip`**. Users install only the script; source modules and a Python package installation are unnecessary. [Development rules](docs/DEVELOPMENT.md).
+
+MIT licensed. Contributions and reproducible bug reports are welcome.
+
+<sub>Built with AI assistance; reviewed through regression tests and real toolchain runs.</sub>

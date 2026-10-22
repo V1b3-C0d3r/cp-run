@@ -45,12 +45,12 @@ def _bundle(config, report, directory, seed, iteration, verdict, results):
             (config.get('show_time'), '-t'), (config.get('show_memory'), '-m')) if enabled] + [
             '--average=' + str(config.get('average', 1)), '--warm-up=' + str(int(bool(config.get('warmup'))))]
     manifest = {"seed": seed, "iteration": iteration, "verdict": verdict,
-                "commands": {"main": [config["executable"], *config.get("runtime_args", [])],
-                             "brute": [config["brute"]], "generator": [config["generator"], str(seed)]},
+                "commands": {"main": [*config.get("main_argv", [config["executable"]]), *config.get("runtime_args", [])],
+                             "brute": config.get("brute_argv", [config["brute"]]), "generator": [*config.get("generator_argv", [config["generator"]]), str(seed)]},
                 "limits": {"timeout_ms": config.get("timeout_ms", "inf"), "memory_mib": config.get("memory_mib", "inf")},
                 "measurement": {key: config.get(key) for key in ('warmup', 'average', 'time_factor', 'memory_factor')},
                 "results": results, "sha256": files, "replay_argv": replay,
-                "compiler": config.get("compiler_info")}
+                "tools": {role: config.get("tool_" + role) for role in ("main", "brute", "generator")}}
     manifest["executables"] = {}
     for role, key in (("main", "executable"), ("brute", "brute"), ("generator", "generator")):
         path = Path(config[key])
@@ -69,81 +69,69 @@ def _bundle(config, report, directory, seed, iteration, verdict, results):
 
 
 def execute_stress(config):
-    """Generate once, feed identical bytes to both programs, stop on first failure."""
+    """Continue independent seeds, preserving role failures and bounded evidence."""
     plan = _prepare_check(config)
-    for key in ("executable", "brute", "generator"):
-        if not config.get(key):
-            raise CheckUsageError("stress execution needs " + key)
+    for key in ('executable', 'brute', 'generator'):
+        if not config.get(key): raise CheckUsageError('stress needs ' + key)
     runner = _runner(config)
-    count = positive_setting(config.get("num_test") or config.get("iterations", 1000), "stress iterations")
-    # The CLI supplies its saved value; direct callers share the factory seed.
-    start = int(config["seed"]) if config.get("seed") is not None else 4
-    main_argv = [config["executable"], *config.get("runtime_args", [])]
-    with check_lock(), tempfile.TemporaryDirectory(prefix=".cp-run-stress-", dir=".") as temporary:
+    count = positive_setting(config.get('num_test') or config.get('iterations', 1000), 'stress iterations')
+    start = int(config.get('seed', 4))
+    main_argv = [*config.get('main_argv', [config['executable']]), *config.get('runtime_args', [])]
+    verdicts, groups, saved = [], {}, 0
+    maximum = positive_setting(config.get('max_failures', 10), 'failure bundle limit')
+    with check_lock(), tempfile.TemporaryDirectory(prefix='.cp-run-stress-', dir='.') as temporary:
         directory, report = Path(temporary), Protocol(config)
-        incoming, answer, actual = (directory / name for name in ("input.txt", "ans.txt", "real-out.txt"))
+        incoming, answer, actual = (directory / name for name in ('input.txt', 'ans.txt', 'real-out.txt'))
         seed, iteration, results = start, 0, {}
         try:
-            report.emit("cp-run stress: start seed {}; maximum {} iterations".format(start, count))
-            if not config.get("cout"):
-                print("cp-run: stress start seed {}".format(start), file=sys.stderr)
-            status = 0
+            report.emit('cp-run stress: start seed {}; maximum {} iterations'.format(start, count))
             for iteration in range(1, count + 1):
                 seed = (start + iteration - 1) % 2**64
-                results = {}
-                # Failed generator/reference phases must not borrow payloads
-                # from a previous successful iteration in their saved bundle.
-                answer.unlink(missing_ok=True)
-                actual.unlink(missing_ok=True)
-                with open(incoming, "wb") as stream, open(os.devnull, "rb") as no_input:
-                    command = [config["generator"], str(seed)]
-                    if config.get("show_command"):
-                        print(shlex.join(command) + " > " + shlex.quote(str(incoming)), file=sys.stderr)
-                    generated = runner.run(command, stdin=no_input, stdout=stream, label="generator {}".format(iteration))
-                results["generator"] = {"status": generated.status, "elapsed_ns": generated.elapsed_ns, "peak_bytes": generated.peak_bytes}
-                if generated.status:
-                    verdict = "INTERRUPTED" if generated.verdict == "INTERRUPTED" else "GENERATOR_ERROR"
-                    status = generated.status
-                    report.emit("Iteration {}: {} (status {}; seed {})".format(iteration, verdict, status, seed))
-                    _bundle(config, report, directory, seed, iteration, verdict, results); break
-                reference = _run_files(runner, config, [config["brute"]], incoming, answer, "reference {}".format(iteration))
-                results["reference"] = {"status": reference.status, "elapsed_ns": reference.elapsed_ns, "peak_bytes": reference.peak_bytes}
-                if reference.status:
-                    verdict = "INTERRUPTED" if reference.verdict == "INTERRUPTED" else "ORACLE_ERROR"
-                    status = reference.status
-                    report.emit("Iteration {}: {} (status {}; seed {})".format(iteration, verdict, status, seed))
-                    _bundle(config, report, directory, seed, iteration, verdict, results); break
-                result, comparison = run_candidate(runner, config, main_argv, incoming, actual, answer, 'candidate {}'.format(iteration))
-                results["candidate"] = {"status": result.status, "elapsed_ns": result.elapsed_ns, "peak_bytes": result.peak_bytes}
-                _publish_actual(actual, config["actual"])
-                if result.verdict == "INTERRUPTED":
-                    verdict, status = "INTERRUPTED", result.status
-                    report.emit("Iteration {}: INTERRUPTED (seed {}); partial stdout retained".format(iteration, seed))
-                    _bundle(config, report, directory, seed, iteration, verdict, results)
-                    break
-                comparison = comparison or compare_case(actual, answer, config)
-                verdict = result.verdict if result.status else ("OK" if comparison.equal else "WA")
-                if comparison.incomplete:
-                    verdict = "INCOMPLETE"
-                status = 4 if verdict == "INCOMPLETE" else 3 if verdict == "WA" else result.status
-                report.emit("Iteration {}: {} (seed {})".format(iteration, verdict, seed))
-                if status:
-                    _failure_details(report, incoming, actual, answer, comparison, plan.line_limit)
-                    _bundle(config, report, directory, seed, iteration, verdict, results)
-                    break
-            summary = ("No difference in {} generated cases".format(iteration) if status == 0
-                       else "INCOMPLETE" if status == 4 else "Stress stopped at iteration {}".format(iteration))
+                results, verdict, comparison = {}, None, None
+                for target in (incoming, answer, actual): target.write_bytes(b'')
+                role_stderr = []
+                # A failing generator/oracle leaves this seed unresolved. Its
+                # role error cannot be misreported as a candidate wrong answer.
+                for role, argv, source, target in (
+                    ('generator', [*config.get('generator_argv', [config['generator']]), str(seed)], os.devnull, incoming),
+                    ('reference', config.get('brute_argv', [config['brute']]), incoming, answer)):
+                    error_path = directory / (role + '.stderr')
+                    with open(error_path, 'wb') as stderr:
+                        result = _run_files(runner, config, argv, source, target, role, stderr)
+                    role_stderr.append((role, str(error_path)))
+                    results[role] = {'status': result.status, 'elapsed_ns': result.elapsed_ns, 'peak_bytes': result.peak_bytes}
+                    if result.status:
+                        verdict = 'INTERRUPTED' if result.verdict == 'INTERRUPTED' else ('GENERATOR_ERROR' if role == 'generator' else 'ORACLE_ERROR')
+                        config['_stderr_paths'] = role_stderr
+                        case_protocol(report, config, iteration, incoming, actual, answer, result, None, seed)
+                        report.emit('ROLE FAILURE: ' + verdict)
+                        break
+                if verdict is None:
+                    actual.unlink(missing_ok=True)
+                    result, comparison = run_candidate(runner, config, main_argv, incoming, actual, answer, 'candidate {}'.format(iteration))
+                    config['_stderr_paths'] = role_stderr + config.get('_stderr_paths', [])
+                    results['candidate'] = {'status': result.status, 'elapsed_ns': result.elapsed_ns, 'peak_bytes': result.peak_bytes}
+                    _publish_actual(actual, config['actual'])
+                    verdict = case_protocol(report, config, iteration, incoming, actual, answer, result, comparison, seed)
+                    report.emit('Iteration {}: {} (seed {})'.format(iteration, verdict, seed))
+                verdicts.append((verdict, result.status))
+                groups.setdefault(verdict, []).append(iteration)
+                if verdict != 'AC' and saved < maximum:
+                    bundle = _bundle(config, report, directory, seed, iteration, verdict, results)
+                    saved += 1
+                    if config.get('minimize') and verdict == 'WA':
+                        minimize_failure(config, directory, bundle)
+                if verdict == 'INTERRUPTED' or (verdict != 'AC' and config.get('stop_on_failure')): break
+            status = _aggregate(verdicts)
+            final_protocol(report, groups, any(v in ('INCOMPLETE', 'GENERATOR_ERROR', 'ORACLE_ERROR', 'INTERRUPTED') for v, _ in verdicts))
+            summary = 'No difference in {} generated cases'.format(iteration) if not status else 'Stress checked {} cases; failures retained'.format(iteration)
             report.emit(summary)
-            if not config.get("cout"):
-                print("cp-run: " + summary + "; report: " + str(config.get("report", "test_out")), file=sys.stderr)
+            if not config.get('cout'): print('cp-run: ' + summary + '; report: ' + str(config.get('report', 'test_out')), file=sys.stderr)
             report.finish()
             return status
         except KeyboardInterrupt:
-            report.emit("INTERRUPTED at iteration {} (seed {})".format(iteration, seed))
-            if incoming.exists():
-                _bundle(config, report, directory, seed, iteration, "INTERRUPTED", results)
-            report.finish()
-            return 130
+            report.emit('INTERRUPTED at iteration {} (seed {})'.format(iteration, seed))
+            if incoming.exists(): _bundle(config, report, directory, seed, iteration, 'INTERRUPTED', results)
+            report.finish(); return 130
         except BaseException:
-            report.abort()
-            raise
+            report.abort(); raise

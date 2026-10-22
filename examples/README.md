@@ -1,180 +1,107 @@
 # Runnable examples
 
-Use a fresh cp-run 1.0 copy, or the factory defaults. Run each section's commands from its named subdirectory. Generated binaries and reports are disposable; the sample inputs and answers are source files.
+Use an installed `cp-run`, or replace it with the absolute path to the built script. Run each block from the indicated directory. Failed examples deliberately return nonzero.
 
-## Testing
+## C / Python
 
-In `testing/`, [sum.cpp](testing/sum.cpp) prints the sum of each input pair. [input.txt](testing/input.txt) contains `2 3` and `7 8`; [ans.txt](testing/ans.txt) expects `5` and `15` on separate lines.
+In `languages/`:
 
 ```sh
-cp-run test sum.cpp
-cp-run test "" input.txt ans.txt                  # Empty FILE slot: discover sum.cpp
-cp-run test sum.cpp "" wrong.ans                 # Expected WA, exit 3; answer line 2 is deliberately wrong
+printf '2 3\n' | cp-run main.c --compiler=clang
 ```
 
-A passing normal run writes `5\n15\n` to `real-out.txt` and a report to `test_out`. `wrong.ans` changes the expected second line to `16`, so its report shows actual `15` versus expected `16`.
-
-[auto.in](testing/auto.in) and [auto.ans](testing/auto.ans) contain two independent cases, separated by one empty line:
+Expected stdout: 5. In `mult/`:
 
 ```sh
-cp-run test=auto sum.cpp auto.in auto.ans
-cp-run test=auto 2 sum.cpp auto.in auto.ans --cout
-cp-run test=auto 2 1 sum.cpp auto.in auto.ans --test-iters=1
-cp-run test=auto sum.cpp auto.in ans.txt          # Expected usage error, exit 2: two inputs but one answer block
+cp-run test=mult --cout
+cp-run test=mult 2 main.py --cout
+cp-run test=mult main.py -tm --average=3 --warm-up=0 --cout
+cp-run --pack=in tests input.bundle
+cp-run --pack=ans tests ans.bundle
+cp-run test=auto main.py input.bundle ans.bundle --bundle-format=counted --cout
 ```
 
-The `--test-iters=1` command selects cases 2 then 1 but checks only the first selected case: original case 2. `--cout` puts the report on the terminal; `real-out.txt` still stores program output.
+Two numbered pairs in `tests/` expect 5 and 15. Each invocation gets an independent verdict and resource statistics. The packed run must also return AC.
 
-[custom.in](testing/custom.in) has blank lines *inside* cases; [custom.ans](testing/custom.ans) expects two output lines per case. Here a line containing `###` separates cases:
+## Existing whole-file and auto tests
+
+In `testing/`, `sum.cpp` reads two integers. `input.txt`/`ans.txt` expect 5; `wrong.ans` deliberately differs.
 
 ```sh
+cp-run test sum.cpp --cout
+cp-run test sum.cpp input.txt wrong.ans --cout
+cp-run test=auto sum.cpp auto.in auto.ans --sep='\n\n'
+cp-run test=auto 2 sum.cpp auto.in auto.ans --sep='\n\n' --cout
 cp-run test=auto sum.cpp custom.in custom.ans --sep='\n###\n'
+cp-run test sum.cpp --cin --cout < console.txt
+cp-run test=auto sum.cpp --cin --cout --sep='\n\n' < console-auto.txt
 ```
 
-Quotes keep the separator one shell argument. Each `\n` means one line-feed byte; the three `#` characters are literal data. The separator consumes its surrounding newlines. Each case is compared separately; `real-out.txt` combines raw program outputs with that separator.
+`auto.in`/`auto.ans` use the old blank-line delimiter explicitly. `custom.in` has blank lines inside cases, so it uses the visible ### marker. `:::answer:::` separates console input/answer; `console-literal.txt` demonstrates escaping that marker with a backslash.
 
-[console.txt](testing/console.txt) places input before the exact line `:::answer:::` and the answer after it. [console-auto.txt](testing/console-auto.txt) uses the same marker with blank-line-separated cases:
+## Stress and reduction
+
+In `stress/`:
 
 ```sh
-cp-run test sum.cpp --cin < console.txt
-cp-run test=auto sum.cpp --cin --cout < console-auto.txt
-cp-run test run /bin/cat --cin < console-literal.txt
+cp-run stress --test-iters=3
+cp-run stress buggy.cpp brute.cpp gen.cpp --test-iters=3 --stop-on-failure
 ```
 
-[console-literal.txt](testing/console-literal.txt) uses `\:::answer:::` on both sides of the marker. That leading backslash makes the marker ordinary payload; `/bin/cat` must echo the literal line `:::answer:::`.
+The second command returns WA and preserves the failure bundle. In `reduction/`, follow the [counterexample example](reduction/README.md) for an intentionally faulty Python solution and validity-aware minimization.
 
-To check an existing binary, compile once and add `run` immediately after `test`:
+## Companion without a browser
+
+From `mult/`, start:
 
 ```sh
-cp-run compile sum.cpp -o sum.out
-cp-run test run ./sum.out
-cp-run test=auto run 2 ./sum.out auto.in auto.ans
-cp-run test run --find sum
-cp-run run ./sum.out < input.txt
-cp-run tr
+cp-run companion main.py --dest-dir=received
 ```
 
-To preserve the source's subtree beneath a chosen workspace destination:
+In another terminal, from `companion/`:
 
 ```sh
-cp-run compile sum.cpp --wsp-dir .. --save-relpath --dest-dir build
-cp-run test run --find=sum --wsp-dir=.. --save-relpath --dest-dir=build
+curl --fail -H 'Content-Type: application/json' --data-binary @sample.json http://localhost:27122/
 ```
 
-Here `..` is the examples directory. Compilation writes `build/testing/sum.out`; lookup recreates the same route. The `--name=VALUE` and `--name VALUE` option forms are equivalent.
-
-## Stress
-
-In `stress/`, `main.cpp` and `brute.cpp` both add two numbers. `gen.cpp` reads its seed from `argv[1]`; seed `4` produces `4 2`, whose answer is `6`.
+Then, back in `mult/`:
 
 ```sh
-cp-run stress main.cpp brute.cpp gen.cpp --test-iters=3
-cp-run stress buggy.cpp brute.cpp gen.cpp --test-iters=3
+cp-run test=mult main.py --dest-dir=received --cout
 ```
 
-The second command deliberately fails on the first case, exit `3`: `buggy.cpp` prints `7`. Inspect `stress-failure/input.txt`, `ans.txt`, `real-out.txt`, `test_out` and `manifest.json`. The manifest/report contains a replay command. The saved input also works directly:
+Expected: two AC samples. A real browser uses Competitive Companion with Custom port 27122 and the same receiver. No source file or remote execution settings are created from the request.
 
-```sh
-cp-run test run ./buggy.out stress-failure/input.txt stress-failure/ans.txt replay.txt
-```
+## File I/O and native diagnostics
 
-This replay deliberately returns WA again. To skip compilation for all stress roles:
-
-```sh
-cp-run compile main.cpp -o main.out
-cp-run compile brute.cpp -o brute.out
-cp-run compile gen.cpp -o gen.out
-cp-run stress run ./main.out ./brute.out ./gen.out --test-iters=3 --seed=4
-cp-run run ./main.out < ../testing/input.txt
-cp-run sr ./brute.out ./gen.out --test-iters=3
-```
-
-## File I/O
-
-In `file-io/`, `input.txt` contains `20 22`; the expected answer in `ans.txt` is `42`.
+In `file-io/`:
 
 ```sh
 cp-run main.cpp -f
-cp-run main.cpp -f auto
 cp-run main.cpp -f=auto input.txt result.txt
-cp-run main.cpp --file-io=auto input.txt result.txt
+cp-run main.cpp --file-io in input.txt
 cp-run test main.cpp
 ```
 
-With factory settings, the first command defines `FILEO`: `main.cpp` opens `input.txt`/`output.txt` itself. The next three commands redirect standard streams; no macro is added. They write `42` to `output.txt` or `result.txt`. The test command checks against `ans.txt` and uses neither `-f` nor the program's file-opening branch. Bare `-f` can be configured to use automatic redirection instead.
+Expected answer: 42. Bare `-f` defines FILEO; auto/in/out redirect streams. Tests own their I/O and reject `-f`.
 
-## Runtime and profiles
-
-In `runtime/`, `main.cpp` accepts `--echo=TEXT`, `--sleep=MS` and `--memory=MiB`. The demonstration accepts at most 120 ms of sleep and 64 MiB of storage.
-
-```sh
-cp-run main.cpp -tm -- -- --echo='hello world' --sleep=60 --memory=16
-cp-run compile main.cpp -o program.out
-cp-run run ./program.out -tm -- --echo='existing binary' --sleep=60
-cp-run run ./program.out -tm --average=3 --warm-up=0 --time-unit=s --memory-unit=MiB -- --echo=once --sleep=60
-cp-run run - -- --echo=history
-cp-run compile - -o recalled.out
-cp-run --export-settings=cp-run-settings.json
-cp-run --import-settings=cp-run-settings.json
-cp-run run ./program.out --TLE=20 -- --sleep=120
-cp-run run ./program.out --MLE=8 -- --memory=32 --sleep=120
-```
-
-The first `--` ends wrapper options; the second starts program arguments in an ordinary build-and-run command. Binary `run` needs just one boundary. The final two commands deliberately return TLE (`124`) and MLE (`125`). Reported time includes OS launch/scheduling, so it need not equal the sleep duration. `-tm` performs one hidden warm-up by default in all executable modes. The three-repeat example disables warm-up and prints `once` exactly once; its report is median time / maximum RSS. History recalls source and binary independently. The export/import commands preserve defaults without asking you to edit JSON.
-
-`checks.cpp` deliberately overflows a signed integer. Both diagnostic profiles should stop it with a sanitizer error:
-
-```sh
-cp-run debug checks.cpp
-cp-run debug=extra checks.cpp
-```
-
-To create a plain compiler-flag set, open `cp-run --set-defaults` and enter these lines:
-
-```text
-5
-new fast-example plain
-flags
--O3 -DNDEBUG
-save
-y
-```
-
-Then use it through `--profile`:
-
-```sh
-cp-run main.cpp --profile=fast-example -- -- --echo=profile
-cp-run debug=fast-example main.cpp
-```
-
-The first command prints `profile`. The second deliberately fails with usage status `2`: `debug=NAME` accepts only profiles marked `debug`; plain `flags` sets use `--profile`. Saving edits the installed script, so use a disposable copy while exploring this example.
-
-## Optimization profiles
-
-In `optimization/`, `main.cpp` processes integer arrays and always prints `checksum=4128010`. Try the same workload with three plain flag profiles:
+In `optimization/`:
 
 ```sh
 cp-run main.cpp --profile=pragma
 cp-run main.cpp --profile=pragma-fast
-cp-run main.cpp --profile=pragma-native --show-command
+cp-run main.cpp --profile=pragma-native
 ```
 
-`pragma` uses `-O3` and loop unrolling without relaxing floating-point rules. `pragma-fast` adds aggressive floating-point optimization and removes the stack protector. Both keep the compiler's default CPU target. `pragma-native` additionally requests supported tuning for the machine doing compilation; it falls back when unavailable or when an explicit target is supplied. Inspect the actual command rather than assuming SSE/AVX exists on ARM. None guarantees a speedup; a native binary is intended for its build machine.
+These are integer workloads. `nan.cpp` separately demonstrates why fast-math is unsuitable for code relying on NaN behavior; it is not promised clean under fast-math plus `-Werror`.
 
-The separate [nan.cpp](optimization/nan.cpp) demonstrates the floating-point tradeoff. Pass an actual NaN at runtime:
+In `runtime/`:
 
 ```sh
-cp-run nan.cpp --profile=pragma -- -- nan
-cp-run nan.cpp --profile=pragma-fast -- -- nan
+cp-run main.cpp -tm -- -- --echo='hello world' --sleep=60 --memory=16
+cp-run compile main.cpp -o program.out
+cp-run run ./program.out -tm --average=3 --warm-up=0 -- --echo=once --sleep=60
+cp-run run - -- --echo=history
 ```
 
-The first prints `isnan=1`; aggressive fast math can print `isnan=0` because it assumes non-finite values do not occur. Clang may diagnose this deliberate violation with `-Wnan-infinity-disabled`; adding `-Werror` then correctly rejects it. Choose the ordinary profile when that assumption is invalid. The integer-only `main.cpp` remains valid with `-Werror` in all three profiles.
-
-[gcc-pragmas.hpp](optimization/gcc-pragmas.hpp) shows the corresponding literal GCC optimization pragmas. Its compiler guard avoids unknown-pragmas warnings on Clang; the profiles supply Clang's working driver options. These commands include the header before the source without editing it:
-
-```sh
-cp-run main.cpp --profile=pragma -- -Werror -include gcc-pragmas.hpp
-cp-run main.cpp --profile=pragma-fast -- -Werror -include gcc-pragmas.hpp -DCP_RUN_FAST_PRAGMAS
-```
-
-The header has no fixed instruction-set list. The adaptive native profile uses compiler options for that part. All three profiles have kind `flags`, so select them with `--profile`, not `debug=...`.
+Only the first measured stdout is shown, even with repeated measurements. Runtime arguments after the program boundary are not wrapper options.

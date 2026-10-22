@@ -109,14 +109,14 @@ resolve_binary() {
         else names=("$find_name" "$find_name.out"); fi
         for name in "${names[@]}"; do
             candidate="$directory/$name"
-            [[ ! -f $candidate || ! -x $candidate ]] || found+=("$candidate")
+            if [[ -f $candidate && ( -x $candidate || $candidate == *.py && -r $candidate ) ]]; then found+=("$candidate"); fi
         done
         (( ${#found} )) || fail "binary not found: $find_name" 1
         (( ${#found} == 1 )) || fail "ambiguous binary: $find_name; provide an explicit path"
         requested=${found[1]}
     fi
     [[ -f $requested ]] || fail "binary not found: $requested" 1
-    [[ -x $requested ]] || fail "binary is not executable: $requested" 126
+    [[ $requested == *.py && -r $requested || -x $requested ]] || fail "binary is not executable: $requested" 126
     resolved_binary=$requested
 }
 
@@ -125,6 +125,14 @@ resolve_binary() {
 # Omitted source selection is nonrecursive and uses regular files only.
 select_source() {
     local -a sources=(./*.cpp(N-.))
+    if (( ! ${#sources} )) && [[ ! -f $DEFAULT_SOURCE ]]; then
+        sources=(./*.(cc|cxx|C|c|py)(N-.))
+        if (( ${#sources} != 1 )); then
+            local -a fallback=() candidate
+            for candidate in "$C_SOURCE" "$PYTHON_SOURCE"; do [[ ! -f $candidate ]] || fallback+=("$candidate"); done
+            if (( ${#fallback} == 1 )); then source_file=${fallback[1]}; return; fi
+        fi
+    fi
     if (( ${#sources} == 1 )); then source_file=${sources[1]#./}
     elif [[ -f $DEFAULT_SOURCE ]]; then source_file=$DEFAULT_SOURCE
     else fail "cannot select a source: found ${#sources} .cpp files and no $DEFAULT_SOURCE"; fi

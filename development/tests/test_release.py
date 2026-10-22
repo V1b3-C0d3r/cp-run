@@ -187,7 +187,8 @@ class ReleaseCliTest(unittest.TestCase):
         result = self.invoke('test', 'run', program, '-t', '--warm-up=0', '--average=3')
         self.assertEqual(result.returncode, 3, result.stderr)
         self.assertEqual(counter.read_text(), '2')
-        self.assertEqual((self.cwd / 'real-out.txt').read_text(), 'wrong\n')
+        self.assertEqual((self.cwd / 'real-out.txt').read_text(), 'hello\n')
+        self.assertIn('FAILED REPEAT 2', (self.cwd / 'test_out').read_text())
 
     def test_repeated_terminal_input_is_rejected_without_launch(self):
         program, counter = self.counter_program()
@@ -344,7 +345,7 @@ class ReleaseEngineTest(unittest.TestCase):
                 with redirect_stderr(io.StringIO()):
                     status = engine.execute_test({'executable': '/bin/cat', 'auto': True, 'max_line': 10})
                 self.assertEqual(status, 4)
-                self.assertIn('Test 2: OK', Path('test_out').read_text())
+                self.assertIn('Test 2: AC', Path('test_out').read_text())
             finally: os.chdir(old)
 
     def test_console_marker_is_exact_not_multiple_cr_normalization(self):

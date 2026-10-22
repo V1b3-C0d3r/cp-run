@@ -277,7 +277,7 @@ class CliTest(unittest.TestCase):
         for option in ('--save-relpath', '--no-w', '--time', '--memory', '--show-command',
                        '--cin', '--cout', '--help', '--version', '--set-defaults'):
             result = self.rejected('compile', self.source.name, option + '=yes')
-            self.assertIn('does not take a value', result.stderr)
+            self.assertIn('accepts 0 or 1' if option == '--save-relpath' else 'does not take a value', result.stderr)
 
     def test_wrapper_spellings_are_literal_inside_both_argument_tails(self):
         words = ['--wsp-dir=', '--dest-dir=elsewhere', '--save-relpath', '--TLE=1',
@@ -587,13 +587,13 @@ class CliTest(unittest.TestCase):
         self.source.unlink()
         result = self.invoke("--help", env={"CXX": "/missing"})
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("test[=auto]", result.stdout)
+        self.assertIn("test[=auto|mult]", result.stdout)
         self.assertEqual(self.calls(include_probes=True), [])
 
     def test_version_has_wrapper_and_compiler_information(self):
         result = self.invoke("--version")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("cp-run 1.0", result.stdout)
+        self.assertIn("cp-run 1.1", result.stdout)
         self.assertIn("GNU GCC integration fixture", result.stdout)
 
     def test_missing_compiler_is_status_127(self):
@@ -705,14 +705,14 @@ class CliTest(unittest.TestCase):
         self.assertEqual(len(self.calls()), 1)
 
     def test_test_auto_default_empty_line_separator_compiles_once(self):
-        self.data("first\n\nsecond\n", "first\n\nsecond\n")
+        self.data("first\n\x1e\nsecond\n", "first\n\x1e\nsecond\n")
         result = self.invoke("test=auto", '--TLE=inf', env={"FAKE_PROGRAM_STDIN": "1"})
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(len(self.calls()), 1)
         self.assertIn("2", (self.cwd / "test_out").read_text())
 
     def test_test_count_mismatch_has_one_error_no_probe_or_output_changes(self):
-        self.data("one\n\ntwo\n", "one\n")
+        self.data("one\n\x1e\ntwo\n", "one\n")
         previous = self.cwd / "real-out.txt"; previous.write_text("previous\n")
         result = self.invoke("test=auto", "--show-command")
         self.assertEqual(result.returncode, 2)
@@ -726,7 +726,8 @@ class CliTest(unittest.TestCase):
         self.data(); self.binary(body='echo "native" >&2\ncat\n')
         result = self.invoke("test", "run", "runner.out", env={"CXX": "/missing"})
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("native\n", result.stderr)
+        self.assertNotIn("native\n", result.stderr)
+        self.assertIn("native", (self.cwd / "test_out").read_text())
         self.assertEqual(self.calls(include_probes=True), [])
 
     def test_test_console_report_keeps_real_output(self):
@@ -817,7 +818,7 @@ class CliTest(unittest.TestCase):
         self.binary("candidate", 'echo bad\n')
         self.binary("brute", 'cat\n')
         self.binary("gen", 'echo "$1"\n')
-        result = self.invoke("stress", "run", "candidate", "brute", "gen", "--test-iters=2", "--seed=7")
+        result = self.invoke("stress", "run", "candidate", "brute", "gen", "--test-iters=2", "--seed=7", "--stop-on-failure")
         self.assertEqual(result.returncode, 3, result.stderr)
         bundles = list(self.cwd.glob("stress-failure*"))
         self.assertEqual(len(bundles), 1)

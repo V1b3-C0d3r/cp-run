@@ -217,7 +217,7 @@ class _ToolchainCase(unittest.TestCase):
         self.source(SUM)
         (self.cwd / 'input.txt').write_text('2 3\n\n7 8\n')
         (self.cwd / 'ans.txt').write_text('5\n\n15\n')
-        result = self.invoke('test=auto')
+        result = self.invoke('test=auto', r'--sep=\n\n')
         self.assert_ok(result)
         report = (self.cwd / 'test_out').read_text()
         self.assertIn('PASS', report)
@@ -233,7 +233,7 @@ class _ToolchainCase(unittest.TestCase):
     def check_stress_agreement(self):
         self.stress_sources()
         result = self.invoke('stress', 'main.cpp', 'brute.cpp', 'gen.cpp',
-                             '--seed=40', '--test-iters=3')
+                             '--seed=40', '--test-iters=3', '--stop-on-failure')
         self.assert_ok(result)
         self.assertIn('No difference in 3 generated cases', (self.cwd / 'test_out').read_text())
         self.assertEqual(list(self.cwd.glob('stress-failure*')), [])
@@ -241,7 +241,7 @@ class _ToolchainCase(unittest.TestCase):
     def check_stress_counterexample_and_replay(self):
         self.stress_sources(wrong=True)
         result = self.invoke('stress', 'main.cpp', 'brute.cpp', 'gen.cpp',
-                             '--seed=40', '--test-iters=3')
+                             '--seed=40', '--test-iters=3', '--stop-on-failure')
         self.assertEqual(result.returncode, 3, result.stderr)
         bundles = list(self.cwd.glob('stress-failure*'))
         self.assertEqual(len(bundles), 1)

@@ -1,5 +1,11 @@
 plan_artifact() {
     local source_file=$1 output=$2 output_given=$3 output_name= output_dir=
+    if [[ $source_file == *.py ]]; then
+        (( ! output_given )) || fail '-o is not applicable to Python; compile validates the original source'
+        [[ -f $source_file && -r $source_file ]] || fail "source not readable: $source_file" 1
+        planned_source=${source_file:A}; planned_output=$planned_source
+        return
+    fi
     resolve_output
     planned_source=$source_file
     planned_output="${output_dir%/}/$output_name"

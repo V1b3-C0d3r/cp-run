@@ -258,7 +258,7 @@ class SettingsTest(unittest.TestCase):
         self.configure('5\nnew local-fast pragma-native\nsave\ny\n')
         copied = self.data()
         for key in settings.PROFILE_KEYS:
-            self.assertEqual(copied[key]['local-fast'], copied[key].get('pragma-native', ''))
+            self.assertEqual(copied[key].get('local-fast', ''), copied[key].get('pragma-native', ''))
         self.configure('5\nlocal-fast\ncpu\ndefault\nsave\ny\n')
         changed = self.data()
         self.assertEqual(changed['MODE_CPU']['local-fast'], 'default')
@@ -306,6 +306,25 @@ class SettingsTest(unittest.TestCase):
         result = self.configure('2\n9\nBAD-MACRO\ncancel\n')
         self.assertIn('Not changed', result.stdout)
         self.assertEqual(self.script.read_bytes(), original)
+
+    def test_operation_and_profile_routing_menu_with_explicit_override(self):
+        self.configure('10\ncompile\ndest-dir mode-bin\nback\nprofile pragma\ndest-dir profile-bin\nsave-relpath 1\nback\nback\nsave\ny\n')
+        data = self.data()
+        self.assertEqual(data['ACTION_DEST_DIR']['compile'], 'mode-bin')
+        self.assertEqual(data['MODE_DEST_DIR']['pragma'], 'profile-bin')
+        first = self.invoke('compile', self.source, '--profile=pragma')
+        self.assertEqual(first.returncode, 0, first.stderr)
+        self.assertEqual(Path(first.stdout.strip()), (self.cwd / 'profile-bin/main.out').resolve())
+        second = self.invoke('compile', self.source, '--dest-dir=explicit', '--profile=pragma', '--save-relpath=0')
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertEqual(Path(second.stdout.strip()), (self.cwd / 'explicit/main.out').resolve())
+
+    def test_language_and_test_layout_menus(self):
+        self.configure('8\n1\n1\n' + sys.executable + '\nback\nback\n9\n1\n{stem}/{n}.in\n2\n{stem}/{n}.ans\nback\nsave\ny\n')
+        self.assertEqual(self.data()['DEFAULT_INTERPRETER'], sys.executable)
+        self.assertEqual(self.data()['DEFAULT_INPUT_TEMPLATE'], '{stem}/{n}.in')
+        self.assertEqual(self.data()['DEFAULT_ANSWER_TEMPLATE'], '{stem}/{n}.ans')
+
 
 
 if __name__ == '__main__':

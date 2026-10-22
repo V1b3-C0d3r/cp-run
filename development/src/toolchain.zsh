@@ -10,13 +10,14 @@ identify_compiler() {
 }
 
 resolve_compiler() {
-    local candidate directory major best=-1 best_path= detected_family=
-    if [[ -n ${CXX:-} ]]; then
-        compiler=$CXX               # One executable; flags belong in argv.
+    local candidate directory major best=-1 best_path= detected_family= driver=g++ chosen=${CXX:-}
+    if [[ $language == c ]]; then driver=gcc; chosen=${CC:-}; fi
+    if [[ -n $chosen ]]; then
+        compiler=$chosen               # One executable; flags belong in argv.
     elif [[ $family == clang ]]; then
-        compiler=clang++
+        compiler=clang++; [[ $language != c ]] || compiler=clang
     else
-        candidate=$(whence -p -- g++ 2>/dev/null)
+        candidate=$(whence -p -- "$driver" 2>/dev/null)
         if [[ -n $candidate ]] && identify_compiler "$candidate" && [[ $detected_family == gcc ]]; then
             compiler=$candidate; return
         fi
@@ -24,16 +25,16 @@ resolve_compiler() {
         # a scratch variable. (N) makes an unmatched driver glob an empty list.
         for directory in "${path[@]}"; do
             directory=${directory:-.}
-            for candidate in "$directory"/g++-<->(N); do
+            for candidate in "$directory"/${driver}-<->(N); do
                 [[ -f $candidate && -x $candidate ]] || continue
-                major=${candidate:t}; major=${major#g++-}; major=${major##0#}; major=${major:-0}
+                major=${candidate:t}; major=${major#${driver}-}; major=${major##0#}; major=${major:-0}
                 (( ${#major} <= 3 )) || continue
                 if (( major > best )) && identify_compiler "$candidate" && [[ $detected_family == gcc ]]; then
                     best=$major; best_path=$candidate
                 fi
             done
         done
-        [[ -n $best_path ]] || fail 'GNU g++ not found; set CXX or select --compiler=clang++' 127
+        [[ -n $best_path ]] || fail 'GNU g++ not found; set CXX or select --compiler=clang++; [[ $language != c ]] || compiler=clang' 127
         compiler=$best_path; return
     fi
     candidate=$(whence -p -- "$compiler" 2>/dev/null) || fail "compiler not found: $compiler" 127
@@ -49,27 +50,29 @@ discover_standards() {
     (( ! ${#supported_standards} )) || return 0
     local listing line candidate
     if [[ $family == gcc ]]; then
-        listing=$(LC_ALL=C "$compiler" --help=c++) || fail 'cannot query compiler standards' 1
+        listing=$(LC_ALL=C "$compiler" --help="$language") || fail 'cannot query compiler standards' 1
     else
-        listing=$(LC_ALL=C "$compiler" -std=__cp_run_probe__ -fsyntax-only -x c++ /dev/null 2>&1)
+        listing=$(LC_ALL=C "$compiler" -std=__cp_run_probe__ -fsyntax-only -x "$language" /dev/null 2>&1)
     fi
     # Work per line: removing a wildcard prefix from a 60 KiB GCC help
     # listing is needlessly expensive in zsh. Each small line scans once.
     for line in "${(@f)listing}"; do
-        while [[ $line =~ '(^|[^[:alnum:]_+])((gnu|c)[+][+][[:alnum:]]+)' ]]; do
+        local expression='(^|[^[:alnum:]_+])((gnu|c)[+][+][[:alnum:]]+)'
+        if [[ $language == c ]]; then expression='(^|[^[:alnum:]_+])((gnu|c)(89|90|99|9x|11|1x|17|18|23|2x|2y)|iso9899:[0-9]+)'; fi
+        while [[ $line =~ $expression ]]; do
             candidate=$match[2]
             line=${line#*"$candidate"}
             supported_standards+=("$candidate")
         done
     done
-    (( ${#supported_standards} )) || fail 'cannot discover supported C++ standards' 1
+    (( ${#supported_standards} )) || fail 'cannot discover supported language standards' 1
 }
 
 validate_standards() {
     discover_standards
     local standard
     for standard in "${managed_standards[@]}"; do
-        (( ${supported_standards[(Ie)$standard]} )) || fail "unsupported C++ standard '$standard' for $compiler; supported: ${(j:, :)supported_standards}"
+        (( ${supported_standards[(Ie)$standard]} )) || fail "unsupported ${language:u} standard '$standard' for $compiler; supported: ${(j:, :)supported_standards}"
     done
 }
 
@@ -78,9 +81,15 @@ detect_standard() {
     if [[ -n $auto_standard ]]; then flags+=("-std=$auto_standard"); return; fi
     discover_standards
     for candidate in "${supported_standards[@]}"; do
-            [[ $candidate == c++* ]] || continue
-            suffix=${candidate#c++}
+            if [[ $language == c ]]; then
+                [[ $candidate == c[0-9]* ]] || continue
+                suffix=${candidate#c}
+            else
+                [[ $candidate == c++* ]] || continue
+                suffix=${candidate#c++}
+            fi
             case "$suffix" in
+                89) year=1989 ;; 90) year=1990 ;; 99|9x) year=1999 ;; 1x) year=2011 ;; 2x) year=2023 ;; 2y) if [[ $language == c ]]; then year=2029; else year=2014; fi ;;
                 98) year=1998 ;; 03) year=2003 ;; 0x) year=2011 ;;
                 1y) year=2014 ;; 1z) year=2017 ;;
                 [0-9][0-9]) year=$(( 2000 + 10#${suffix} )) ;;
@@ -94,7 +103,7 @@ detect_standard() {
                 best=$year; selected=$candidate
             fi
     done
-    [[ -n $selected ]] || fail 'cannot discover supported C++ standards; specify -std=VALUE' 1
+    [[ -n $selected ]] || fail 'cannot discover supported language standards; specify -std=VALUE' 1
     auto_standard=$selected          # Stress builds share one compiler/configuration.
     flags+=("-std=$selected")
 }

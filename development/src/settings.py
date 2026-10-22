@@ -22,7 +22,7 @@ def flag_units(words):
     """Keep known option/operand pairs intact during toggle operations."""
     paired = {'-I', '-L', '-l', '-D', '-U', '-isystem', '-iquote', '-include',
               '-imacros', '-isysroot', '--sysroot', '-target', '--target',
-              '-arch', '-B', '-Xlinker', '-Xclang', '-Xpreprocessor', '-mllvm'}
+              '-arch', '-B', '-X', '-W', '--jit', '-Xlinker', '-Xclang', '-Xpreprocessor', '-mllvm'}
     units, index = [], 0
     while index < len(words):
         word = words[index]
@@ -40,6 +40,8 @@ def flag_units(words):
 
 
 def _settings_unit_key(unit):
+    if unit[0] in ('-X', '-W', '--jit'):
+        return unit[0] + ':' + unit[1].split('=', 1)[0]
     if unit[0] in ('-D', '-U'):
         return flag_key(unit[0] + unit[1])
     # Multiple include/link paths are independent, rather than replacing every
@@ -186,8 +188,8 @@ def _settings_choice(*choices):
 
 
 def _settings_filename(value):
-    if '/' in value or value in ('.', '..') or not value.endswith('.cpp'):
-        raise ValueError('use a .cpp filename without directory components')
+    if '/' in value or value in ('.', '..') or not value.endswith(('.cpp', '.cc', '.cxx', '.C', '.c', '.py')):
+        raise ValueError('use a C/C++/Python filename without directory components')
     return value
 
 
@@ -328,9 +330,9 @@ def _settings_profile_preview(editor, name):
 def _settings_profile_menu(editor, name):
     while name in editor.data['MODE_NAMES']:
         print('\nProfile {} ({})'.format(name, editor.data['MODE_KIND'][name]))
-        print('  Common: ' + (editor.data['MODE_FLAGS'].get(name, '') or '(none)'))
+        print('  Native common: ' + (editor.data['MODE_FLAGS'].get(name, '') or '(none)'))
         print('  CPU: ' + editor.data['MODE_CPU'].get(name, 'default'))
-        print('  Compiler/library adaptations are retained; preview expands them.')
+        print('  Compiler/library adaptations are retained; Python groups are under advanced.')
         choice = editor.ask('profile> [flags / preview / advanced / kind / cpu / delete / back]: ')
         if choice is None:
             continue
@@ -494,7 +496,7 @@ def edit_settings(script_path):
         ('DEFAULT_INPUT', 'Input file', None), ('DEFAULT_ANSWER', 'Answer file', None),
         ('DEFAULT_OUTPUT', 'Redirected program output', None),
         ('DEFAULT_REPORT', 'Test/stress report', None),
-        ('DEFAULT_F_MODE', 'Bare -f action', _settings_choice('macro', 'auto')),
+        ('DEFAULT_F_MODE', 'Bare -f action', _settings_choice('macro', 'auto', 'in', 'out')),
         ('DEFAULT_MACRO', '-f macro identifier', _settings_macro),
         ('DEFAULT_RELPATH_DESTINATION', 'Destination with --save-relpath', _settings_destination),
     ]
@@ -527,7 +529,7 @@ def edit_settings(script_path):
     ]
     try:
         while True:
-            print('\ncp-run 1.0 defaults — changes stay pending until save')
+            print('\ncp-run 1.1 defaults — changes stay pending until save')
             print('  1. Build: {} / {} / {}'.format(editor.data['DEFAULT_COMPILER'],
                 editor.data['DEFAULT_STANDARD'], shlex.join(editor.data['DEFAULT_FLAGS']) or '(no flags)'))
             print('  2. Files: {} / {} / {}'.format(editor.data['DEFAULT_SOURCE'],
@@ -538,8 +540,8 @@ def edit_settings(script_path):
                 ', '.join(editor.data['MODE_NAMES']) or '(none)', editor.data['DEFAULT_ITERATIONS'],
                 editor.data['DEFAULT_SEED']))
             try:
-                print('  7. Measurements\n  export FILE / import FILE: portable preferences (data only)')
-                choice = editor.ask('defaults> [1–7 / export FILE / import FILE / show / undo / reset / help / save / cancel]: ')
+                print('  7. Measurements\n  8. Languages & tools\n  9. Test files & integrations\n  10. Action/profile routing\n  export FILE / import FILE: portable preferences (data only)')
+                choice = editor.ask('defaults> [1–10 / export FILE / import FILE / show / undo / reset / help / save / cancel]: ')
                 if choice is None:
                     continue
                 if choice == '1':
@@ -556,6 +558,23 @@ def edit_settings(script_path):
                     _settings_fields(editor, 'Stress defaults', stress)
                 elif choice == '7':
                     _settings_fields(editor, 'Measurements', measurements)
+                elif choice == '8':
+                    _settings_languages(editor)
+                elif choice == '9':
+                    _settings_fields(editor, 'Test files & integrations', [
+                        ('DEFAULT_INPUT_TEMPLATE', 'Input template', lambda v: (case_template(v, 'main', 1), v)[1]),
+                        ('DEFAULT_ANSWER_TEMPLATE', 'Answer template', lambda v: (case_template(v, 'main', 1), v)[1]),
+                        ('DEFAULT_TEST_DIR', 'Data directory (inherit uses destination)', lambda v: '' if v == 'inherit' else _settings_destination(v)),
+                        ('MANUAL_SEPARATOR', 'Manual separator', lambda v: (_settings_separator(v), v)[1]),
+                        ('DEFAULT_REPORT_TESTS', 'Show test bodies', _settings_choice('all', 'failed')),
+                        ('COMPANION_PORT', 'Companion port', _settings_positive),
+                        ('COMPANION_WAIT', 'Companion wait seconds', _settings_positive),
+                        ('MINIMIZE_ATTEMPTS', 'Reduction attempt ceiling', _settings_positive),
+                        ('MINIMIZE_SECONDS', 'Reduction time seconds', _settings_positive),
+                        ('MAX_FAILURES', 'Saved stress failures', _settings_positive),
+                    ])
+                elif choice == '10':
+                    _settings_routing(editor)
                 elif choice.startswith('export '):
                     export_preferences(choice[7:].strip(), editor.data, filename)
                     print('Exported pending preferences.')
@@ -581,3 +600,68 @@ def edit_settings(script_path):
     except (_SettingsCancel, EOFError, KeyboardInterrupt):
         print('\nCancelled; nothing saved.')
         return 0
+
+
+def _settings_languages(editor):
+    with editor.scope(['DEFAULT_INTERPRETER', 'C_SOURCE', 'PYTHON_SOURCE', 'C_STANDARD', 'NATIVE_FORMATTER', 'PYTHON_FORMATTER', 'PYTHON_FLAGS']):
+        _settings_languages_menu(editor)
+
+
+def _settings_languages_menu(editor):
+    """Language options stay separate from native optimization/warning lists."""
+    while True:
+        print('\nLanguages & tools: 1. Interpreter/source/standard/tools  2. Python flags  back')
+        choice = editor.ask('languages> ')
+        if choice in ('', 'back'): return
+        if choice == '1':
+            _settings_fields(editor, 'Language settings', [
+                ('DEFAULT_INTERPRETER', 'Python interpreter (python3, pypy3 or path)', None),
+                ('C_SOURCE', 'C fallback source', _settings_filename),
+                ('PYTHON_SOURCE', 'Python fallback source', _settings_filename),
+                ('C_STANDARD', 'C standard (auto or native spelling)', None),
+                ('NATIVE_FORMATTER', 'C/C++ formatter executable', None),
+                ('PYTHON_FORMATTER', 'Python formatter (ruff or black)', None),
+            ])
+        elif choice == '2': _settings_flags(editor, 'PYTHON_FLAGS')
+
+
+def _settings_routing(editor):
+    with editor.scope(['ACTION_DEST_DIR', 'ACTION_SAVE_RELPATH', 'ACTION_SAVE_TEST_RELPATH', 'MODE_DEST_DIR', 'MODE_SAVE_RELPATH', 'MODE_SAVE_TEST_RELPATH']):
+        _settings_routing_menu(editor)
+
+
+def _settings_routing_menu(editor):
+    """A small command menu edits optional overrides without JSON syntax."""
+    actions = ('ordinary', 'compile', 'debug', 'run', 'test', 'test-auto', 'test-mult', 'stress', 'companion')
+    while True:
+        print('\nActions: ' + ', '.join(actions))
+        print('Or enter profile NAME. Values inherit unless explicitly set.')
+        selection = editor.ask('routing> [ACTION / profile NAME / back]: ')
+        if selection in ('', 'back'): return
+        if selection is None: continue
+        profile = selection.startswith('profile ')
+        name = selection[8:].strip() if profile else selection
+        if name not in (editor.data['MODE_NAMES'] if profile else actions):
+            print('Choose an action or a saved profile.'); continue
+        prefix = 'MODE_' if profile else 'ACTION_'
+        fields = {'dest-dir': prefix + 'DEST_DIR', 'save-relpath': prefix + 'SAVE_RELPATH',
+                  'save-test-relpath': prefix + 'SAVE_TEST_RELPATH'}
+        while True:
+            for label, key in fields.items(): print('  {}: {}'.format(label, editor.data[key].get(name, '(inherit)')))
+            command = editor.ask('routing {}> [FIELD VALUE / inherit FIELD / back]: '.format(name))
+            if command in ('', 'back'): break
+            if command is None: continue
+            words = shlex.split(command)
+            if len(words) != 2: print('Example: dest-dir build/debug; or inherit dest-dir'); continue
+            inherit = words[0] == 'inherit'
+            field = words[1] if inherit else words[0]
+            if field not in fields: print('Use dest-dir, save-relpath or save-test-relpath.'); continue
+            key = fields[field]
+            value = '' if inherit else words[1]
+            if not inherit:
+                if field == 'dest-dir': _settings_destination(value)
+                else: _settings_choice('0', '1')(value)
+            mapping = dict(editor.data[key])
+            if inherit: mapping.pop(name, None)
+            else: mapping[name] = value
+            editor.set(key, mapping)

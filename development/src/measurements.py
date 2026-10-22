@@ -16,16 +16,18 @@ def repetition_count(value):
 
 def run_series(runner, config, launch, validate=None, label=None):
     """Warm once, then aggregate valid executions; failures never disappear in a median."""
+    config['_series_runs'] = 0
     observed = bool(config.get('show_time') or config.get('show_memory'))
     count = repetition_count(config.get('average', 1)) if observed else 1
     if observed and config.get('warmup'):
         warm = launch(-1)
-        if warm.verdict in ('INTERRUPTED', 'TLE', 'MLE'):
-            runner.diagnostic(warm, label)
+        if warm.verdict in ('INTERRUPTED', 'TLE', 'MLE') or (config.get('operation') in ('test', 'stress') and warm.status):
+            if config.get('operation') not in ('test', 'stress'): runner.diagnostic(warm, label)
             return warm
     durations, peak, result = [], 0, None
     for index in range(count):
         result = launch(index)
+        config['_series_runs'] = index + 1
         durations.append(result.elapsed_ns); peak = max(peak, result.peak_bytes)
         if not result.status and validate is not None:
             verdict = validate(index)
@@ -39,14 +41,14 @@ def run_series(runner, config, launch, validate=None, label=None):
         result = Result(0, median, peak, 'OK')
     else:
         result = Result(result.status, result.elapsed_ns, peak, result.verdict)
-    runner.display(result, label, len(durations))
+    if config.get('operation') not in ('test', 'stress'): runner.display(result, label, len(durations))
     return result
 
 
 def supervise(config):
     """Snapshot only input needing replay; opening/copying is outside child timing."""
     runner = _runner(config)
-    argv = [config['executable'], *config.get('runtime_args', [])]
+    argv = [*config.get('main_argv', [config['executable']]), *config.get('runtime_args', [])]
     observed = bool(config.get('show_time') or config.get('show_memory'))
     count = repetition_count(config.get('average', 1)) if observed else 1
     if count > 1 and os.isatty(0):
@@ -90,28 +92,31 @@ def run_candidate(runner, config, argv, incoming, outgoing, answer, label):
     """Check every repeat; preserve a failing repeat for useful diagnostics/replay."""
     hidden = Path(outgoing).with_name('repeat.stdout')
     comparisons = []
+    config['_stderr_paths'] = []; config.pop('_failed_output', None)
+    config.pop('_failed_repeat', None)
     with open(os.devnull, 'wb') as sink:
         def launch(index):
             target = outgoing if index == 0 else hidden
             if index >= 0: _show_run(config, argv, incoming, target)
             runner.on_launch = (lambda: remember_launch(config)) if index >= 0 else None
-            with open(incoming, 'rb') as stdin, open(target, 'wb') as stdout:
-                result = runner.run(argv, stdin=stdin, stdout=stdout,
-                                    stderr=sink if index < 0 else None, report=False)
-            if index > 0 and result.status: shutil.copyfile(hidden, outgoing)
+            stderr_path = Path(outgoing).with_name('stderr-{}.txt'.format(index))
+            config['_stderr_paths'].append(('warm-up' if index < 0 else 'run {}'.format(index + 1), str(stderr_path)))
+            with open(incoming, 'rb') as stdin, open(target, 'wb') as stdout, open(stderr_path, 'wb') as stderr:
+                result = runner.run(argv, stdin=stdin, stdout=stdout, stderr=stderr, report=False)
+            if index > 0 and result.status:
+                config['_failed_output'] = str(hidden); config['_failed_repeat'] = index + 1
             return result
         def validate(index):
             target = outgoing if index == 0 else hidden
             comparison = compare_case(target, answer, config)
-            comparisons[:] = [comparison]
+            if index == 0 or not comparisons: comparisons[:] = [comparison]
             if not comparison.equal:
-                if index > 0: shutil.copyfile(hidden, outgoing)
+                if index > 0:
+                    config['_failed_output'] = str(hidden); config['_failed_repeat'] = index + 1
                 return 'INCOMPLETE' if comparison.incomplete else 'WA'
             return None
         result = run_series(runner, config, launch, validate, label)
-    if not Path(outgoing).exists() and hidden.exists(): shutil.copyfile(hidden, outgoing)
-    hidden.unlink(missing_ok=True)
+    if not Path(outgoing).exists(): Path(outgoing).touch()
+    if not config.get('_failed_output'): hidden.unlink(missing_ok=True)
     comparison = comparisons[-1] if comparisons else None
-    if result.status and result.verdict not in ('WA', 'INCOMPLETE', 'INTERRUPTED'):
-        comparison = compare_case(outgoing, answer, config)
     return result, comparison

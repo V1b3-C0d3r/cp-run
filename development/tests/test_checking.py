@@ -54,7 +54,7 @@ class CheckingTest(unittest.TestCase):
         reference = self.program("reference.out", "import sys\nsys.stdout.buffer.write(sys.stdin.buffer.read())\n")
         return {"operation": "stress", "executable": str(main or self.binary),
                 "brute": str(reference), "generator": str(generator),
-                "seed": "17", "iterations": 3, **extra}
+                "seed": "17", "iterations": 3, "stop_on_failure": True, **extra}
 
     def test_default_normal_test_is_useful_without_configuration(self):
         status, stdout, stderr = self.execute()
@@ -62,7 +62,7 @@ class CheckingTest(unittest.TestCase):
         self.assertEqual(stdout, "")
         self.assertIn("PASS", stderr)
         self.assertEqual(Path("real-out.txt").read_bytes(), b"hello\n")
-        self.assertIn("Test 1: OK", Path("test_out").read_text())
+        self.assertIn("Test 1: AC", Path("test_out").read_text())
         self.assertFalse(any(p.name.startswith(".cp-run-") for p in Path.cwd().iterdir()))
 
     def test_wrong_answer_reports_full_three_sections_and_line_numbers(self):
@@ -111,9 +111,9 @@ class CheckingTest(unittest.TestCase):
         self.auto()
         self.assertEqual(self.execute()[0], 0)
         report = Path("test_out").read_text()
-        self.assertIn("Test 1: OK", report)
-        self.assertIn("Test 2: OK", report)
-        self.assertIn("Test 3: OK", report)
+        self.assertIn("Test 1: AC", report)
+        self.assertIn("Test 2: AC", report)
+        self.assertIn("Test 3: AC", report)
 
     def test_auto_custom_separator_is_literal(self):
         self.auto(b"a\n###\nb", sep=r"\n###\n")
@@ -182,15 +182,15 @@ class CheckingTest(unittest.TestCase):
     def test_was_do_not_stop_other_selected_cases(self):
         self.auto(b"a\n\nb\n\nc", b"a\n\nwrong\n\nc")
         self.assertEqual(self.execute()[0], 3)
-        self.assertIn("Test 3: OK", Path("test_out").read_text())
+        self.assertIn("Test 3: AC", Path("test_out").read_text())
 
     def test_runtime_failure_continues_other_selected_cases(self):
         self.binary = self.program("solver.out", "import sys\np=sys.stdin.buffer.read()\nsys.stdout.buffer.write(p)\nsys.exit(7 if p==b'b' else 0)\n")
         self.auto()
         self.assertEqual(self.execute()[0], 7)
         report = Path("test_out").read_text()
-        self.assertIn("Test 2: RTE (status 7)", report)
-        self.assertIn("Test 3: OK", report)
+        self.assertIn("Test 2: RE (status 7)", report)
+        self.assertIn("Test 3: AC", report)
 
     def interrupted_runner(self, phase=1):
         class InterruptedRunner:
@@ -221,7 +221,7 @@ class CheckingTest(unittest.TestCase):
         self.program("solver.out", "raise SystemExit(3)\n")
         self.assertEqual(self.execute()[0], 3)
         report = Path("test_out").read_text()
-        self.assertIn("RTE (status 3)", report)
+        self.assertIn("RE (status 3)", report)
         self.assertNotIn("Test 1: WA", report)
 
     def test_comparison_budget_returns_incomplete_not_pass(self):
@@ -239,13 +239,13 @@ class CheckingTest(unittest.TestCase):
     def test_budget_resets_for_selected_cases(self):
         self.auto(line_limit=2)
         self.assertEqual(self.execute()[0], 0)
-        self.assertIn("Test 3: OK", Path("test_out").read_text())
+        self.assertIn("Test 3: AC", Path("test_out").read_text())
 
     def test_stdout_report_keeps_actual_file_and_no_report_file(self):
         self.config["cout"] = True
         status, stdout, stderr = self.execute()
         self.assertEqual(status, 0)
-        self.assertIn("Test 1: OK", stdout)
+        self.assertIn("Test 1: AC", stdout)
         self.assertEqual(stderr, "")
         self.assertTrue(Path("real-out.txt").exists())
         self.assertFalse(Path("test_out").exists())

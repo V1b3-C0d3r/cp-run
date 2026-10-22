@@ -189,6 +189,14 @@ class _RealPragmaCase(unittest.TestCase):
                 self.assertEqual(result.stdout, 'checksum=4128010\n')
                 self.assertNotIn('unknown pragma', result.stderr)
 
+    def check_unknown_pragmas_are_diagnosed_in_every_profile(self):
+        (self.cwd / 'unknown.cpp').write_text('#pragma cp_run_unknown_directive\nint main(){return 0;}\n')
+        for profile in PROFILES:
+            result = self.run_source(profile, source='unknown.cpp')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('unknown pragma', result.stderr.lower())
+            self.assertIn('-Wunknown-pragmas', result.stderr)
+
     def check_fast_math_has_explicit_observable_semantics(self):
         (self.cwd / 'nan.cpp').write_text(NAN)
         for name, expected in (('pragma', '1\n'), ('pragma-fast', '0\n'), ('pragma-native', '0\n')):
@@ -264,6 +272,7 @@ for _family in ('gcc', 'clang'):
         'FAMILY': _family,
         'test_optimized_integer_workload_and_werror': _RealPragmaCase.check_profiles_run_integer_workload_with_warnings_as_errors,
         'test_fast_math_is_an_explicit_semantic_change': _RealPragmaCase.check_fast_math_has_explicit_observable_semantics,
+        'test_unknown_pragmas_are_diagnosed': _RealPragmaCase.check_unknown_pragmas_are_diagnosed_in_every_profile,
         'test_guarded_literal_gcc_header': _RealPragmaCase.check_guarded_literal_pragma_header_compiles_cleanly,
         'test_literal_gcc_pragmas_have_independent_effect': _RealPragmaCase.check_literal_gcc_pragmas_change_functions_without_fast_driver_flags,
         'test_user_tail_overrides_are_preserved': _RealPragmaCase.check_native_overrides_keep_native_compiler_precedence,

@@ -30,8 +30,8 @@ class CheckSetupError(OSError):
 
 def decode_separator(value):
     """Accept literal LF or visible \\n; deliberately decode no other escapes."""
-    text = str(value).replace(r"\n", "\n")
-    allowed = "\n #=_.:+-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+    text = str(value).replace(r"\n", "\n").replace(r"\x1e", "\x1e")
+    allowed = "\n\x1e #=_.:+-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
     if not text or text[0] != "\n" or text[-1] != "\n" or any(c not in allowed for c in text):
         raise CheckUsageError("--sep must start/end with LF and contain only LF, ASCII letters, digits, spaces or #=_.:+-")
     return text.encode("ascii")
@@ -100,13 +100,14 @@ class CaseSlice:
                 output.write(block); remaining -= len(block)
 
 
-def index_cases(path, separator=None):
+def index_cases(path, separator=None, start_offset=0, keep_terminal=False):
     """Index nonoverlapping delimiters across chunks; drop one terminal delimiter."""
     path = str(Path(path).resolve())
     if not Path(path).is_file(): raise CheckSetupError('test file not found or not regular: ' + path)
     if separator is None: return [CaseSlice(path, 0, Path(path).stat().st_size)]
-    ranges, pending, base, start = [], b'', 0, 0
+    ranges, pending, base, start = [], b'', start_offset, start_offset
     with open(path, 'rb') as stream:
+        stream.seek(start_offset)
         while True:
             block = stream.read(65536)
             if not block: break
@@ -124,7 +125,7 @@ def index_cases(path, separator=None):
             discard = len(pending) - keep
             pending = pending[discard:]; base += discard
     size = base + len(pending)
-    if start < size or not ranges: ranges.append(CaseSlice(path, start, size - start))
+    if keep_terminal or start < size or not ranges: ranges.append(CaseSlice(path, start, size - start))
     return ranges
 
 
@@ -158,8 +159,9 @@ def _validate_paths(config):
     protected.extend(str(config[key]) for key in ("executable", "brute", "generator") if config.get(key))
     reads = []
     if operation == "test" and not config.get("cin"):
-        reads = [config.get("input", "input.txt"), config.get("answer", "ans.txt")]
-        if _same_path(*reads):
+        reads = config.get("case_reads") if config.get("mult") else [config.get("input", "input.txt"), config.get("answer", "ans.txt")]
+        reads = reads or []
+        if len(reads) == 2 and _same_path(*reads):
             raise CheckUsageError("test input and answer must be different files")
         for path in reads:
             if not Path(path).is_file():
@@ -190,6 +192,7 @@ class CheckPlan:
     separator: bytes
     line_limit: int
     zero_notice: bool = False
+    ids: list = None
 
 
 def _prepare_check(config):
@@ -209,35 +212,38 @@ def _prepare_check(config):
             raise CheckUsageError("--seed must be an unsigned 64-bit integer")
         _validate_paths(config)
         return CheckPlan([], [], [], separator, line_limit)
-    # Count mismatch takes priority over selection notices, output inspection
-    # and compilation. No report or stdout artifact has been opened yet.
-    paths = _console_paths(config) if config.get('cin') else {
-        'input': config.get('input', 'input.txt'), 'answer': config.get('answer', 'ans.txt')}
-    auto = bool(config.get('auto'))
-    inputs = index_cases(paths['input'], separator if auto else None)
-    answers = index_cases(paths['answer'], separator if auto else None)
+    # Discover and validate the complete suite before selection or compilation.
+    ids = None
+    if config.get('mult'):
+        if config.get('cin'): raise CheckUsageError('--cin is unavailable with mult files')
+        ids, inputs, answers = mult_cases(config)
+        config['case_reads'] = [case.path for case in (*inputs, *answers)]
+    else:
+        paths = _console_paths(config) if config.get('cin') else {
+            'input': config.get('input', 'input.txt'), 'answer': config.get('answer', 'ans.txt')}
+        auto = bool(config.get('auto'))
+        reader = counted_cases if auto and config.get('bundle_format') == 'counted' else index_cases
+        inputs = reader(paths['input'], separator if auto else None)
+        answers = reader(paths['answer'], separator if auto else None)
     if len(inputs) != len(answers):
-        raise CheckUsageError("test count mismatch: input has {} cases; answer has {}".format(len(inputs), len(answers)))
-    requested = config.get("cases", [])
-    if requested and not auto:
-        raise CheckUsageError("case numbers require test=auto")
+        raise CheckUsageError('test count mismatch: input has {} cases; answer has {}'.format(len(inputs), len(answers)))
+    if not inputs: raise CheckUsageError('test suite is empty')
+    ids = ids or list(range(1, len(inputs) + 1))
+    available = set(ids)
+    requested = config.get('cases', [])
+    independent = config.get('auto') or config.get('mult')
+    if requested and not independent: raise CheckUsageError('case numbers require test=auto or test=mult')
     selected, zero = [], False
     for value in requested:
-        try:
-            number = int(value)
-        except (ValueError, TypeError):
-            raise CheckUsageError("test case numbers must be integers") from None
-        if number == 0:
-            number, zero = 1, True
-        if not 1 <= number <= len(inputs):
-            raise CheckUsageError("test number {} is outside 1..{}".format(number, len(inputs)))
-        if number not in selected:
-            selected.append(number)
-    selected = selected or list(range(1, len(inputs) + 1))
-    if maximum is not None:
-        selected = selected[:maximum]
+        try: number = int(value)
+        except (ValueError, TypeError): raise CheckUsageError('test case numbers must be integers') from None
+        if number == 0: number, zero = 1, True
+        if number not in available: raise CheckUsageError('test number {} is not available'.format(number))
+        if number not in selected: selected.append(number)
+    selected = selected or ids
+    if maximum is not None and independent: selected = selected[:maximum]
     _validate_paths(config)
-    return CheckPlan(inputs, answers, selected, separator, line_limit, zero)
+    return CheckPlan(inputs, answers, selected, separator, line_limit, zero, ids)
 
 
 def preflight_check(config):
@@ -261,53 +267,4 @@ def check_lock():
         yield
     finally:
         os.close(descriptor)
-
-
-class Protocol:
-    """Keep report commits atomic and preserve a copy for stress failure bundles."""
-
-    def __init__(self, config):
-        self.max_line = positive_setting(config.get('max_line', 1048576), 'row byte limit')
-        self.max_details = positive_setting(config.get('max_report', 262144), 'report byte limit')
-        self.display_lines = positive_setting(config.get('report_lines', 10000), 'report row limit')
-        self.detail_remaining = self.max_details
-        self.console = bool(config.get("cout"))
-        self.destination = Path(config.get("report", "test_out"))
-        directory = self.destination.parent if not self.console else Path.cwd()
-        handle = tempfile.NamedTemporaryFile(mode="w+", encoding="utf-8", dir=directory,
-                                             prefix=".cp-run-report-", delete=False)
-        self.stream, self.path = handle, Path(handle.name)
-
-    def emit(self, text=""):
-        self.stream.write(text + "\n")
-        if self.console:
-            print(text, flush=True)
-
-    def detail(self, text):
-        """Count encoded diagnostics, not source bytes that can expand on escaping."""
-        size = len((text + '\n').encode('utf-8'))
-        if size > self.detail_remaining:
-            if self.detail_remaining:
-                self.emit('  ... diagnostic byte limit reached; raw data retained')
-            self.detail_remaining = 0
-            return
-        self.detail_remaining -= size
-        self.emit(text)
-
-    def finish(self):
-        self.stream.flush()
-        self.stream.close()
-        if self.console:
-            self.path.unlink(missing_ok=True)
-        else:
-            os.replace(self.path, self.destination)
-
-    def copy_to(self, path):
-        self.stream.flush()
-        shutil.copyfile(self.path, path)
-
-    def abort(self):
-        self.stream.close()
-        self.path.unlink(missing_ok=True)
-
 
