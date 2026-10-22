@@ -28,15 +28,15 @@ main() {
     local value option_name arg index previous role base_profile=none temporary= current_profile previous_profile
     local -i argument_count=$# binary_mode=0 auto=0 dir_given=0 name_given=0 destination_given=0 output_given=0 save_relpath=0 std_seen=0
     local -i no_warnings=0 macro_file_io=0 show_command=0 measure_time=0 measure_memory=0
-    local -i console_in=0 console_out=0 sep_given=0 help_requested=0 version_requested=0 defaults_requested=0 managed_count=0
-    local test_dir=$DEFAULT_TEST_DIR in_template=$DEFAULT_INPUT_TEMPLATE ans_template=$DEFAULT_ANSWER_TEMPLATE
-    local bundle_format=legacy bundle_stream= data_input= data_output= text_separator=$MANUAL_SEPARATOR report_tests=$DEFAULT_REPORT_TESTS
+    local -i console_in=0 console_out=0 sep_given=0 help_requested=0 version_requested=0 managed_count=0
+    local test_folder=$DEFAULT_TEST_FOLDER
+    local bundle_format=legacy bundle_stream=both report_tests=$DEFAULT_REPORT_TESTS
     local minimize= validator=
     local prettier= companion_port=$COMPANION_PORT companion_wait=$COMPANION_WAIT
     local -i doctor_requested=0 interpreter_given=0 compiler_given=0
-    local -i data_controls=0 layout_controls=0 companion_controls=0 source_given=0 report_controls=0 bundle_given=0
-    local -i overwrite=0 text_conversion=0 stop_on_failure=0
-    local -i positional_count=0 mult=0 save_test_relpath=0 relpath_given=0 test_relpath_given=0
+    local -i data_controls=0 layout_controls=0 companion_controls=0 report_controls=0 bundle_given=0
+    local -i overwrite=0 stop_on_failure=0
+    local -i positional_count=0 mult=0 relpath_given=0
     local -i timeout_given=0 memory_given=0 measurement_controls=0 debug_run=0 compile_only=0 result_given=0
     local -a interpreter_args=() recalled_launch=() launch_args=() primary_launch=() original_compiler_args=() original_standards=()
     local -a compiler_args=() runtime_args=() cases=() sources=() artifacts=() protected_files=() build_indices=()
@@ -51,6 +51,10 @@ main() {
     # explicit run modifier permits runtime I/O, observation and execution.
     if [[ $action == compile || $action == debug && $debug_run == 0 ]]; then compile_only=1; fi
     if (( help_requested )); then show_help; return; fi
+    if [[ $action == configure ]]; then
+        (( argument_count == 1 )) || fail 'use cp-run configure on its own'
+        embedded_python settings "$SCRIPT_PATH"; return $?
+    fi
     if (( doctor_requested )); then
         config=(interpreter "$interpreter_choice" native_formatter "$NATIVE_FORMATTER" python_formatter "$PYTHON_FORMATTER")
         python_action doctor; return $?
@@ -85,12 +89,8 @@ main() {
     fi
     if [[ -n $transfer_action ]]; then
         [[ -z $source_file && ${#compiler_args} == 0 && ${#runtime_args} == 0 ]] &&
-            (( argument_count <= 2 && ! defaults_requested && ! version_requested )) || fail 'use settings transfer on its own'
+            (( argument_count <= 2 && ! version_requested )) && [[ $action != configure ]] || fail 'use settings transfer on its own'
         embedded_python "$transfer_action" "$SCRIPT_PATH" "$transfer_path"; return $?
-    fi
-    if (( defaults_requested )); then
-        (( argument_count == 1 )) || fail 'use --set-defaults on its own'
-        embedded_python settings "$SCRIPT_PATH"; return $?
     fi
     case "${compiler_choice:l}" in gcc|g++) family=gcc ;; clang|clang++) family=clang ;; *) fail 'compiler must be GCC, gcc, g++, clang or clang++' ;; esac
     if (( version_requested )) && { (( interpreter_given )) || [[ $source_file == *.py || -z $source_file && $language_choice == python && $compiler_given == 0 ]]; }; then
@@ -107,18 +107,16 @@ main() {
     if (( version_requested )); then printf '%s %s\n' "$PROGRAM" "$VERSION"; resolve_compiler; "$compiler" --version; return $?; fi
 
     (( ! companion_controls )) || [[ $action == companion ]] || fail '--port/--wait require companion'
-    (( ! text_conversion )) || [[ $action == pack || $action == unpack ]] || fail '--text/--text-sep require pack/unpack'
     (( ! data_controls )) || [[ $action == pack || $action == unpack || $action == companion ]] || fail 'import controls require pack/unpack/companion'
     (( ! layout_controls )) || (( mult )) || [[ $action == pack || $action == unpack || $action == companion ]] || fail 'layout options require mult/pack/unpack/companion'
     (( ! report_controls )) || [[ $action == test || $action == stress ]] || fail '--report-tests requires test/stress'
-    (( ! source_given )) || [[ $action == pack || $action == unpack || $action == companion ]] || fail '--source is a data-operation anchor; use FILE'
     (( ! stop_on_failure )) || [[ $action == stress ]] || fail '--stop-on-failure requires stress'
     if (( bundle_given )); then [[ $action == test && $auto == 1 ]] || fail '--bundle-format requires test=auto'; fi
     if [[ $action == companion || $action == pack || $action == unpack ]]; then
         (( ! ${#compiler_args} && ! ${#runtime_args} && ! output_given && ! measure_time && ! measure_memory )) && [[ $f_mode == none && -z $prettier ]] || fail 'data operations cannot compile or run programs'
     fi
     # Cheap option conflicts precede file opens and all compiler discovery.
-    [[ $profile == none || -n ${MODE_KIND[$profile]-} ]] || fail "profile not found: $profile; use --set-defaults"
+    [[ $profile == none || -n ${MODE_KIND[$profile]-} ]] || fail "profile not found: $profile; use cp-run configure"
     if [[ $profile != none && ${MODE_KIND[$profile]} == debug ]] && (( no_warnings )); then fail 'debug profile conflicts with --no-w'; fi
     if [[ $action == debug && ${MODE_KIND[$profile]} != debug ]]; then
         fail "profile '$profile' is a flags set; select it with --profile=$profile"
@@ -129,6 +127,15 @@ main() {
         (( memory_given )) || memory_mib=$CHECK_MEMORY_LIMIT
     fi
     (( ! measurement_controls || measure_time || measure_memory )) || fail '--warm-up/--average require -t or -m'
+    # In ordinary/run execution, override one side of auto redirection. Reuse
+    # the existing in/out paths so direct and measured launches stay identical;
+    # test/stress retain their separate protocol-specific console semantics.
+    if [[ $action != test && $action != stress ]] && (( console_in || console_out )); then
+        [[ $f_mode == auto ]] || fail '--cin/--cout require -f with saved auto mode outside test/stress'
+        (( ! (console_in && console_out) )) || fail '-f in auto mode cannot combine --cin and --cout'
+        if (( console_in )); then f_mode=out; else f_mode=in; fi
+        console_in=0; console_out=0
+    fi
     if [[ $action != test ]]; then (( ! console_in )) || fail '--cin is only available in test'; fi
     if [[ $action != test && $action != stress ]]; then
         (( ! console_out )) && [[ -z $num_test ]] || fail 'test/stress options require test or stress'
@@ -156,9 +163,9 @@ main() {
         (( ! measure_time && ! measure_memory && ! ${#runtime_args} )) && [[ $f_mode != auto && $f_mode != in && $f_mode != out ]] || fail 'runtime options require an execution command'
     fi
     if (( result_given )); then
-        [[ $action == test || $action == stress || $f_mode == auto || $f_mode == out ]] || fail '--out requires test/stress or -f=auto/out'
+        [[ $action == test || $action == stress || $f_mode == auto || $f_mode == out ]] || fail '--out requires test/stress or -f with auto output redirection'
     fi
-    case "$f_mode" in none|auto|in|out) ;; macro) macro_file_io=1 ;; *) fail 'invalid saved -f mode; use --set-defaults' ;; esac
+    case "$f_mode" in none|auto|in|out) ;; macro) macro_file_io=1 ;; *) fail 'invalid saved -f mode; use cp-run configure' ;; esac
     [[ $DEFAULT_MACRO == [A-Za-z_][A-Za-z0-9_]# ]] || fail 'FILEO macro setting must be a C identifier'
     for option_name value in --TLE "$timeout_ms" --MLE "$memory_mib"; do
         [[ $value == inf ]] && continue
@@ -189,11 +196,8 @@ main() {
         workspace_file_path "$generator_file"; generator_file=$value
     fi
     if [[ $action == pack || $action == unpack ]]; then
-        workspace_file_path "$data_input"; data_input=$value
-        workspace_file_path "$data_output"; data_output=$value
-        # These defaults also supply the manual-file and .bundle names.
-        if [[ $bundle_stream == in ]]; then workspace_file_path "$input_file"; input_file=$value
-        else workspace_file_path "$answer_file"; answer_file=$value; fi
+        if [[ $bundle_stream != ans ]]; then workspace_file_path "$input_file"; input_file=$value; fi
+        if [[ $bundle_stream != in ]]; then workspace_file_path "$answer_file"; answer_file=$value; fi
     fi
     if [[ $source_file == - ]]; then
         resolve_workspace
@@ -209,31 +213,21 @@ main() {
         case "$arg" in -std=*|--std=*|--std|-ansi|--ansi) std_seen=1 ;; esac
         if compiler_operand "$arg"; then (( ++index )); fi
     done
+    # Resolve data independently from binary destinations and source discovery.
+    # Only workspace-prefixed folders trigger a workspace lookup.
     if (( mult )) || [[ $action == companion || $action == pack || $action == unpack ]]; then
-        resolve_workspace
+        if [[ $test_folder == '{wsp-dir}' ]]; then resolve_workspace_root; test_folder=$workspace
+        else workspace_file_path "$test_folder"; test_folder=$value; fi
     fi
     if [[ $action == companion ]]; then
-        source_file=${source_file:-$DEFAULT_SOURCE}
-        workspace_file_path "$source_file"; source_file=$value
-        config=(source_anchor "${source_file:A}" workspace "$workspace" destination "$destination" test_dir "$test_dir"
-                save_test_relpath "$save_test_relpath" in_template "$in_template" ans_template "$ans_template"
-                overwrite "$overwrite" port "$companion_port" wait "$companion_wait" max_spool "$MAX_SPOOL_BYTES")
-        protected_files=("${source_file:A}")
+        config=(test_folder "$test_folder" overwrite "$overwrite" port "$companion_port"
+                wait "$companion_wait" max_spool "$MAX_SPOOL_BYTES")
+        [[ -z $source_file ]] || protected_files=("${source_file:A}")
         python_action companion; return $?
     fi
     if [[ $action == pack || $action == unpack ]]; then
-        if [[ -z $source_file ]]; then
-            local -a anchors=(./*.(cpp|cc|cxx|C|c|py)(N-.))
-            if (( ${#anchors} == 1 )); then source_file=${anchors[1]}
-            else source_file=$DEFAULT_SOURCE; fi
-        fi
-        workspace_file_path "$source_file"; source_file=$value
-        config=(operation "$action" workspace "$workspace" destination "$destination" test_dir "$test_dir"
-                save_test_relpath "$save_test_relpath" default_input "$input_file" default_answer "$answer_file"
-                bundle_stream "$bundle_stream" data_input "$data_input" data_output "$data_output"
-                source_anchor "${source_file:A}" in_template "$in_template" ans_template "$ans_template"
-                sep "$separator" text_sep "$text_separator" text_conversion "$text_conversion" overwrite "$overwrite" max_spool "$MAX_SPOOL_BYTES")
-        protected_files=("${source_file:A}")
+        config=(operation "$action" test_folder "$test_folder" default_input "$input_file" default_answer "$answer_file"
+                bundle_stream "$bundle_stream" sep "$separator" overwrite "$overwrite" max_spool "$MAX_SPOOL_BYTES")
         python_action "$action"; return $?
     fi
     if (( binary_mode )); then
@@ -278,8 +272,7 @@ main() {
     fi
     output_abs=${artifacts[1]}
     config=(operation "$action" auto "$auto" mult "$mult" workspace "${workspace:-$cwd}" destination "$destination"
-            test_dir "$test_dir" save_test_relpath "$save_test_relpath" source_anchor "${source_file:A}"
-            in_template "$in_template" ans_template "$ans_template" bundle_format "$bundle_format"
+            test_folder "$test_folder" bundle_format "$bundle_format"
             minimize "$minimize" validator "$validator" validator_interpreter "$interpreter_choice" minimize_attempts "$MINIMIZE_ATTEMPTS" minimize_seconds "$MINIMIZE_SECONDS"
             report_tests "$report_tests" stop_on_failure "$stop_on_failure" max_failures "$MAX_FAILURES" input "$input_file" answer "$answer_file" report "$report_file"
             actual "$result_file" sep "$separator" cases "${(j:,:)cases}" num_test "$num_test"
@@ -290,7 +283,6 @@ main() {
             time_factor "$TIME_KILL_FACTOR" memory_factor "$MEMORY_KILL_FACTOR"
             max_line "$MAX_LINE_BYTES" max_check "$MAX_CHECK_BYTES" max_report "$MAX_REPORT_BYTES"
             report_lines "$MAX_REPORT_LINES" max_spool "$MAX_SPOOL_BYTES")
-    if [[ -n $source_file ]]; then config[anchor_dir]="${source_file:A:h}"; else config[anchor_dir]=$cwd; fi
     if [[ $action == stress ]]; then config[brute]=${artifacts[2]}; config[generator]=${artifacts[3]}; fi
     if [[ $action == test || $action == stress ]]; then
         if (( console_in )); then

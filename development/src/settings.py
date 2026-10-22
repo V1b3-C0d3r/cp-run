@@ -208,6 +208,16 @@ def _settings_file_path(value):
     return value
 
 
+def _settings_test_folder(value):
+    """A literal directory, optionally rooted at the selected workspace."""
+    if not value or any(char in value for char in "\x00\r\n"):
+        raise ValueError('use a nonempty test folder')
+    workspace_path_suffix(value)
+    if '{' in value.replace('{wsp-dir}', '') or '}' in value.replace('{wsp-dir}', ''):
+        raise ValueError('test filenames are fixed; only {wsp-dir} is a path placeholder')
+    return value
+
+
 def _settings_destination(value):
     """Match routing's lexical rules; physical containment is checked at use."""
     relative = workspace_path_suffix(value)
@@ -425,7 +435,7 @@ def _settings_profiles(editor):
                 name = words[1] if len(words) >= 2 else editor.ask('New profile name: ')
                 if name is None:
                     continue
-                reserved = {'compile', 'run', 'test', 'stress', 'tr', 'sr', 'none', 'plain'}
+                reserved = {'compile', 'run', 'test', 'stress', 'tr', 'sr', 'configure', 'pack', 'unpack', 'none', 'plain'}
                 if not re.fullmatch(r'[A-Za-z][A-Za-z0-9_-]{0,31}', name) or name in reserved:
                     raise ValueError('start with a letter; use up to 32 letters/digits/_/-; avoid command names')
                 if name in editor.data['MODE_NAMES']:
@@ -453,7 +463,7 @@ def save_settings(filename, original, data):
     data = validate_preferences(data)
     filename = Path(filename).resolve()
     if filename.read_text() != original:
-        raise ValueError('script changed while editing; reopen --set-defaults')
+        raise ValueError('script changed while editing; reopen cp-run configure')
     region = re.search(r'^# CP_RUN_SETTINGS_BEGIN\n.*?^# CP_RUN_SETTINGS_END$', original, re.M | re.S)
     if region is None:
         raise ValueError('embedded settings block is missing')
@@ -471,7 +481,7 @@ def save_settings(filename, original, data):
         if checked.returncode:
             raise ValueError('settings not saved: zsh syntax check failed')
         if filename.read_text() != original:
-            raise ValueError('script changed while editing; reopen --set-defaults')
+            raise ValueError('script changed while editing; reopen cp-run configure')
         os.replace(temporary, filename)
     finally:
         if temporary is not None and temporary.exists():
@@ -521,7 +531,7 @@ def edit_settings(script_path):
         ('DEFAULT_INPUT', 'Input file ({wsp-dir}/PATH supported)', _settings_file_path), ('DEFAULT_ANSWER', 'Answer file ({wsp-dir}/PATH supported)', _settings_file_path),
         ('DEFAULT_OUTPUT', 'Program output: checks and -f auto/out ({wsp-dir}/PATH supported)', _settings_file_path),
         ('DEFAULT_REPORT', 'Test/stress report', _settings_file_path),
-        ('DEFAULT_F_MODE', 'Bare -f action', _settings_choice('macro', 'auto', 'in', 'out')),
+        ('DEFAULT_F_MODE', 'Bare -f action: macro (define FILEO) or auto (redirect files)', _settings_choice('macro', 'auto')),
         ('DEFAULT_MACRO', '-f macro identifier', _settings_macro),
         ('DEFAULT_RELPATH_DESTINATION', 'Destination with --save-relpath', _settings_destination),
     ]
@@ -587,10 +597,7 @@ def edit_settings(script_path):
                     _settings_languages(editor)
                 elif choice == '9':
                     _settings_fields(editor, 'Test files & integrations', [
-                        ('DEFAULT_INPUT_TEMPLATE', 'Input template', lambda v: (case_template(v, 'main', 1), v)[1]),
-                        ('DEFAULT_ANSWER_TEMPLATE', 'Answer template', lambda v: (case_template(v, 'main', 1), v)[1]),
-                        ('DEFAULT_TEST_DIR', 'Data directory (inherit uses destination)', lambda v: '' if v == 'inherit' else _settings_destination(v)),
-                        ('MANUAL_SEPARATOR', 'Manual separator', lambda v: (_settings_separator(v), v)[1]),
+                        ('DEFAULT_TEST_FOLDER', 'Test folder (fixed inN.txt / ansN.txt)', _settings_test_folder),
                         ('DEFAULT_REPORT_TESTS', 'Show test bodies', _settings_choice('all', 'failed')),
                         ('COMPANION_PORT', 'Companion port', _settings_positive),
                         ('COMPANION_WAIT', 'Companion wait seconds', _settings_positive),
@@ -675,7 +682,7 @@ def _settings_language_defaults(editor):
 
 
 def _settings_routing(editor):
-    with editor.scope(['ACTION_DEST_DIR', 'ACTION_SAVE_RELPATH', 'ACTION_SAVE_TEST_RELPATH', 'MODE_DEST_DIR', 'MODE_SAVE_RELPATH', 'MODE_SAVE_TEST_RELPATH']):
+    with editor.scope(['ACTION_DEST_DIR', 'ACTION_SAVE_RELPATH', 'MODE_DEST_DIR', 'MODE_SAVE_RELPATH']):
         _settings_routing_menu(editor)
 
 
@@ -693,8 +700,7 @@ def _settings_routing_menu(editor):
         if name not in (editor.data['MODE_NAMES'] if profile else actions):
             print('Choose an action or a saved profile.'); continue
         prefix = 'MODE_' if profile else 'ACTION_'
-        fields = {'dest-dir': prefix + 'DEST_DIR', 'save-relpath': prefix + 'SAVE_RELPATH',
-                  'save-test-relpath': prefix + 'SAVE_TEST_RELPATH'}
+        fields = {'dest-dir': prefix + 'DEST_DIR', 'save-relpath': prefix + 'SAVE_RELPATH'}
         while True:
             for label, key in fields.items(): print('  {}: {}'.format(label, editor.data[key].get(name, '(inherit)')))
             command = editor.ask('routing {}> [FIELD VALUE / inherit FIELD / back]: '.format(name))
@@ -704,7 +710,7 @@ def _settings_routing_menu(editor):
             if len(words) != 2: print('Example: dest-dir build/debug; or inherit dest-dir'); continue
             inherit = words[0] == 'inherit'
             field = words[1] if inherit else words[0]
-            if field not in fields: print('Use dest-dir, save-relpath or save-test-relpath.'); continue
+            if field not in fields: print('Use dest-dir or save-relpath.'); continue
             key = fields[field]
             value = '' if inherit else words[1]
             if not inherit:

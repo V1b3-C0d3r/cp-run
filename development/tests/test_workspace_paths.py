@@ -1,4 +1,4 @@
-"""Workspace-rooted preferences and templates across all file consumers."""
+"""Workspace-rooted preferences and fixed test folders across all file consumers."""
 
 import copy
 import json
@@ -58,22 +58,23 @@ class WorkspacePathsTest(unittest.TestCase):
         workspace = self.cwd
         (workspace / 'data').mkdir()
         (workspace / 'data/in.txt').write_text('copied\n')
-        self.save(DEFAULT_WORKSPACE='..', DEFAULT_SOURCE='{wsp-dir}/main.cpp',
+        self.save(DEFAULT_WORKSPACE='..', DEFAULT_SOURCE='{wsp-dir}/main.cpp', DEFAULT_F_MODE='auto',
                   DEFAULT_INPUT='{wsp-dir}/data/in.txt', DEFAULT_OUTPUT='{wsp-dir}/data/out.txt')
         self.nested()
-        result = self.invoke('-f=auto')
+        result = self.invoke('-f')
         self.assertEqual((result.returncode, result.stdout), (0, ''), result.stderr)
         self.assertEqual((workspace / 'data/out.txt').read_text(), 'copied\n')
-        result = self.invoke('{wsp-dir}/main.cpp', '-f=auto', '{wsp-dir}/data/in.txt',
+        result = self.invoke('{wsp-dir}/main.cpp', '-f', '{wsp-dir}/data/in.txt',
                              '{wsp-dir}/data/explicit.txt', '-o', '{wsp-dir}/program.out')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((workspace / 'data/explicit.txt').read_text(), 'copied\n')
         self.assertTrue((workspace / 'program.out').is_file())
 
     def test_exact_output_bypasses_invalid_destination_but_resolves_input_workspace(self):
+        self.save(DEFAULT_F_MODE='auto')
         (self.cwd / 'in.txt').write_text('safe\n')
         result = self.invoke(self.source, '-o', 'explicit.out', '--dest-dir=../unused',
-                             '-f=in', '{wsp-dir}/in.txt')
+                             '-f', '{wsp-dir}/in.txt', '--cout')
         self.assertEqual((result.returncode, result.stdout), (0, 'safe\n'), result.stderr)
 
     def test_workspace_name_search_and_quoted_root_paths(self):
@@ -87,19 +88,18 @@ class WorkspacePathsTest(unittest.TestCase):
         workspace = self.cwd
         (workspace / 'data').mkdir()
         (workspace / 'cases/main').mkdir(parents=True)
-        (workspace / 'cases/main/1.in').write_text('case one\n')
-        (workspace / 'cases/main/1.ans').write_text('case one\n')
+        (workspace / 'cases/main/in1.txt').write_text('case one\n')
+        (workspace / 'cases/main/ans1.txt').write_text('case one\n')
         self.save(DEFAULT_WORKSPACE='..', DEFAULT_SOURCE='{wsp-dir}/main.cpp',
                   DEFAULT_INPUT='{wsp-dir}/data/in.txt',
-                  DEFAULT_INPUT_TEMPLATE='{wsp-dir}/cases/{stem}/{n}.in',
-                  DEFAULT_ANSWER_TEMPLATE='{wsp-dir}/cases/{stem}/{n}.ans')
+                  DEFAULT_TEST_FOLDER='{wsp-dir}/cases/main')
         self.nested()
         result = self.invoke('test=mult', '--cout')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('Test 1: AC', result.stdout)
-        result = self.invoke('--pack=in')
+        result = self.invoke('pack=in')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual((workspace / 'data/in.bundle').read_bytes(), b'1\ncase one\n')
+        self.assertEqual((workspace / 'data/in.txt').read_bytes(), b'1\ncase one\n')
 
     def test_unused_anchored_defaults_do_not_force_workspace_lookup(self):
         self.save(DEFAULT_SOURCE='{wsp-dir}/missing.cpp', DEFAULT_INPUT='{wsp-dir}/missing.in',
@@ -169,15 +169,12 @@ class WorkspacePathsTest(unittest.TestCase):
             with self.assertRaises(engine.CheckUsageError): engine.validate_preferences(values)
 
 
-class WorkspaceTemplatesTest(unittest.TestCase):
+class WorkspaceTestFolderTest(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix='cp-run-rooted-templates-')
+        self.temporary = tempfile.TemporaryDirectory(prefix='cp-run-test-folder-')
         self.root = Path(self.temporary.name).resolve()
-        self.config = {'workspace': str(self.root), 'destination': 'unused',
-                       'source_anchor': str(self.root / 'src/sum.cpp'),
-                       'in_template': '{wsp-dir}/samples/{stem}/{n}.in',
-                       'ans_template': '{wsp-dir}/answers/{stem}/{n}.ans',
-                       'save_test_relpath': True}
+        self.config = {'workspace': str(self.root), 'test_folder': '{wsp-dir}/samples',
+                       'destination': 'unused', 'source_anchor': str(self.root / 'src/sum.cpp')}
 
     def tearDown(self):
         self.temporary.cleanup()
@@ -186,41 +183,39 @@ class WorkspaceTemplatesTest(unittest.TestCase):
         return json.dumps({'tests': [{'input': '2 3\n', 'output': '5\n'},
                                      {'input': '7 8\n', 'output': '15\n'}]}).encode()
 
-    def test_companion_and_mult_share_workspace_templates(self):
+    def test_companion_and_mult_share_fixed_folder(self):
         count, root = engine.import_companion(self.config, self.payload())
-        self.assertEqual((count, root), (2, self.root))
-        self.assertEqual((self.root / 'samples/sum/1.in').read_bytes(), b'2 3\n')
+        self.assertEqual((count, root), (2, self.root / 'samples'))
+        self.assertEqual((root / 'in1.txt').read_bytes(), b'2 3\n')
         ids, inputs, answers = engine.mult_cases(self.config)
         self.assertEqual(ids, [1, 2])
         self.assertEqual(engine.slice_bytes(answers[1]), b'15\n')
         self.assertFalse((self.root / 'unused').exists())
 
-    def test_mixed_workspace_and_destination_templates(self):
-        config = dict(self.config, ans_template='{stem}/{n}.ans')
+    def test_explicit_workspace_root_is_a_valid_folder(self):
+        config = dict(self.config, test_folder='{wsp-dir}')
         engine.import_companion(config, self.payload())
-        self.assertTrue((self.root / 'samples/sum/1.in').is_file())
-        self.assertTrue((self.root / 'unused/src/sum/1.ans').is_file())
         self.assertEqual(engine.mult_cases(config)[0], [1, 2])
+        self.assertTrue((self.root / 'in1.txt').is_file())
 
-    def test_pack_and_unpack_share_workspace_templates(self):
+    def test_pack_and_unpack_share_fixed_folder(self):
         engine.import_companion(self.config, self.payload())
         bundle = self.root / 'input.bundle'
-        config = dict(self.config, operation='pack', bundle_stream='in', data_output=str(bundle))
+        config = dict(self.config, operation='pack', bundle_stream='in', default_input=str(bundle))
         engine.execute_bundle(config)
         records = engine.counted_cases(bundle, b'\n\x1e\n')
         self.assertEqual([engine.slice_bytes(c) for c in records], [b'2 3\n', b'7 8\n'])
-        config.update(operation='unpack', data_input=str(bundle), data_output='',
-                      in_template='{wsp-dir}/restored/{n}.in')
+        config.update(operation='unpack', test_folder='{wsp-dir}/restored')
         engine.execute_bundle(config)
-        self.assertEqual((self.root / 'restored/2.in').read_bytes(), b'7 8\n')
+        self.assertEqual((self.root / 'restored/in2.txt').read_bytes(), b'7 8\n')
 
-    def test_template_anchor_is_strict_and_retains_write_protection(self):
-        for template in ('{wsp-dir}/../{n}.in', 'x/{wsp-dir}/{n}.in',
-                         '{wsp-dir}//tmp/{n}.in', '{wsp-dir}/{unknown}/{n}.in'):
-            with self.assertRaises(engine.CheckUsageError): engine.case_template(template, 'sum', 1)
+    def test_folder_anchor_is_strict_and_retains_write_protection(self):
+        for folder in ('{wsp-dir}/../cases', 'x/{wsp-dir}/cases', '{wsp-dir}//tmp'):
+            with self.assertRaises(engine.CheckUsageError):
+                engine.import_companion(dict(self.config, test_folder=folder), self.payload())
         (self.root / 'samples').symlink_to(self.root.parent, target_is_directory=True)
-        with self.assertRaises(engine.CheckUsageError): engine.import_companion(self.config, self.payload())
-        self.assertFalse((self.root / 'answers').exists())
+        with self.assertRaises(engine.CheckUsageError):
+            engine.import_companion(self.config, self.payload())
 
 
 if __name__ == '__main__':

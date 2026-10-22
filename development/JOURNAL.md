@@ -89,3 +89,28 @@
 - Owner simplified formatting before publication: --make-prettier now always formats and exits; check is read-only; only/before modes are removed. Formatter dispatch runs before compiler/artifact planning and cannot fall through into a build. Stress selects all source roles, and missing tools are still resolved before any edit. Updated documentation and format-only regressions are in progress.
 - Final extracted 1.1.1 archive passed **475 tests** in 266.461 s with all locally available tool integrations enabled. Eight formatter regressions verify no compiler/program execution, check immutability, source discovery/history, stress roles, dependency preflight and removed modes. Eleven new output/publication regressions cover renamed defaults, workspace paths, console-only reports, protected roles, cross-volume replacement and older preference filenames.
 - Five documented workflows passed separately: whole-file checking, macro/redirected file I/O, workspace-rooted mult output and counterexample reduction. Corrected the example guide to describe both lines in its sample answer. Source changes are ready for commit, current platform CI and a new immutable 1.1.1 snapshot/release.
+
+## Fixed task-folder simplification (in progress)
+
+- Replaced filename templates, source anchors and inherited test subtrees with one DEFAULT_TEST_FOLDER and --test-f. Numbered files are fixed inN.txt/ansN.txt; artifact routing stays independent.
+- Pack/unpack now process both streams by default, use saved input/answer filenames when omitted, accept one/two bundle operands and attached =in/=ans selectors. Paired writes share preflight/rollback; malformed or mismatched second streams cannot modify the first. Removed manual-file conversion, not lossless framing.
+- Old preference imports discard removed template/subtree fields and migrate explicit test folders. Exports use schema 3. Formatter syntax is exactly bare --make-prettier or --make-prettier=check.
+- Reworked CLI/testing documentation, tables and runnable examples. The owner subsequently authorized updating README too; its numbered filenames and short folder/pack examples now match the simplified contract.
+- Focused storage tests initially exposed a new-test Python 3.9 compatibility issue (Path.hardlink_to); changed the fixture to os.link. Two loopback tests require the network-enabled verification run. Final full-project audit and archive verification are pending.
+
+- Additional owner request: ordinary/run -f=auto now accepts one --cin/--cout override, normalized to the existing output-only/input-only execution path. Both together fail before any preparation; test/stress retain their existing semantics. Focused source/Python/binary/repetition regressions cover this late addition.
+
+## Final CLI contract (supersedes intermediate spellings above)
+
+- configure is now the standalone settings command; pack/unpack are bare data commands, with optional =in/=ans selectors. Old --set-defaults/--pack/--unpack/--text spellings produce migration diagnostics.
+- -f/--file-io accept no =VALUE or mode keywords. Factory action remains macro; configure offers macro or auto. Saved auto optionally accepts IN/OUT filenames and one --cin/--cout override. Both overrides together, or either in macro mode, fail before preparation. Test/stress console behavior is unchanged.
+- Updated current documentation and fixtures; historical journal entries retain the spellings used at their checkpoints. The first final storage archive passed 494 tests; late console routing passed eight focused tests. A final interface/archive verification is now pending.
+
+## Final audit and verification
+
+- Final extracted archive: **507 tests passed**, no skips, in 285.182 s on macOS Apple Silicon with real GCC/Clang, CPython/PyPy and optional formatter integrations. All 20 isolated documented workflows passed, including configure, macro/auto I/O, console overrides, lossless folder round trips, mult/auto and confirmed reduction.
+- Reviewed CLI phase/argv ownership, path containment and paired writes, settings migration, language/profile selection, repeated-run stdout/stderr, runtime limits/verdicts, reporting bounds, build manifests and package contents. Fixed a counted-reader FIFO hang risk with regular-file preflight; tests cover it without blocking. Removed obsolete source-anchor transport and corrected stale module/formatter diagnostics.
+- Documentation reviewed against parser/defaults and exercised commands; all 29 local links/anchors and Markdown table widths validate. Root README now uses fixed names and final bare commands. Formatter remains bare edit or attached =check only. No GitHub upload instructions were added to project docs.
+- Native runtime observer and memory backend are unchanged. New routing normalizes once into existing execution paths; ordinary unlimited native launches still avoid Python. The tested modules/tests and generated script match the working sources exactly.
+- Workspace cleanup verified all 33 old Work/Development files against the frozen 1.0 archive before removing the redundant copy. Removed obsolete applied patches/check helpers and Finder artifacts outside frozen snapshots; grouped old verification records by release. All 39 frozen file hashes remain unchanged.
+- Final packaging/reproducibility, commit, platform CI and publication evidence are recorded under Work/Verification/1.1.1. Previous draft assets must be replaced with this build before publication.

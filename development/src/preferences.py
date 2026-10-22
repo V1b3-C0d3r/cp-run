@@ -3,7 +3,20 @@
 
 def validate_preferences(values):
     """Validate a complete or older-schema settings record without a compiler."""
-    if not isinstance(values, dict) or set(values) - set(FACTORY_SETTINGS):
+    if not isinstance(values, dict):
+        raise ValueError('invalid settings object')
+    values = copy.deepcopy(values)
+    # Old exports may carry templates and inherited routing. Keep an explicit
+    # old folder, but fixed filenames replace all per-case path expressions.
+    old_folder = values.pop('DEFAULT_TEST_DIR', '')
+    if not isinstance(old_folder, str):
+        raise ValueError('invalid legacy test folder')
+    if old_folder and 'DEFAULT_TEST_FOLDER' not in values:
+        values['DEFAULT_TEST_FOLDER'] = old_folder if old_folder.startswith('{wsp-dir}') else '{wsp-dir}/' + old_folder
+    for key in ('DEFAULT_INPUT_TEMPLATE', 'DEFAULT_ANSWER_TEMPLATE', 'MANUAL_SEPARATOR',
+                'ACTION_SAVE_TEST_RELPATH', 'MODE_SAVE_TEST_RELPATH'):
+        values.pop(key, None)
+    if set(values) - set(FACTORY_SETTINGS):
         raise ValueError('unknown settings keys or invalid settings object')
     data = copy.deepcopy(FACTORY_SETTINGS)
     data.update(copy.deepcopy(values))
@@ -23,7 +36,6 @@ def validate_preferences(values):
         raise ValueError('compiler overrides support c and c++ only; use DEFAULT_INTERPRETER for Python')
     data['LANGUAGE_COMPILERS'] = {key: _settings_compiler(value) for key, value in data['LANGUAGE_COMPILERS'].items()}
     if data['C_STANDARD'] != 'auto' and not re.fullmatch(r'(?:[0-9]+|(?:gnu|c)[0-9][A-Za-z0-9]*|iso9899:[0-9]+)', data['C_STANDARD']): raise ValueError('invalid C standard')
-    for key in ('DEFAULT_INPUT_TEMPLATE', 'DEFAULT_ANSWER_TEMPLATE'): case_template(data[key], 'main', 1)
     _settings_filename(data['DEFAULT_SOURCE'])
     for key in ('DEFAULT_BRUTE', 'DEFAULT_GENERATOR'):
         _settings_filename(data[key])
@@ -35,7 +47,7 @@ def validate_preferences(values):
     _settings_seed(data['DEFAULT_SEED'])
     _settings_separator(data['DEFAULT_SEPARATOR'])
     _settings_macro(data['DEFAULT_MACRO'])
-    _settings_choice('macro', 'auto', 'in', 'out')(data['DEFAULT_F_MODE'])
+    _settings_choice('macro', 'auto')(data['DEFAULT_F_MODE'])
     _settings_choice('0', '1')(data['DEFAULT_WARMUP'])
     for key in ('TIME_KILL_FACTOR', 'MEMORY_KILL_FACTOR'):
         _factor(data[key])
@@ -53,20 +65,18 @@ def validate_preferences(values):
         raise ValueError('workspace path cannot refer to itself with {wsp-dir}')
     # Optional map entries inherit; an explicit zero remains a real override.
     actions = {'ordinary', 'compile', 'debug', 'run', 'test', 'test-auto', 'test-mult', 'stress', 'companion'}
-    for key in ('ACTION_DEST_DIR', 'ACTION_SAVE_RELPATH', 'ACTION_SAVE_TEST_RELPATH'):
+    for key in ('ACTION_DEST_DIR', 'ACTION_SAVE_RELPATH'):
         if set(data[key]) - actions: raise ValueError('unknown action in ' + key)
-    for key in ('MODE_DEST_DIR', 'MODE_SAVE_RELPATH', 'MODE_SAVE_TEST_RELPATH'):
+    for key in ('MODE_DEST_DIR', 'MODE_SAVE_RELPATH'):
         data[key] = {name: value for name, value in data[key].items() if value != ''}
     for key in ('ACTION_DEST_DIR', 'MODE_DEST_DIR'):
         for value in data[key].values():
             if not value: raise ValueError('empty destination override')
             _settings_destination(value)
-    for key in ('ACTION_SAVE_RELPATH', 'ACTION_SAVE_TEST_RELPATH', 'MODE_SAVE_RELPATH', 'MODE_SAVE_TEST_RELPATH'):
+    for key in ('ACTION_SAVE_RELPATH', 'MODE_SAVE_RELPATH'):
         for value in data[key].values(): _settings_choice('0', '1')(value)
-    for key in ('DEFAULT_TEST_DIR',):
-        if data[key]: _settings_destination(data[key])
+    _settings_test_folder(data['DEFAULT_TEST_FOLDER'])
     for key in ('C_SOURCE', 'PYTHON_SOURCE'): _settings_filename(data[key])
-    _settings_separator(data['MANUAL_SEPARATOR'])
     _settings_choice('all', 'failed')(data['DEFAULT_REPORT_TESTS'])
     for key in ('COMPANION_PORT', 'COMPANION_WAIT', 'MINIMIZE_ATTEMPTS', 'MINIMIZE_SECONDS', 'MAX_FAILURES'):
         _settings_positive(data[key])
@@ -77,7 +87,7 @@ def validate_preferences(values):
     for key in PROFILE_KEYS:
         if key not in values: data[key] = {name: value for name, value in data[key].items() if name in names}
     if len(set(names)) != len(names): raise ValueError('duplicate profile name')
-    reserved = {'companion', 'compile', 'run', 'test', 'stress', 'tr', 'sr', 'none', 'plain'}
+    reserved = {'companion', 'compile', 'run', 'test', 'stress', 'tr', 'sr', 'configure', 'pack', 'unpack', 'none', 'plain'}
     for name in names:
         if not re.fullmatch(r'[A-Za-z][A-Za-z0-9_-]{0,31}', name) or name in reserved:
             raise ValueError('invalid profile name: ' + name)
@@ -101,7 +111,7 @@ def export_preferences(path, data, script_path):
     if destination.resolve() == Path(script_path).resolve():
         raise ValueError('settings export must not overwrite the script')
     data = validate_preferences(data)
-    record = {'format': 'cp-run-settings', 'schema': 2, 'settings': data}
+    record = {'format': 'cp-run-settings', 'schema': 3, 'settings': data}
     temporary = None
     try:
         with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=destination.parent,
@@ -130,7 +140,7 @@ def load_preferences(path):
         raise ValueError('settings export is too deeply nested') from None
     if (not isinstance(record, dict) or set(record) != {'format', 'schema', 'settings'}
             or record['format'] != 'cp-run-settings' or type(record['schema']) is not int
-            or record['schema'] not in (1, 2)):
+            or record['schema'] not in (1, 2, 3)):
         raise ValueError('unsupported settings export format/schema')
     return validate_preferences(record['settings'])
 

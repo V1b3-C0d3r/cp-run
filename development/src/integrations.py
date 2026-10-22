@@ -23,7 +23,7 @@ def execute_format(config):
         executable = shutil.which(tool)
         if not executable:
             raise CheckSetupError(
-                "optional formatter not found: " + tool + "; see README installation"
+                "optional formatter not found: " + tool + "; see https://github.com/V1b3-C0d3r/cp-run/blob/main/docs/CLI.md#formatting"
             )
         check = config.get("prettier") == "check"
         if python_source:

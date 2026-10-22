@@ -10,7 +10,7 @@ def _bridge_config(values):
     config['runtime_args'] = [next(values) for _ in range(runtime_count)]
     protected_count = int(next(values))
     config['protected'] = [next(values) for _ in range(protected_count)]
-    for key in ('auto', 'cin', 'cout', 'show_time', 'show_memory', 'show_command', 'warmup', 'mult', 'save_test_relpath', 'overwrite', 'text_conversion', 'stop_on_failure'):
+    for key in ('auto', 'cin', 'cout', 'show_time', 'show_memory', 'show_command', 'warmup', 'mult', 'overwrite', 'stop_on_failure'):
         config[key] = config.get(key, '0') == '1'
     config['cases'] = [int(value) for value in config.get('cases', '').split(',') if value]
     for key in ('num_test', 'seed'):

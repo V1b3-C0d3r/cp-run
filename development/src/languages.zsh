@@ -122,7 +122,6 @@ resolve_action_defaults() {
         destination=${MODE_DEST_DIR[$profile]-${ACTION_DEST_DIR[$key]-${ACTION_DEST_DIR[$base]-${ACTION_DEST_DIR[$parent]-$DEFAULT_DESTINATION}}}}
     fi
     if (( ! relpath_given )); then save_relpath=${MODE_SAVE_RELPATH[$profile]-${ACTION_SAVE_RELPATH[$key]-${ACTION_SAVE_RELPATH[$base]-${ACTION_SAVE_RELPATH[$parent]-0}}}}; fi
-    if (( ! test_relpath_given )); then save_test_relpath=${MODE_SAVE_TEST_RELPATH[$profile]-${ACTION_SAVE_TEST_RELPATH[$key]-${ACTION_SAVE_TEST_RELPATH[$base]-${ACTION_SAVE_TEST_RELPATH[$parent]-0}}}}; fi
     if (( save_relpath && ! destination_given )) && [[ -z ${MODE_DEST_DIR[$profile]-}${ACTION_DEST_DIR[$key]-}${ACTION_DEST_DIR[$base]-}${ACTION_DEST_DIR[$parent]-} ]]; then
         destination=$DEFAULT_RELPATH_DESTINATION
     fi

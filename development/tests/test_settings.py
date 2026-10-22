@@ -55,7 +55,7 @@ class SettingsTest(unittest.TestCase):
                               text=True, timeout=15)
 
     def configure(self, commands):
-        result = self.invoke('--set-defaults', commands=commands)
+        result = self.invoke('configure', commands=commands)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn('Traceback', result.stderr)
         return result
@@ -107,7 +107,7 @@ class SettingsTest(unittest.TestCase):
     def test_save_through_symlink_preserves_link_and_executable_mode(self):
         alias = self.cwd / 'alias'
         alias.symlink_to(self.script)
-        result = self.invoke('--set-defaults', commands='1\n2\n23\nsave\ny\n', script=alias)
+        result = self.invoke('configure', commands='1\n2\n23\nsave\ny\n', script=alias)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(alias.is_symlink())
         self.assertEqual(self.data()['DEFAULT_STANDARD'], '23')
@@ -341,10 +341,9 @@ class SettingsTest(unittest.TestCase):
         with self.assertRaises(ValueError): settings.validate_preferences(broken)
 
     def test_language_and_test_layout_menus(self):
-        self.configure('8\n1\n1\n' + sys.executable + '\nback\nback\n9\n1\n{stem}/{n}.in\n2\n{stem}/{n}.ans\nback\nsave\ny\n')
+        self.configure('8\n1\n1\n' + sys.executable + '\nback\nback\n9\n1\n{wsp-dir}/cases\nback\nsave\ny\n')
         self.assertEqual(self.data()['DEFAULT_INTERPRETER'], sys.executable)
-        self.assertEqual(self.data()['DEFAULT_INPUT_TEMPLATE'], '{stem}/{n}.in')
-        self.assertEqual(self.data()['DEFAULT_ANSWER_TEMPLATE'], '{stem}/{n}.ans')
+        self.assertEqual(self.data()['DEFAULT_TEST_FOLDER'], '{wsp-dir}/cases')
 
 
 

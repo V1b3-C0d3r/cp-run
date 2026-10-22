@@ -38,6 +38,11 @@ class LanguagesTest(unittest.TestCase):
             **kwargs,
         )
 
+    def set_file_io_mode(self):
+        script = Path(self.script)
+        script.write_text(script.read_text().replace('typeset -g DEFAULT_F_MODE=macro',
+                                                   'typeset -g DEFAULT_F_MODE=auto'))
+
     def source(self, name="main.py", content='print("hello")\n'):
         path = self.cwd / name
         path.write_text(content)
@@ -127,11 +132,12 @@ class LanguagesTest(unittest.TestCase):
         self.assertEqual(self.invoke("debug", path, "--", "-O").returncode, 2)
 
     def test_python_in_out_redirects_are_independent(self):
+        self.set_file_io_mode()
         path = self.source(content="import sys\nsys.stdout.write(sys.stdin.read())\n")
         (self.cwd / "in.txt").write_text("input\n")
-        result = self.invoke(path, "-f", "in")
+        result = self.invoke(path, "-f", "--cout")
         self.assertEqual(result.stdout, "input\n")
-        result = self.invoke(path, "--file-io=out", "chosen.txt", input="output\n")
+        result = self.invoke(path, "--file-io", "--cin", "--out=chosen.txt", input="output\n")
         self.assertEqual((result.returncode, result.stdout), (0, ""), result.stderr)
         self.assertEqual((self.cwd / "chosen.txt").read_text(), "output\n")
 

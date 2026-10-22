@@ -1,7 +1,8 @@
 """Answer checking and reproducible stress tests, embedded in cp-run.zsh.
 
 This module shares Runner with runtime.py. It never compiles, evaluates shell
-text or captures stderr. The shell prepares executable paths before execution.
+text. The checking layer owns stderr capture and reports; the shell prepares
+launch targets before execution.
 """
 
 import base64

@@ -65,38 +65,32 @@ class StorageTest(unittest.TestCase):
     def test_sparse_ids_and_pairing(self):
         Path("tests").mkdir()
         for n in (1, 3):
-            Path("tests/{}.in".format(n)).write_text(str(n))
-            Path("tests/{}.ans".format(n)).write_text(str(n))
+            Path("tests/in{}.txt".format(n)).write_text(str(n))
+            Path("tests/ans{}.txt".format(n)).write_text(str(n))
         ids, left, right = engine.mult_cases(
-            {"test_dir": "tests", "source_anchor": str(self.cwd / "main.cpp")}
+            {"test_folder": "tests", "source_anchor": str(self.cwd / "main.cpp")}
         )
         self.assertEqual(ids, [1, 3])
         self.assertEqual(engine.slice_bytes(left[1]), b"3")
-        Path("tests/3.ans").unlink()
+        Path("tests/ans3.txt").unlink()
         with self.assertRaisesRegex(engine.CheckUsageError, "missing answers"):
-            engine.mult_cases({"test_dir": "tests"})
+            engine.mult_cases({"test_folder": "tests"})
 
-    def test_duplicate_numerical_id_and_template_escape(self):
+    def test_duplicate_numerical_id_and_fixed_names(self):
         Path("tests").mkdir()
-        for name in ("1.in", "01.in"):
+        for name in ("in1.txt", "in01.txt"):
             Path("tests", name).touch()
         with self.assertRaisesRegex(engine.CheckUsageError, "duplicate"):
-            engine.discover_cases("tests", "{n}.in", "main")
-        for pattern in ("../{n}.in", "/tmp/{n}", "{n}/{unknown}", "{n}{n}"):
-            with self.assertRaises(engine.CheckUsageError):
-                engine.case_template(pattern, "main", 1)
+            engine.discover_cases("tests", "in")
 
-    def test_template_stem_literal_characters_and_subtree(self):
+    def test_folder_is_independent_of_source_and_artifact_routing(self):
         root = self.cwd / "tests"
-        engine.write_test_files(root, [("a [x]/3.in", b"3")])
-        self.assertEqual(list(engine.discover_cases(root, "{stem}/{n}.in", "a [x]")), [3])
-        config = {
-            "workspace": str(self.cwd),
-            "test_dir": "tests",
-            "source_anchor": str(self.cwd / "src/main.cpp"),
-            "save_test_relpath": True,
-        }
-        self.assertEqual(engine.layout_root(config), self.cwd / "tests/src")
+        engine.write_test_files(root, [("nested/in3.txt", b"3"), ("in1.txt", b"1")])
+        self.assertEqual(list(engine.discover_cases(root, "in")), [1])
+        config = {"workspace": str(self.cwd), "test_folder": "{wsp-dir}/tests",
+                  "destination": "ignored", "source_anchor": str(self.cwd / "src/main.cpp"),
+                  "save_test_relpath": True, "in_template": "ignored/{n}.in"}
+        self.assertEqual(engine.layout_root(config), root)
 
     def test_writer_preflights_entire_set_and_refuses_links(self):
         root = self.cwd / "tests"
@@ -120,11 +114,11 @@ class StorageTest(unittest.TestCase):
                 "testType": "multiNumber",
             }
         ).encode()
-        config = {"test_dir": "tests", "source_anchor": str(self.cwd / "main.cpp")}
+        config = {"test_folder": "tests", "source_anchor": str(self.cwd / "main.cpp")}
         count, root = engine.import_companion(config, payload)
         self.assertEqual(count, 1)
-        self.assertEqual((root / "1.in").read_bytes(), b"2\n1 2\n\n")
-        self.assertEqual((root / "1.ans").read_bytes(), b"")
+        self.assertEqual((root / "in1.txt").read_bytes(), b"2\n1 2\n\n")
+        self.assertEqual((root / "ans1.txt").read_bytes(), b"")
         engine.import_companion(config, payload)  # Idempotent repeated delivery.
 
     def test_companion_binding_never_queries_reverse_dns(self):
@@ -138,7 +132,7 @@ class StorageTest(unittest.TestCase):
     def test_import_rollback_restores_prior_files_after_interrupted_replace(self):
         root = self.cwd / "tests"
         root.mkdir()
-        (root / "1.in").write_bytes(b"old")
+        (root / "in1.txt").write_bytes(b"old")
         original = os.replace
         calls = [0]
 
@@ -153,10 +147,10 @@ class StorageTest(unittest.TestCase):
             mock.patch.object(engine.os, "replace", side_effect=interrupt),
             self.assertRaises(KeyboardInterrupt),
         ):
-            engine.write_test_files(root, [("1.in", b"new"), ("1.ans", b"answer")], overwrite=True)
-        self.assertEqual((root / "1.in").read_bytes(), b"old")
-        self.assertFalse((root / "1.ans").exists())
-        self.assertEqual(sorted(path.name for path in root.iterdir()), ["1.in"])
+            engine.write_test_files(root, [("in1.txt", b"new"), ("ans1.txt", b"answer")], overwrite=True)
+        self.assertEqual((root / "in1.txt").read_bytes(), b"old")
+        self.assertFalse((root / "ans1.txt").exists())
+        self.assertEqual(sorted(path.name for path in root.iterdir()), ["in1.txt"])
 
     def test_companion_rejects_batch_duplicate_keys_and_bad_samples(self):
         for payload in (
@@ -271,8 +265,8 @@ class AdvancedCliTest(unittest.TestCase):
         )
         (self.cwd / "tests").mkdir()
         for n, text in ((1, "bad"), (3, "good")):
-            (self.cwd / "tests/{}.in".format(n)).write_text(text)
-            (self.cwd / "tests/{}.ans".format(n)).write_text(text)
+            (self.cwd / "tests/in{}.txt".format(n)).write_text(text)
+            (self.cwd / "tests/ans{}.txt".format(n)).write_text(text)
         result = self.invoke("test=mult", "--cout")
         self.assertEqual(result.returncode, 7, result.stderr)
         self.assertIn("Test 1: RE", result.stdout)
@@ -280,16 +274,18 @@ class AdvancedCliTest(unittest.TestCase):
         self.assertEqual(result.stdout.count("failure"), 20)
         self.assertNotIn("failure", result.stderr)
 
-    def test_bundle_manual_conversion_cli_roundtrip(self):
-        self.source()
-        manual = self.cwd / "manual.txt"
-        manual.write_bytes(b"2\nA\n\n###\n\nB")
-        result = self.invoke("--pack", "in", "manual.txt", "data.bundle", "--text-sep", r"\n###\n")
+    def test_bundle_both_streams_cli_roundtrip(self):
+        folder = self.cwd / "tests"
+        folder.mkdir()
+        for name, data in (("in1.txt", b"A\n\n"), ("ans1.txt", b""),
+                           ("in2.txt", b"B"), ("ans2.txt", b"C\r\n")):
+            (folder / name).write_bytes(data)
+        result = self.invoke("pack", "data.in", "data.ans")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn(b"\n\x1e\n", (self.cwd / "data.bundle").read_bytes())
-        result = self.invoke("--unpack=in", "data.bundle", "copy.txt", "--text-sep=" + r"\n###\n")
+        result = self.invoke("unpack", "data.in", "data.ans", "--test-f=copy")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual((self.cwd / "copy.txt").read_bytes(), manual.read_bytes())
+        self.assertEqual({p.name: p.read_bytes() for p in folder.iterdir()},
+                         {p.name: p.read_bytes() for p in (self.cwd / "copy").iterdir()})
 
     def test_ce_has_report_and_never_runs_source(self):
         self.source(content="def invalid(:\n")
@@ -350,8 +346,8 @@ class AdvancedCliTest(unittest.TestCase):
                 self.assertEqual(response.status, 200)
             stdout, stderr = process.communicate(timeout=10)
             self.assertEqual(process.returncode, 0, stderr)
-            self.assertEqual((self.cwd / "tests/1.in").read_bytes(), b"1\n")
-            self.assertEqual((self.cwd / "tests/1.ans").read_bytes(), b"1\n")
+            self.assertEqual((self.cwd / "tests/in1.txt").read_bytes(), b"1\n")
+            self.assertEqual((self.cwd / "tests/ans1.txt").read_bytes(), b"1\n")
         finally:
             if process.poll() is None:
                 process.kill()
@@ -373,8 +369,8 @@ class AdvancedCliTest(unittest.TestCase):
         )
         (self.cwd / "tests").mkdir()
         for n, text in ((1, "mem"), (2, "fast")):
-            (self.cwd / "tests/{}.in".format(n)).write_text(text)
-            (self.cwd / "tests/{}.ans".format(n)).write_text(text)
+            (self.cwd / "tests/in{}.txt".format(n)).write_text(text)
+            (self.cwd / "tests/ans{}.txt".format(n)).write_text(text)
         result = self.invoke("test=mult", "--MLE=96", "--TLE=5000", "--cout")
         self.assertEqual(result.returncode, 125, result.stderr)
         self.assertIn("Test 1: MLE", result.stdout)
@@ -398,8 +394,9 @@ class AdvancedCliTest(unittest.TestCase):
         self.assertTrue(json.loads((bundle / "reduction.json").read_text())["confirmed"])
 
     def test_out_only_may_use_the_unused_default_input_filename(self):
+        language_fixtures.LanguagesTest.set_file_io_mode(self)
         self.source(content='print("written")\n')
-        result = self.invoke("main.py", "-f=out", "in.txt")
+        result = self.invoke("main.py", "-f", "--cin", "--out=in.txt")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((self.cwd / "in.txt").read_text(), "written\n")
 
@@ -425,10 +422,10 @@ class AdvancedCliTest(unittest.TestCase):
 
     def test_pack_uses_mult_defaults_without_a_source_file(self):
         (self.cwd / "tests").mkdir()
-        (self.cwd / "tests/1.in").write_bytes(b"2 3\n")
-        packed = self.invoke("--pack", "in")
+        (self.cwd / "tests/in1.txt").write_bytes(b"2 3\n")
+        packed = self.invoke("pack=in")
         self.assertEqual(packed.returncode, 0, packed.stderr)
-        self.assertEqual((self.cwd / "in.bundle").read_bytes(), b"1\n2 3\n")
+        self.assertEqual((self.cwd / "in.txt").read_bytes(), b"1\n2 3\n")
 
     def test_interpreter_argument_replay_retains_diagnostic_options(self):
         self.source(content='print("wrong")\n')

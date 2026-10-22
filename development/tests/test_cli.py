@@ -196,10 +196,19 @@ class CliTest(unittest.TestCase):
         self.assertIsNotNone(result, args)
         return Path(result) if Path(result).is_absolute() else self.cwd / result
 
-    def invoke(self, *args, cwd=None, env=None, input=None, script=SCRIPT):
+    def invoke(self, *args, cwd=None, env=None, input=None, script=None):
+        script = script or getattr(self, "invocation_script", SCRIPT)
         return subprocess.run([str(script), *map(str, args)], cwd=cwd or self.cwd,
                               env=self.environment(env), input=input, text=True,
                               capture_output=True, timeout=20)
+
+    def set_file_io_mode(self, mode='auto'):
+        """Use an isolated installed copy with the requested saved -f action."""
+        target = self.root / 'file-io-settings.zsh'
+        source = SCRIPT.read_text()
+        source = source.replace('typeset -g DEFAULT_F_MODE=macro', 'typeset -g DEFAULT_F_MODE=' + mode)
+        target.write_text(source); target.chmod(0o755)
+        self.invocation_script = target
 
     def build(self, *flags, env=None, source=None):
         result = self.invoke("compile", source or self.source.name, *flags, env=env)
@@ -276,7 +285,7 @@ class CliTest(unittest.TestCase):
 
     def test_boolean_wrapper_options_reject_attached_values(self):
         for option in ('--save-relpath', '--no-w', '--time', '--memory', '--show-command',
-                       '--cin', '--cout', '--help', '--version', '--set-defaults'):
+                       '--cin', '--cout', '--help', '--version'):
             result = self.rejected('compile', self.source.name, option + '=yes')
             self.assertIn('accepts 0 or 1' if option == '--save-relpath' else 'does not take a value', result.stderr)
 
@@ -547,9 +556,10 @@ class CliTest(unittest.TestCase):
         self.assertEqual(list(self.cwd.glob(".cp-run-build.*")), [])
 
     def test_compiler_sidecar_cannot_overwrite_redirected_input(self):
+        self.set_file_io_mode()
         incoming = self.cwd / 'main file.out.map'
         incoming.write_text('keep my input\n')
-        result = self.invoke(self.source.name, '-f=auto', incoming.name, 'out.txt',
+        result = self.invoke(self.source.name, '-f', incoming.name, 'out.txt',
                              env={'FAKE_SIDECAR': 'symbols'})
         self.assertEqual(result.returncode, 1, result.stderr)
         self.assertEqual(incoming.read_text(), 'keep my input\n')
@@ -646,16 +656,18 @@ class CliTest(unittest.TestCase):
         self.assertFalse((self.cwd / "out.txt").exists())
 
     def test_auto_file_io_redirects_without_macro(self):
+        self.set_file_io_mode()
         self.data()
-        for flags in (("-f=auto",), ("-f", "auto")):
+        for flags in (("-f",), ("--file-io",)):
             result = self.invoke(self.source.name, *flags, env={"FAKE_PROGRAM_STDIN": "1"})
             self.assertEqual((result.returncode, result.stdout), (0, ""))
             self.assertEqual((self.cwd / "out.txt").read_text(), "hello\n")
             self.assertNotIn("-DFILEO", self.calls()[-1])
 
     def test_separate_auto_mode_preserves_subsequent_compiler_options(self):
+        self.set_file_io_mode()
         self.data()
-        result = self.invoke(self.source.name, '-f', 'auto', '-DUSER=7', '--', '-pthread',
+        result = self.invoke(self.source.name, '-f', '-DUSER=7', '--', '-pthread',
                              env={'FAKE_PROGRAM_STDIN': '1'})
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((self.cwd / 'out.txt').read_text(), 'hello\n')
@@ -664,22 +676,25 @@ class CliTest(unittest.TestCase):
         self.assertNotIn('-DFILEO', self.calls()[-1])
 
     def test_auto_file_io_paths_with_spaces_and_dash_prefix_remain_literal(self):
+        self.set_file_io_mode()
         (self.cwd / '-input data').write_text('literal\n')
-        result = self.invoke(self.source.name, '-f', 'auto', './-input data', 'result file',
+        result = self.invoke(self.source.name, '-f', './-input data', 'result file',
                              env={'FAKE_PROGRAM_STDIN': '1'})
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((self.cwd / 'result file').read_text(), 'literal\n')
 
     def test_auto_file_io_accepts_explicit_paths_in_both_value_forms(self):
+        self.set_file_io_mode()
         (self.cwd / "data.in").write_text("custom\n")
-        for flags in (("-f=auto", "data.in", "data.out"), ("-f", "auto", "data.in", "data.out")):
+        for flags in (("-f", "data.in", "data.out"), ("--file-io", "data.in", "data.out")):
             result = self.invoke(self.source.name, *flags, env={"FAKE_PROGRAM_STDIN": "1"})
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual((self.cwd / "data.out").read_text(), "custom\n")
 
     def test_auto_file_io_combines_with_short_measurement_clusters(self):
+        self.set_file_io_mode()
         self.data()
-        for flags in (('-ftm=auto',), ('-ftm', 'auto'), ('-mtf=auto',), ('-mtf', 'auto')):
+        for flags in (('-ftm',), ('-mtf',)):
             result = self.invoke(self.source.name, *flags, env={'FAKE_PROGRAM_STDIN': '1'})
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual((self.cwd / 'out.txt').read_text(), 'hello\n')
@@ -688,8 +703,9 @@ class CliTest(unittest.TestCase):
             self.assertNotIn('-DFILEO', self.calls()[-1])
 
     def test_missing_auto_input_is_native_runtime_error_and_does_not_truncate_output(self):
+        self.set_file_io_mode()
         target = self.cwd / "out.txt"; target.write_text("previous\n")
-        result = self.invoke(self.source.name, "-f=auto")
+        result = self.invoke(self.source.name, "-f")
         self.assertNotEqual(result.returncode, 0)
         self.assertNotIn("cp-run:", result.stderr)
         self.assertIn("in.txt", result.stderr)
@@ -891,9 +907,10 @@ class CliTest(unittest.TestCase):
         self.assertEqual(result.stdout, 'one input\n')
 
     def test_warmup_auto_file_io_reopens_input_without_output_pollution(self):
+        self.set_file_io_mode()
         self.data(incoming='same input\n')
         counter = self.root / 'starts'
-        result = self.invoke(self.source.name, '-f=auto', '-tm', env={
+        result = self.invoke(self.source.name, '-f', '-tm', env={
             'FAKE_PROGRAM_COUNTER': str(counter), 'FAKE_PROGRAM_STDIN': '1',
             'FAKE_FIRST_STDOUT': 'hidden\n', 'FAKE_FIRST_STDERR': 'hidden\n'})
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -1003,8 +1020,9 @@ class CliTest(unittest.TestCase):
         self.assertEqual(counter.read_text(), '4', 'candidate warms once; each helper runs once')
 
     def test_measured_auto_command_display_includes_redirections(self):
+        self.set_file_io_mode()
         self.data()
-        result = self.invoke(self.source.name, "-f=auto", "-t", "--show-command",
+        result = self.invoke(self.source.name, "-f", "-t", "--show-command",
                              env={"FAKE_PROGRAM_STDIN": "1"})
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertRegex(result.stderr, r"< (?:\S*/)?in\.txt > (?:\S*/)?out\.txt")
@@ -1018,7 +1036,7 @@ class CliTest(unittest.TestCase):
     def test_settings_cancel_does_not_rewrite_script(self):
         copied = self.root / "configured.zsh"; shutil.copy2(SCRIPT, copied)
         previous = copied.read_bytes()
-        result = self.invoke("--set-defaults", input="1\n3\n-O0\ncancel\n", script=copied)
+        result = self.invoke("configure", input="1\n3\n-O0\ncancel\n", script=copied)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(copied.read_bytes(), previous)
 

@@ -1,222 +1,270 @@
 # CLI reference
 
-[Quick start](../README.md) · [Testing and sample files](TESTING.md) · [Runnable examples](../examples/README.md)
+[Quick start](../README.md) · [Testing guide](TESTING.md) · [Runnable examples](../examples/README.md)
 
-**FILE and positional operands come before options.** Put the operation (`test`, `run`, etc.) first. Values accept either `--option=value` or `--option value`; program arguments belong after the runtime boundary.
+**Put the command first, then its files, then options.** `cp-run` without a command prepares and runs a discovered source. Paths containing spaces need quotes.
 
 ## Commands and argument boundaries
 
-```text
-cp-run [FILE] [OPTIONS] [-- BACKEND_ARGS [-- PROGRAM_ARGS]]
-cp-run compile|debug[=PROFILE] [FILE] [OPTIONS] [-- BACKEND_ARGS]
-cp-run debug[=PROFILE] run [FILE] [OPTIONS] [-- BACKEND_ARGS [-- PROGRAM_ARGS]]
-cp-run run [TARGET] [OPTIONS] [-- PROGRAM_ARGS]
-cp-run test[=auto|mult] [run] [CASE...] [FILE [IN [ANS [REPORT]]]] [OPTIONS]
-cp-run stress [run] [MAIN [BRUTE [GEN]]] [OPTIONS]
-cp-run companion [FILE] [OPTIONS]
-cp-run --pack=in|ans [DIR [BUNDLE]] [OPTIONS]
-cp-run --unpack=in|ans [BUNDLE [DIR]] [OPTIONS]
-```
+| Command | What it does |
+| --- | --- |
+| `cp-run [FILE]` | Compile C/C++, or select Python, then run. |
+| `cp-run compile [FILE]` | Prepare only; print the absolute target path. |
+| `cp-run debug [FILE]` | Prepare with the standard diagnostic profile; do not run. |
+| `cp-run debug=extra [FILE]` | Prepare with the stricter diagnostic profile; do not run. |
+| `cp-run debug[=NAME] run [FILE]` | Prepare with a diagnostic profile, then run. |
+| `cp-run run [TARGET]` | Run an existing executable or Python source. |
+| `cp-run test [FILE [IN [ANS [REPORT]]]]` | Check one complete input against one answer. |
+| `cp-run test=mult [CASE...] [FILE]` | Check fixed numbered files in the task folder. |
+| `cp-run test=auto [CASE...] [FILE [IN [ANS [REPORT]]]]` | Check independently separated records. |
+| `cp-run stress [MAIN [BRUTE [GEN]]]` | Compare a candidate with a reference on generated inputs. |
+| `cp-run configure` | Edit saved defaults, profiles and file-I/O behavior. |
+| `cp-run companion [FILE]` | Receive one problem's samples into the task folder. FILE is optional and protected from replacement. |
+| `cp-run pack[=in\|ans] [BUNDLE...]` | Collect numbered files into bundles; see [pack/unpack](#pack-and-unpack). |
+| `cp-run unpack[=in\|ans] [BUNDLE...]` | Restore bundles into the numbered task folder. |
 
-**`debug` never runs by default.** Like `compile`, it prepares the program and prints its absolute target path. Add `run` explicitly: `cp-run debug run main.cpp` or `cp-run debug=extra run main.cpp`. Runtime options such as `-t`, `-m` and stream redirection require that explicit run.
+For checks on existing targets, insert `run`: `test run`, `test=mult run`, `test=auto run` or `stress run`. `tr` abbreviates `test run -`; `sr BRUTE GEN` abbreviates `stress run - BRUTE GEN`.
 
-**Extension aliases:** `--compile`, `--debug[=PROFILE]` and `--run` select the corresponding command. Put them first or after FILE, before an argument boundary. `cp-run --compile main.cpp` and `cp-run main.cpp --compile` both compile without running. `cp-run main.cpp --debug` builds without running; **`cp-run --debug --run main.cpp`** builds and runs. The two flags also work after FILE and in either order. Standalone `--run` runs an existing target: `cp-run ./main.out --run -- --verbose`. Other conflicting commands are errors. After `--`, aliases remain literal backend/program arguments. To request the compiler's debug information alone, use `-g` (or pass GNU `--debug` in the backend tail).
+FILE is optional. An empty positional slot (`""`) retains its default, for example `cp-run test "" sample.in sample.ans`. Auto/mult case numbers go before FILE, are 1-based and may select several cases in order. A selector of 0 is treated as 1 with a message.
 
-The ordinary command, `debug run` and source test/stress accept two boundaries: the first starts backend arguments, the second starts program arguments. Binary/interpreted `run` variants have one program boundary. Build-only `compile` and `debug` have one backend tail.
+### Compiler/interpreter arguments versus program arguments
+
+The separator `--` ends wrapper options. For source commands that execute, a **second** `--` starts program arguments:
 
 ```sh
 cp-run main.cpp -- -I include -- --input data.txt
 cp-run main.py -- -X dev -- --input data.txt
-cp-run run ./main.out -- --input data.txt
-cp-run debug run main.cpp -- -DTRACE -- --input data.txt
+cp-run debug run main.cpp -- -DTRACE -- --verbose
 cp-run test main.cpp -- -DTESTING -- --verbose
 ```
 
-Unknown options before a boundary go to the backend. After the runtime boundary, everything is program data. Managed numeric `-std` shorthand is translated only before the backend boundary; `-- -std=20` remains literally `-std=20` for the compiler to accept/reject. Use `--show-command` to inspect the actual escaped build/launch argv on stderr. Display quoting is never executed. Before the backend boundary, legacy GNU aliases (`--ansi`, `--no-warnings`, `--optimize`) have their equivalent Clang spelling when Clang is selected; the raw tail is never translated.
+Build-only `compile`/`debug` have one backend tail. Existing-target `run` variants have one program tail:
+
+```sh
+cp-run compile main.cpp -- -O3
+cp-run run ./main.out -- --input data.txt
+cp-run test run ./main.out -- --verbose
+```
+
+Unknown options in the wrapper section are forwarded to the selected backend. Values of known compiler options remain literal arguments; runtime arguments are never interpreted by cp-run. Numeric `-std=23` is shorthand only in the wrapper section: `-- -std=23` reaches the compiler unchanged. Use `--show-command` to inspect the quoted argv on stderr; cp-run executes argument arrays, never that printed text.
+
+**Extension aliases:** `--compile`, `--debug[=NAME]` and `--run` also select operations. They may precede FILE or follow it, before `--`. `--debug` alone builds only; `--debug --run` explicitly builds and runs, in either flag order. Other conflicting operations are errors.
 
 ## Source discovery and language defaults
 
-An explicit FILE always selects its language: `.c` is C, `.py` is Python, and `.cpp`, `.cc`, `.cxx`, `.C` are C++. Paths may contain spaces when quoted. Source discovery is local, not recursive.
+Explicit FILE selects its language: `.c` is C; `.py` is Python; `.cpp`, `.cc`, `.cxx` and `.C` are C++. Discovery checks the current directory, without recursion:
 
-With FILE omitted:
+1. Prefer the saved language (factory C++), or `--language=NAME`.
+2. Use its sole source; with several sources, use its saved fallback (`main.cpp`, `main.c` or `main.py`). Otherwise request FILE.
+3. If that language is absent, use the sole supported source or a unique saved fallback across languages. `--language=auto` starts here.
 
-1. Look for the preferred language (factory **C++**, editable in defaults or with `--language=c++|c|python|auto`).
-2. Use its sole source; with several, use its saved fallback (`main.cpp`, `main.c` or `main.py`). If several remain without that fallback, ask for FILE.
-3. If the preferred language is absent, use a sole supported source, or a unique saved fallback across languages. Otherwise report ambiguity. `auto` starts at this step.
+Stress discovers `brute` and `gen`, preferring the candidate's language. Explicit roles may mix languages. Under **`cp-run configure` → Languages & tools → Language/compiler defaults**, select the discovery preference, separate C/C++ compiler families and Python interpreter. An explicit `--compiler` applies to every native role.
 
-Stress discovers conventional `brute` and `gen`, preferring the main language. Explicit roles may mix languages. Native roles can use separate saved C/C++ compiler families; `--compiler` explicitly selects the family for every native role. `CC` and `CXX` select the driver executable and must match that family.
-
-In **`--set-defaults` → Languages & tools → Language/compiler defaults**, choose the preferred language, C compiler, C++ compiler and Python interpreter. Native `inherit` uses the Build menu's compiler. Python's factory interpreter is **`pypy3`**; a missing requested interpreter is an error, with no silent switch to CPython.
-
-FILE `-` recalls the workspace's last source or launched target; `./-` is literal. `tr` means `test run -`; `sr BRUTE GEN` means `stress run - BRUTE GEN`. Failed compilation does not replace source history. Python target history retains interpreter options; newly supplied `--interpreter-arg` options are appended before the source, and a newly explicit interpreter rebuilds the launch from current defaults.
+**History:** FILE `-` recalls the workspace's last source or launched target. `./-` is a literal filename. Failed compilation does not replace source history. Python target history retains interpreter arguments; new `--interpreter-arg` values are appended before the source. An explicit new interpreter uses the current interpreter defaults.
 
 ## Languages and profiles
 
-| Option | Contract |
+| Option | Meaning |
 | --- | --- |
-| `--language=NAME` | Preferred omitted-source language: `c++` (factory), `c`, `python` or `auto`. Explicit FILE wins. |
-| `--compiler=NAME` | GCC/gcc/g++ or clang/clang++; any option position. C uses a C driver; C++ a C++ driver. `CC`/`CXX` override discovery and must match the requested family. |
-| `--interpreter-arg=ARG` | Repeatable explicit Python option, including exact failure replay options; also accepts a separate operand. |
-| `--interpreter=NAME_OR_PATH` | Python executable, default **`pypy3`**; use `python3` or an executable path for CPython. Does not select cp-run's internal service Python. |
-| `-std=VALUE`, `-std VALUE` | Numeric shorthand or native C/C++ dialect. Default: newest advertised ISO mode, which may be a draft. Invalid managed choices fail before compiling. |
-| `--profile=NAME` | Saved diagnostic or plain-flags profile. `debug=NAME` accepts diagnostic profiles only. |
-| `--no-w` | Removes baseline native warnings. Incompatible with diagnostic profiles; explicit/common profile warning flags remain. |
-| `--show-command` | Show escaped build/run commands on stderr. Otherwise compiler/program diagnostics are unwrapped. |
+| `--language=NAME` | Discovery preference: `c++`, `c`, `python` or `auto`. Explicit FILE wins. |
+| `--compiler=NAME` | `GCC`, `gcc`, `g++`, `clang` or `clang++`; any option position. `CC`/`CXX` may select a driver executable but must match the requested family. |
+| `--interpreter=NAME_OR_PATH` | User Python executable; factory `pypy3`. Use `python3` for CPython. A missing requested interpreter is an error. |
+| `--interpreter-arg=ARG` | Repeatable Python argument; use `=` for dash-leading values. |
+| `-std=VALUE` | Existing numeric shorthand or native C/C++ dialect, including `c++26`. Default: newest ISO mode advertised by the compiler, possibly a draft. |
+| `--profile=NAME` | Apply a saved diagnostic/flags profile without changing the command. |
+| `--no-w` | Omit generated baseline native warnings; incompatible with diagnostic profiles. Explicit warning flags remain. |
+| `--show-command` | Display build/run commands on stderr. |
 
-`compile` and build-only `debug` print an absolute native artifact path. For Python they validate syntax without running/importing the program and print the original source path; no `.out`/portable `.pyc` is created. `debug run` explicitly executes the prepared program. `run` accepts readable `.py` even without executable permission. Python does not support explicit native `-o`, `-std` or macro action. `--profile` selects flags without changing the operation: ordinary `cp-run main.cpp --profile=debug` still builds and runs.
+Native `compile` and build-only `debug` print an absolute artifact path. Python preparation checks syntax without importing/running the program and prints its original source path; it creates no fake binary. `run` accepts readable Python sources without executable permission. Python rejects native `-o`, `-std` and macro actions.
 
-**Built-in diagnostic components:**
+### Built-in diagnostics
 
 | Component | `debug` | `extra` |
 | --- | --- | --- |
-| Native code | Address/undefined/float-cast sanitizers, `-O2 -g2`, frame pointers, no sanitizer recovery | `-Og -g2`, additional bounds checks and stricter warnings, no sibling-call optimization |
-| libstdc++ | `_GLIBCXX_ASSERTIONS` | `_GLIBCXX_DEBUG` and `_GLIBCXX_DEBUG_PEDANTIC` |
-| libc++ | FAST hardening, verified in selected headers | DEBUG hardening, verified in selected headers |
+| Native code | `-O2 -g2`, address/undefined/float-cast sanitizers, frame pointers, no sanitizer recovery | `-Og -g2`, additional bounds checks and warnings, no sibling-call optimization |
+| Actual libstdc++ | `_GLIBCXX_ASSERTIONS` | `_GLIBCXX_DEBUG`, `_GLIBCXX_DEBUG_PEDANTIC` |
+| Actual libc++ | FAST hardening, checked against selected headers | DEBUG hardening, checked against selected headers |
 | CPython | `-X dev -W default` | `-X dev -W error` |
 | PyPy | `-X track-resources -W default` | `-X track-resources -W error` |
 
-Native `debug` combines sanitizers, frame pointers and assertions for actual libstdc++/libc++ headers. `extra` strengthens warnings, bounds/library checks and debug information. C omits C++ library flags. Diagnostic profiles reject known weakening options in both managed and backend arguments; unsupported required diagnostics fail clearly. For example, `debug -- -O0` is allowed, but `debug -- -O3`, disabling sanitizers, response files and warning suppression are rejected.
+C omits C++ library checks. Unsupported required diagnostics fail clearly. `debug=NAME` accepts only profiles marked **debug**; flags profiles use `--profile=NAME`. Ordinary `cp-run main.cpp --profile=debug` still prepares and runs.
 
-For example, `cp-run debug run main.py --interpreter=python3 --show-command` launches `python3 -X dev -W default main.py` (paths are resolved in actual output). Without `run`, it only validates syntax and prints the source path. `debug=extra run` replaces the warning action with `error`.
+Diagnostic profiles reject known weakening options in both wrapper and backend sections. Native `debug -- -O0` is allowed; `debug -- -O3`, sanitizer disabling, warning suppression and response files are rejected. Stronger allowed `-O`/`-g` settings are retained. Custom profile contents are editable; they are not an unconditional safety guarantee against every arbitrary compiler option.
 
-Python `debug`/`extra` use implementation-specific runtime diagnostics, not native sanitizers or an automatic debugger. Assertion-removing optimization and conflicting warning filters are rejected, including `PYTHONOPTIMIZE`. The requested interpreter reports its implementation/version; CPython development diagnostics require 3.7+. Ordinary Python execution has no extra version-probe process. Native `-O` is unrelated to Python's `-O`/`-OO` assertion removal.
+Python profiles enable interpreter diagnostics, not native sanitizers or a debugger. They reject assertion-removing optimization and conflicting warning filters, including `PYTHONOPTIMIZE`. CPython development diagnostics require 3.7+. Ordinary Python execution adds no version-probe process.
 
-Plain `pragma`, `pragma-fast`, `pragma-native` are native driver flag sets, not source injections. All add `-Wunknown-pragmas`; fast variants enable fast-math, and native adds capability-checked host tuning. Fast-math changes NaN/infinity/rounding behavior. Native artifacts are not guaranteed portable to other CPUs. Explicit native overrides retain compiler precedence.
+**Optimization profiles:** `pragma`, `pragma-fast` and `pragma-native` are native driver flag sets, not source injections. All include `-Wunknown-pragmas`. Fast variants enable fast-math, which changes NaN/infinity/rounding behavior; native adds capability-checked host tuning. Host-tuned artifacts may not run on another CPU. Explicit overrides use compiler precedence. Before the backend boundary, supported GNU aliases such as `--optimize` are translated for Clang; the raw backend tail stays unchanged.
 
 ## Files and routing
 
 | Option | Meaning |
 | --- | --- |
-| `--wsp-dir=DIR` | Workspace path, absolute or relative to invocation; default `./`. Cannot be bare/empty. |
-| `--wsp-name=NAME` | Alone: search ancestors. With explicit directory: verify its basename. No default name. |
-| `--dest-dir=DIR` | Workspace-relative artifact destination. Default `./`; `test=mult` and Companion default `tests`. |
-| `--save-relpath[=0|1]` | Preserve source-parent subtree under destination; bare = 1. |
-| `-o PATH`, `-oPATH`, `--output=PATH` | Exact native artifact path; bypass artifact workspace/destination lookup. |
-| `--out=FILE`, `--out FILE` | Program stdout file for test/stress or `-f=auto/out`; default `out.txt`. Distinct from binary output `-o`. |
-| `--find=NAME` | With omitted run target, check destination and optional invocation subtree. NAME and NAME.out are equivalent; two matches are an error. |
-| `--test-dir=DIR` | Separate mult/Companion data directory; otherwise destination is used. |
-| `--save-test-relpath[=0|1]` | Append source-parent subtree to test root, independently of artifact routing. |
-| `--in-tmp`, `--ans-tmp` | Numbered templates; defaults `./{n}.in`, `./{n}.ans`. |
+| `--wsp-dir=DIR` | Absolute or invocation-relative workspace; factory `./`. A value is required. |
+| `--wsp-name=NAME` | Alone: search ancestor directory names. With explicit `--wsp-dir`: verify its basename. No default name. |
+| `--dest-dir=DIR` | Workspace-relative **artifact** directory; factory `./`, with a separate `test=mult` default of `tests`. Does not choose the test-data folder. |
+| `--save-relpath[=0\|1]` | Preserve source-parent subtree below artifact destination; bare means 1. |
+| `-o PATH`, `-oPATH`, `--output=PATH` | Exact native artifact path; bypass unused artifact workspace/destination settings. |
+| `--find=NAME` | With omitted run target: look under artifact destination and optional invocation subtree. NAME and NAME.out are equivalent; ambiguity is an error. |
+| `--out=FILE` | Raw program stdout for checks or auto-mode `-f`; factory `out.txt`. Distinct from binary `-o`. |
+| `--test-f=DIR` | One task's numbered sample folder; factory `{wsp-dir}/tests`. Used by mult, Companion, pack and unpack. |
 
-Settings precedence, per field: **explicit CLI > selected profile override > operation/submode override > global fallback > factory value**. An absent map entry inherits; `0` explicitly disables a saved boolean. Submodes inherit `test`. These settings are editable under `--set-defaults` → Action/profile routing.
+Artifact settings resolve independently: **explicit CLI → profile override → operation/submode override → global fallback → factory**. Missing map entries inherit; explicit 0 disables a saved boolean. Edit them in **Action/profile routing**. `--find` with `--save-relpath` searches `workspace/destination/relative-path/NAME[.out]`.
 
-Relative-path binary lookup is exactly `workspace/destination/relative-path/NAME[.out]`. Relative source/data paths are physically checked for containment. Do not use `..` in workspace-relative destinations/templates. Exact output bypass does not exempt independently used test-data paths from checks.
+**Test storage is simpler:** `--test-f` overrides **Test files & integrations → Test folder**. It never inherits binary routing or adds source subdirectories. Relative folders start at the invocation directory; absolute paths work. `{wsp-dir}/tasks/A/tests` starts at the workspace; `{wsp-dir}` alone selects its root. Filenames are always `inN.txt` and `ansN.txt`, starting at 1. They cannot be configured.
 
 ## Workspace-rooted file preferences
 
-Prefix a saved filename with **`{wsp-dir}/`** to resolve it from the selected workspace, including when running from a nested directory. For example, in **`--set-defaults` → Files**:
+Use the literal prefix **`{wsp-dir}/`** in saved filenames or explicit file operands:
 
 | Setting | Example |
 | --- | --- |
 | Fallback source | `{wsp-dir}/src/main.cpp` |
-| Input | `{wsp-dir}/data/in.txt` |
-| Answer | `{wsp-dir}/data/ans.txt` |
-| Program output (checks and `-f=auto/out`) | `{wsp-dir}/data/out.txt` |
-| Test/stress report | `{wsp-dir}/logs/test_out` |
+| Input / answer | `{wsp-dir}/data/in.txt` / `{wsp-dir}/data/ans.txt` |
+| Raw program output | `{wsp-dir}/results/out.txt` |
+| Test/stress report | `{wsp-dir}/results/test_out` |
+| Numbered test folder | `{wsp-dir}/tasks/A/tests` |
 
-C/Python fallback sources, the stress reference and generator accept the same prefix in their menus. Parent directories for input/output/report files must already exist. Discovery still prefers a sole local source before consulting the configured fallback.
+Edit file roles in **`cp-run configure` → Files**, and the numbered folder in **Test files & integrations**. C/Python fallbacks and stress roles accept the same prefix. Without it, relative files start at the invocation directory. Ordinary input/output/report parent directories must exist; data imports and pack/unpack create their output directories.
 
-Without the prefix, relative file paths keep their usual meaning: **relative to the invocation directory**. The token must be at the start, followed by `/` and a path; `..` and symlinks escaping the workspace are rejected. It is literal data, never shell expansion. Settings export/import preserves it.
-
-The same prefix works in explicit source, `-o`, redirection and checking file operands; quote it in shell commands:
+The token is literal data: put it at the beginning and quote it in shell commands. Parent escapes and symlinks escaping an anchored workspace are rejected. No source-stem or per-test filename placeholders are supported.
 
 ```sh
 cp-run test '{wsp-dir}/src/main.cpp' '{wsp-dir}/data/in.txt' \
   '{wsp-dir}/data/ans.txt' --wsp-dir=/projects/contest --cout
+cp-run test=mult main.cpp --test-f='{wsp-dir}/tasks/A/tests' --cout
 ```
-
-Numbered patterns also accept it: **`{wsp-dir}/samples/{stem}/{n}.in`** starts at the workspace instead of the usual test-data destination/subtree. Input and answer patterns may use different roots. Mult, pack/unpack and Companion share this interpretation. [Concrete template example](TESTING.md#workspace-rooted-test-files).
 
 ## File I/O
 
-`--file-io` is a full alias of `-f`:
+**`-f` takes no mode value.** `--file-io` is its full alias; both use the saved action. Without either flag, ordinary execution keeps console stdin/stdout.
+
+Choose the action with **`cp-run configure` → Files → Bare -f action**:
+
+| Saved action | What `-f` does |
+| --- | --- |
+| `macro` (factory) | Add `-DFILEO` when compiling C/C++; the program owns its I/O. Python and existing binaries cannot use this compilation action. |
+| `auto` | Redirect stdin/stdout using saved Input/Program output files, factory `in.txt`/`out.txt`. Works with sources and existing targets. |
+
+The macro identifier is editable in the same menu. No `-f=auto`, `-f=manual`, `-f=in` or other attached value is accepted. `auto`/`macro` are **settings**, not positional mode keywords. Save the choice once; later invocations need only `-f`.
+
+With the factory macro setting:
 
 ```sh
-cp-run main.cpp -f                    # Factory action: -DFILEO
-cp-run main.py -f=auto data.in data.out
-cp-run main.py -f in data.in          # Redirect stdin only
-cp-run main.py --file-io=out data.out  # Redirect stdout only
+cp-run main.cpp -f                    # Compile with -DFILEO, then run
+cp-run compile main.c --file-io       # Compile with -DFILEO without running
 ```
 
-Bare action and macro name are editable. Auto defaults to in.txt/out.txt. Optional file operands stop at an option or argument boundary; FILE precedes them or is discovered. File input uses console redirection, not source editing. Missing input is an execution/open failure. Test/stress reject `-f` because they own I/O. Redirected output cannot overwrite another protected role.
+**After choosing auto in configure:**
+
+```sh
+cp-run main.py -f                     # Read in.txt; write out.txt
+cp-run main.py -f data.in data.out    # Override both filenames
+cp-run run ./main.out --file-io       # Apply saved auto to an existing target
+cp-run main.py -f --cout              # Read input file; stdout goes to console
+cp-run main.py -f --cin                # Console stdin; save stdout to output file
+cp-run main.py -f --cin --out=chosen.txt
+```
+
+Auto accepts optional IN and OUT filenames directly after `-f`; another option or `--` ends these operands. One filename replaces IN; two replace IN and OUT. FILE precedes wrapper options or is discovered. A word such as `auto` after `-f` is a literal filename in saved-auto mode, never a mode selector.
+
+`--cin` and `--cout` may override **one** stream in auto. Both together with `-f` are an error. Either switch with macro is an error. Optional filenames keep their IN/OUT slots even when a side is overridden; that side's filename is unused. `--out=FILE` sets the output path without filling the unused input slot.
+
+Input redirection uses file descriptors, not source changes. A missing input is an execution/open error. Output cannot overwrite another protected file role. Test/stress own I/O and reject `-f`; their existing `--cin`/`--cout` meanings are described in [testing](TESTING.md#console-input).
 
 ## Measurements and limits
 
-`-t`/`--time`, `-m`/`--memory`; short `f/t/m` combine as `-ftm`.
-
-| Option | Default / behavior |
+| Option | Meaning |
 | --- | --- |
-| `--warm-up[=0|1]` | Saved default 1; bare 1. Hidden initial launch. |
-| `--average[=N]` | Saved default 1; bare uses saved value; 0 means one. Up to 100000. |
-| `--time-unit=s|ms` | ms. |
-| `--memory-unit=B|KB|KiB|MB|MiB` | KiB; larger-unit equivalent is added when appropriate. |
-| `--TLE=MS`, `--MLE=MiB` | Positive integers or `inf`. Ordinary execution, `debug run` and `run` are unlimited; test/stress use 1500 ms / 256 MiB per process. |
+| `-t`, `--time` | Show execution time; activate saved warm-up/repetition settings. |
+| `-m`, `--memory` | Show peak RSS. Combine short flags as `-tm` or `-ftm`. |
+| `--warm-up[=0\|1]` | Hidden warm-up; saved default 1, bare means 1. |
+| `--average[=N]` | Median time and maximum RSS across N measurements; saved default 1. Bare uses saved N; 0 means 1. Maximum 100000. |
+| `--time-unit=UNIT` | `s` or `ms` (factory). |
+| `--memory-unit=UNIT` | `B`, `KB`, `KiB` (factory), `MB` or `MiB`; an equivalent larger unit is added when useful. |
+| `--TLE=MS`, `--MLE=MiB` | Positive integers or `inf`. Factory ordinary/run limits: unlimited; test/stress: 1500 ms / 256 MiB per process. |
 
-Repetition needs `-t` or `-m`. Build once, warm once when selected, measure N launches. Report median elapsed time and maximum peak RSS; expose first measured stdout once. Every measured output is checked. A hidden failed repeat has separate evidence and cannot replace the first stdout or disappear in a median. For redirected input, the first measured stdout is shown and input is replayed from the file or a bounded spool.
+Warm-up/repetition controls require `-t` or `-m`; neither is available in build-only commands. Prepare once, optionally warm up, then measure. Only the first measured stdout is canonical. Test/stress verify repeated results and retain separate evidence for a failed repeat.
 
-With **terminal input and several launches (`--average>1` or an enabled warm-up)**, cp-run first runs the program visibly and records stdin through a pipe. This preparation run is excluded from statistics so typing does not affect the median. A program needing no input finishes without waiting for EOF. Then the recorded input feeds the optional hidden warm-up and N hidden measured runs. Thus this path performs one extra visible launch. Only that visible stdout is shown; successful hidden stdout/stderr is discarded. A failed visible, replayed warm-up or measured run stops the job with its status; failed hidden stderr is replayed in full. Limits still apply to each execution. A single terminal measurement without warm-up remains direct. Test/stress protocols retain their existing behavior.
+For ordinary repeated runs with **terminal stdin**, cp-run first runs visibly while recording input, then replays it to hidden warm-up/measurement launches. That visible capture is outside statistics; no-input programs need no EOF. Only its stdout is shown. A failed launch stops the series; failed hidden stderr is replayed completely. Redirected input is replayed from a file or bounded spool. A single terminal measurement without warm-up remains direct.
 
-Measurements exclude compilation/preparation/checking. Python includes interpreter startup/imports. PyPy JIT state does not persist across fresh processes. Native OS peak RSS is measured in bytes internally; it is not virtual address-space size or a promise of online-judge equivalence.
+Measurements exclude compilation, history callbacks, checking and report rendering. Python includes interpreter startup/imports; JIT state does not survive fresh PyPy processes. Peak RSS is resident memory, not virtual address space or a promise of judge-equivalent accounting.
 
-A nominal violation produces TLE/MLE. The program is killed at the saved multiplier (factory x2), or finishes before then with the same violated verdict. Auto/mult tests each have independent limits. Whole-file test is one process; `--test-iters=N` scales only its time budget for a declared internal count. RSS remains one process peak. See [testing](TESTING.md).
+A nominal violation produces TLE/MLE, even if execution finishes before the kill threshold. Saved kill multipliers default to x2. Auto/mult cases have independent limits; whole-file `test` is one process. Its `--test-iters=N` multiplies only the whole-process time allowance for an internal test count, not RSS. [Verdicts and limits](TESTING.md#verdicts-and-resource-statistics).
 
-## Test, bundle and integration controls
+## Pack and unpack
+
+**The folder contains individual tests. The two bundle files contain their inputs and answers.** Pack reads the folder; unpack writes it. No source file or compiler is needed.
+
+```sh
+cp-run pack                               # tests/ → saved in.txt and ans.txt
+cp-run pack samples.in samples.ans         # Override both bundle filenames
+cp-run unpack samples.in samples.ans --test-f=restored
+cp-run pack custom.in                      # Override IN only; ANS stays saved default
+cp-run pack=in inputs.bundle               # Inputs only
+cp-run unpack=ans answers.bundle --test-f=tests
+```
+
+Without a selector, process both streams: first operand is IN, second is ANS. Omitted operands use the saved **Input** and **Answer** filenames, including workspace prefixes. With `=in` or `=ans`, process only that stream and accept at most one filename, defaulting to that stream's saved filename. The command selector uses `=`; `pack in` means an input bundle literally named `in`, plus the default answer bundle.
+
+Both streams must have matching case IDs/counts. Sparse folder IDs are packed in numeric order and renumbered 1..N; the mapping is printed. Bundles use one lossless, count-first format. `--sep` changes its delimiter, not filenames. Existing identical outputs are accepted; conflicting outputs need `--overwrite`. Unpack refuses stale extra cases even with overwrite; choose a clean folder. Validation failures leave both streams unchanged. Writes are individually atomic with rollback for handled failures, not crash-atomic across several files.
+
+[Exact file contents and a complete round trip](TESTING.md#pack-and-unpack).
+
+## Test and integration options
 
 | Option | Meaning |
 | --- | --- |
-| `--test-iters=N` | Auto/mult selected-case ceiling; stress iteration count; whole-test aggregate time factor. |
-| `--seed=N` | Stress unsigned 64-bit seed, default 4; value mandatory. |
-| `--cin` / `--cout` | Framed console input+answer / protocol stdout. |
-| `--report-tests=all|failed` | All bodies by default; failed-only retains every verdict/metric row and final groups. |
-| `--stop-on-failure` | Stress quick-stop behavior; default continues finite independent iterations. |
-| `--sep=TEXT` | Internal delimiter; visible default `\n\x1e\n`. |
-| `--bundle-format=legacy|counted` | Auto mode: uncounted legacy split or count-first pack output. |
-| `--text` | Pack/unpack a manual file using the saved manual separator. |
-| `--text-sep=TEXT` | Pack/unpack single manual-file conversion, default marker `\n###\n`. |
-| `--source=FILE` | Pack/unpack stem/subtree anchor without compiling. |
-| `--overwrite` | Permit replacing the planned imported/unpacked files. |
-| `--port=N`, `--wait=N` | Companion listener port / seconds; defaults 27122 / 120. |
-| `--minimize[=sequence|cases|lines]` | Opt-in stress WA reduction; bare chooses sequence. |
-| `--validator=PROGRAM` | Additional stdin validator; exit 0 means valid. Required for cases/lines. |
+| `--test-iters=N` | Selected-case cap for auto/mult; iteration count for stress; internal count/time factor for whole-file test. |
+| `--seed=N` | Required-valued unsigned 64-bit stress seed; factory 4. |
+| `--cin` | Tests: framed console input/answer, whole-file/auto only. With ordinary `-f` in saved auto mode: console stdin instead of the input file. |
+| `--cout` | Tests/stress: protocol stdout only, raw output remains saved. With ordinary `-f` in saved auto mode: stdout on console instead of the output file. |
+| `--report-tests=POLICY` | `all` (factory) or `failed`; failed-only hides accepted payloads but keeps their verdicts/metrics. |
+| `--stop-on-failure` | Stop stress at the first candidate failure; default continues requested iterations. |
+| `--sep=TEXT` | Delimiter for auto/bundles; visible default `\n\x1e\n` (LF, RS byte, LF). |
+| `--bundle-format=FORMAT` | `test=auto` only: `legacy` (uncounted, default) or `counted` (pack output). |
+| `--overwrite` | Permit conflicting planned writes in Companion or pack/unpack; does not delete unrelated files. |
+| `--port=N`, `--wait=N` | Companion listener port / wait seconds; factory 27122 / 120. |
+| `--minimize[=STRATEGY]` | Stress WA reduction: `sequence` (bare default), `cases` or `lines`. |
+| `--validator=PROGRAM` | Stdin validator, exit 0 means valid; required for cases/lines reduction. |
 
-Value options accept `=` or a separate operand, including `-f auto`. Required values cannot be absent/empty; dash-leading wrapper values use `=VALUE`. Optional booleans consume only 0/1. Native warning options are forwarded separately from wrapper `--no-w`.
+See the [testing guide](TESTING.md) for each file's contents, separators, report symbols and counterexamples.
 
 ## Preferences
 
-`--set-defaults` edits pending changes with preview, undo/reset, explicit save/cancel. Groups cover build, files, warnings, profiles, limits, measurements, language tools, test layouts and operation/profile routing. Flags toggle: same removes, a changed value replaces, new adds. Use `add FLAGS`/`remove FLAGS` for explicit edits.
+`cp-run configure` edits settings embedded in the installed script. Choose a group, a field, then its value. Preview changes; use undo/reset, then explicitly save or cancel. Profile flag edits toggle matching flags: the same value removes, a changed value replaces, a new flag adds. `add FLAGS` / `remove FLAGS` make intent explicit.
 
-`--export-settings=FILE` / `--import-settings=FILE` transfer validated data-only JSON. Schema 1 imports are accepted with legacy values retained and new defaults filled in; exports use schema 2. No auto-loaded config or shell evaluation. Installed-script updates should export/import personal settings.
+Run `cp-run configure` on its own; extra options/files are rejected before tools run.
+
+Groups cover build defaults, files, limits, warnings, profiles, stress, measurements, language tools, the fixed test folder/integrations and artifact routing. Do not edit JSON to use the menu.
+
+```sh
+cp-run --export-settings preferences.json
+cp-run --import-settings preferences.json
+```
+
+Transfers are validated data-only JSON, without shell evaluation or automatic config loading. Current exports use schema 3; schema 1/2 imports retain supported settings and fill new defaults. Old explicit test directories become workspace-rooted folders; old per-case templates and test-subtree settings are discarded. Existing `1.in`/`1.ans` files are not renamed automatically: rename to `in1.txt`/`ans1.txt`. Export personal settings before replacing the installed script. Rebuilding from modules restores factory settings; export/import around a rebuild to retain personal choices.
 
 ## Formatting
 
-**`--make-prettier` formats source and exits.** `--make-prettier=check` (or `--make-prettier check`) verifies style without editing. Neither form compiles, runs or checks test answers, even when an explicit FILE is supplied. Formatting does not optimize code, insert pragmas or fix algorithmic errors. A missing formatter stops the operation with an installation hint.
-
-| Command | Edits source? | Compiles/runs? |
-| --- | --- | --- |
-| `cp-run main.cpp --make-prettier` | Yes | No |
-| `cp-run main.py --make-prettier=check` | No; nonzero exit if changes are needed | No |
-| `cp-run --make-prettier` | Yes, discovered source | No |
-| `cp-run test main.cpp --make-prettier` | Yes, source only | No |
-| `cp-run stress main.cpp brute.cpp gen.cpp --make-prettier` | Yes, all three sources | No |
-
-Install only the needed tool:
-
-- **C/C++:** [clang-format](https://clang.llvm.org/docs/ClangFormat.html); e.g. `sudo apt install clang-format` on Debian/Ubuntu. cp-run uses `.clang-format` when present, otherwise LLVM style, and forces include sorting off.
-- **Python:** [Ruff installation](https://docs.astral.sh/ruff/installation/), then `ruff format` is used. Project Ruff settings apply. To use [Black](https://black.readthedocs.io/en/stable/getting_started.html#installation), select `black` in **`--set-defaults` → Languages & tools → Interpreter/source/standard/tools → Python formatter**.
-
-For example, `print( 1+2 )` becomes `print(1 + 2)` with Ruff's default style:
+There are exactly two forms:
 
 ```sh
-cp-run main.py --make-prettier
-cp-run main.py --make-prettier=check    # Exit 0 when no changes are needed
+cp-run main.cpp --make-prettier        # Format and stop
+cp-run main.py --make-prettier=check   # Check style without editing; stop
 ```
 
-Only selected physical source files are formatted, once each; stress includes MAIN, BRUTE and GEN. No recursive project sweep occurs. All formatter executables are resolved before the first edit. A formatter failure stops formatting; edits already made by an earlier formatter remain. Binary-only `run` operations cannot format. Backend arguments, `-o`/`--out`, runtime arguments and measurement/redirection controls are incompatible with formatting. The former `only` and `before` values are no longer supported; invoke a normal build separately after formatting.
+Both operate only on selected source files and **never compile, run or compare answers**. Omitted FILE uses source discovery; stress selects MAIN, BRUTE and GEN once each. Binary-only modes cannot format. `--make-prettier check`, empty values and the former `only`/`before` values are not supported. This optional value intentionally requires `=check`.
 
-Formatter output goes to stderr; stdout remains empty. **Formatting is separate from linting**: `ruff check`, import sorting and `clang-tidy` are not invoked. Formatting follows external-tool style rules; review source changes as usual.
+C/C++ use [clang-format](https://clang.llvm.org/docs/ClangFormat.html), honoring `.clang-format` or otherwise LLVM style with include sorting disabled. Python uses [Ruff](https://docs.astral.sh/ruff/installation/) (`ruff format`), honoring project settings. [Black](https://black.readthedocs.io/en/stable/getting_started.html#installation) can be selected in **Languages & tools → Interpreter/source/standard/tools → Python formatter**.
 
-## Diagnostics and exit status
+All required formatters are located before editing starts. Missing tools produce an installation hint. A later formatter failure may leave earlier files formatted. Backend/runtime arguments, output options and execution/measurement controls are incompatible. Formatter diagnostics go to stderr; stdout stays empty. Check returns nonzero when changes are required. Formatting does not lint, fix algorithms, optimize code or inject pragmas.
 
-`--doctor` lists required/optional tools without installing them. `--help` needs no compiler; `--version` shows script and selected compiler versions; an explicit interpreter selects its version instead. Compilation diagnostics stay on console. Test runtime stderr is captured fully in its protocol; the visible ordinary run keeps direct stderr; successful hidden runs stay silent and failed hidden stderr is replayed.
+## Information, values and errors
 
-Exit 0 means success; wrapper usage errors use 2, WA 3, unfinished comparison 4, TLE 124, MLE 125, interruption 130/143. Native compiler/runtime errors retain meaningful nonzero statuses. Do not infer verdicts from exit number alone; a program's own exit 3 is RE, not WA.
+- `--help`: help without compiler discovery. `--version`: cp-run plus the selected compiler version; an explicit interpreter selects its version instead.
+- `--doctor`: list required/optional tools without installing anything.
+- Required option values accept `--option=VALUE` and `--option VALUE`, including `--test-f` and `-std`; empty/missing values fail. Dash-leading values use `=VALUE`.
+- Optional booleans consume only 0/1. `-f` takes no mode value; choose its action in `cp-run configure`. Pack command selectors require `pack=in`/`pack=ans` (or `unpack=…`); formatter check requires `=check`.
+- Compiler diagnostics remain live on stderr. Ordinary runtime stderr is direct; tests put runtime stderr in their protocols. Commands appear only with `--show-command`.
+
+Exit codes: 0 success; 2 wrapper usage error; 3 WA; 4 unfinished comparison; 124 TLE; 125 MLE; 130/143 interruption. Compiler/runtime failures retain meaningful nonzero statuses. A program's own exit 3 means RE, not WA: read the verdict rather than inferring it from the number alone.

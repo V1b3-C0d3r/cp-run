@@ -1,4 +1,4 @@
-"""Restricted numbered templates and a shared, contained test-data writer."""
+"""Fixed numbered test files and a shared, contained test-data writer."""
 
 import re
 
@@ -21,65 +21,24 @@ def workspace_path_suffix(value):
     return relative
 
 
-def case_location(config, root, pattern):
-    """An explicit workspace anchor replaces the usual destination/subtree root."""
-    relative = workspace_path_suffix(pattern)
-    if relative is None:
-        return Path(root), pattern
-    return Path(config.get("workspace", ".")).resolve(), relative
-
-
-def case_template(pattern, stem, number=None):
-    """Only literal text, one {n}, and source-stem aliases are supported."""
-    relative = workspace_path_suffix(pattern)
-    if relative is not None:
-        pattern = relative
-    for alias in ("{filename-noExt}", "{file-name-no-ext}", "{filename-no-ext}"):
-        pattern = pattern.replace(alias, "{stem}")
-    if pattern.count("{n}") != 1:
-        raise CheckUsageError("test template must contain exactly one {n}")
-    rest = pattern.replace("{n}", "").replace("{stem}", "")
-    if "{" in rest or "}" in rest:
-        raise CheckUsageError("unknown template placeholder; use {wsp-dir}, {n} and {stem}")
-    if not stem or "/" in stem or stem in (".", ".."):
-        raise CheckUsageError("invalid source stem for test template")
-    value = pattern.replace("{stem}", stem)
-    if number is not None:
-        value = value.replace("{n}", str(number))
-    if "\x00" in value or Path(value).is_absolute() or ".." in Path(value).parts:
-        raise CheckUsageError("test template must stay inside its test directory")
-    return value
-
-
 def layout_root(config):
-    """Artifact and data relative paths are independent, each appended once."""
+    """Resolve the one task folder; artifact routing never changes test data."""
+    folder = _settings_test_folder(config.get("test_folder", "{wsp-dir}/tests"))
+    relative = workspace_path_suffix(folder)
+    if relative is None:
+        return Path(folder).absolute()
     workspace = Path(config.get("workspace", ".")).resolve()
-    relative = config.get("test_dir") or config.get("destination", ".")
-    anchored = workspace_path_suffix(relative)
-    if anchored is not None:
-        relative = anchored or "."
-    if Path(relative).is_absolute() or ".." in Path(relative).parts:
-        raise CheckUsageError("test directory must be workspace-relative without ..")
-    root = workspace / relative
-    if config.get("save_test_relpath"):
-        anchor = Path(config.get("source_anchor") or config.get("executable") or ".").absolute()
-        parent = (
-            Path(config["anchor_dir"])
-            if config.get("anchor_dir")
-            else anchor.parent
-            if anchor.is_file() or anchor.suffix
-            else anchor
-        )
-        try:
-            subtree = parent.resolve().relative_to(workspace)
-        except ValueError:
-            raise CheckUsageError("test source must be inside the workspace") from None
-        root = root / subtree
+    target = workspace / relative
     try:
-        root.resolve().relative_to(workspace)
+        target.resolve().relative_to(workspace)
     except ValueError:
-        raise CheckUsageError("test directory escapes workspace") from None
-    return root
+        raise CheckUsageError("test folder escapes workspace") from None
+    return target
+
+
+def test_filename(stream, number):
+    """The public layout is fixed: in1.txt/ans1.txt, with positive case IDs."""
+    return "{}{}.txt".format(stream, number)
 
 
 def contained_target(root, relative):
@@ -104,21 +63,15 @@ def contained_target(root, relative):
     return candidate
 
 
-def discover_cases(root, pattern, stem):
-    """Discover sparse numerical IDs; never stop at the first missing file."""
+def discover_cases(root, stream):
+    """Read only this folder; gaps are allowed, ambiguous numeric IDs are not."""
     root = Path(root)
-    template = case_template(pattern, stem)
-    expression = re.compile(
-        "^" + re.escape(Path(template).as_posix()).replace(r"\{n\}", r"([0-9]+)") + "$"
-    )
-    prefix = template.split("{n}", 1)[0]
-    base = root / (Path(prefix) if prefix.endswith("/") else Path(prefix).parent)
-    if not base.is_dir():
-        raise CheckSetupError("test directory not found: " + str(base))
+    if not root.is_dir():
+        raise CheckSetupError("test folder not found: " + str(root))
+    expression = re.compile(re.escape(stream) + r"([0-9]+)\.txt")
     result = {}
-    candidates = base.rglob("*") if "/" in template[len(prefix) :] else base.iterdir()
-    for path in candidates:
-        match = expression.fullmatch(path.relative_to(root).as_posix())
+    for path in root.iterdir():
+        match = expression.fullmatch(path.name)
         if not match:
             continue
         digits = match[1]
@@ -128,8 +81,8 @@ def discover_cases(root, pattern, stem):
         if number in result:
             raise CheckUsageError("duplicate numerical test ID: " + digits)
         if len(result) >= 100000:
-            raise CheckSetupError("test directory exceeds 100000 cases")
-        target = contained_target(root, path.relative_to(root))
+            raise CheckSetupError("test folder exceeds 100000 cases")
+        target = contained_target(root, path.name)
         if not target.is_file():
             raise CheckSetupError("test is not a regular file: " + str(target))
         result[number] = target
@@ -138,11 +91,7 @@ def discover_cases(root, pattern, stem):
 
 def mult_cases(config):
     root = layout_root(config)
-    stem = Path(config.get("source_anchor") or config.get("executable", "main.cpp")).stem
-    input_root, input_pattern = case_location(config, root, config.get("in_template", "./{n}.in"))
-    answer_root, answer_pattern = case_location(config, root, config.get("ans_template", "./{n}.ans"))
-    left = discover_cases(input_root, input_pattern, stem)
-    right = discover_cases(answer_root, answer_pattern, stem)
+    left, right = discover_cases(root, "in"), discover_cases(root, "ans")
     if not left or set(left) != set(right):
         raise CheckUsageError(
             "mult test ID mismatch: missing answers {}; missing inputs {}".format(

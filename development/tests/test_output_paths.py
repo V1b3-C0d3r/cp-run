@@ -56,8 +56,8 @@ class OutputPathCliTest(unittest.TestCase):
         self.assertEqual((self.cwd / 'custom.txt').read_text(), payload)
         tests = self.cwd / 'tests'; tests.mkdir()
         for number, text in ((1, 'one'), (2, 'two\n')):
-            (tests / (str(number) + '.in')).write_text(text)
-            (tests / (str(number) + '.ans')).write_text(text)
+            (tests / ('in' + str(number) + '.txt')).write_text(text)
+            (tests / ('ans' + str(number) + '.txt')).write_text(text)
         result = self.invoke('test=mult', source, *args)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((self.cwd / 'custom.txt').read_text(), payload)
@@ -104,8 +104,9 @@ class OutputPathCliTest(unittest.TestCase):
         self.assertEqual(target.read_text(), 'previous\n')
 
     def test_out_can_select_redirected_output_without_becoming_binary_o(self):
+        fixtures.CliTest.set_file_io_mode(self)
         self.data()
-        result = self.invoke(self.source, '-f=auto', '--out=redirected.txt',
+        result = self.invoke(self.source, '-f', '--out=redirected.txt',
                              env={'FAKE_PROGRAM_STDIN': '1'})
         self.assertEqual((result.returncode, result.stdout), (0, ''), result.stderr)
         self.assertEqual((self.cwd / 'redirected.txt').read_text(), 'hello\n')

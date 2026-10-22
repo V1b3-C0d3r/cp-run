@@ -25,7 +25,7 @@ SETTINGS_GROUPS = {
 }
 # Keep metadata in the same copy/reset/delete transaction as compiler flags.
 PROFILE_KEYS = ('MODE_KIND', 'MODE_CPU', 'MODE_DEST_DIR', 'MODE_SAVE_RELPATH',
-                'MODE_SAVE_TEST_RELPATH', *SETTINGS_GROUPS.values())
+                *SETTINGS_GROUPS.values())
 PROFILE_DEFAULTS = {'MODE_KIND': 'flags', 'MODE_CPU': 'default'}
 
 # These defaults mirror the native block. A regression test checks equality so
@@ -37,15 +37,13 @@ FACTORY_SETTINGS = {
     'DEFAULT_MEMORY_LIMIT': 'inf', 'DEFAULT_INPUT': 'in.txt',
     'DEFAULT_OUTPUT': 'out.txt', 'DEFAULT_ANSWER': 'ans.txt',
     'DEFAULT_REPORT': 'test_out', 'DEFAULT_SEPARATOR': r'\n\x1e\n',
-    'MANUAL_SEPARATOR': r'\n###\n', 'DEFAULT_INTERPRETER': 'pypy3',
+    'DEFAULT_INTERPRETER': 'pypy3',
     'C_STANDARD': 'auto', 'C_SOURCE': 'main.c', 'PYTHON_SOURCE': 'main.py',
     'PYTHON_FLAGS': [], 'MODE_CPYTHON': {'debug': '-X dev -W default', 'extra': '-X dev -W error'},
     'MODE_PYPY': {'debug': '-W default -X track-resources', 'extra': '-W error -X track-resources'},
     'ACTION_DEST_DIR': {'test-mult': 'tests'}, 'ACTION_SAVE_RELPATH': {},
-    'ACTION_SAVE_TEST_RELPATH': {}, 'MODE_DEST_DIR': {},
-    'MODE_SAVE_RELPATH': {}, 'MODE_SAVE_TEST_RELPATH': {},
-    'DEFAULT_INPUT_TEMPLATE': './{n}.in', 'DEFAULT_ANSWER_TEMPLATE': './{n}.ans',
-    'DEFAULT_TEST_DIR': '', 'NATIVE_FORMATTER': 'clang-format', 'PYTHON_FORMATTER': 'ruff', 'DEFAULT_REPORT_TESTS': 'all',
+    'MODE_DEST_DIR': {}, 'MODE_SAVE_RELPATH': {},
+    'DEFAULT_TEST_FOLDER': '{wsp-dir}/tests', 'NATIVE_FORMATTER': 'clang-format', 'PYTHON_FORMATTER': 'ruff', 'DEFAULT_REPORT_TESTS': 'all',
     'COMPANION_PORT': '27122', 'COMPANION_WAIT': '120',
     'MINIMIZE_ATTEMPTS': '200', 'MINIMIZE_SECONDS': '30', 'MAX_FAILURES': '10',
     'DEFAULT_LINE_LIMIT': '10000', 'DEFAULT_F_MODE': 'macro',
@@ -135,7 +133,7 @@ def read_settings(source):
 def settings_text(data):
     """Serialize values as quoted native declarations, never executable input."""
     lines = [SETTINGS_BEGIN,
-             '# Managed by --set-defaults; ordinary launches read these native values directly.']
+             '# Managed by cp-run configure; ordinary launches read these native values directly.']
     for key, value in data.items():
         if not re.fullmatch(r'[A-Z_]+', key):
             raise ValueError('invalid settings key')

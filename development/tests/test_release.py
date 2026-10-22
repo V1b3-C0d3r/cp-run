@@ -66,9 +66,10 @@ class ReleaseCliTest(unittest.TestCase):
         self.assertEqual(counter.read_text(), '2')
 
     def test_auto_io_keeps_first_visible_output_only(self):
+        cli_fixtures.CliTest.set_file_io_mode(self)
         program, counter = self.counter_program()
         self.data('hello\n', 'hello\n')
-        result = self.invoke('run', program, '--file-io', 'auto', '-tm', '--average=3')
+        result = self.invoke('run', program, '--file-io', '-tm', '--average=3')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, '')
         self.assertEqual(counter.read_text(), '4')
@@ -79,7 +80,8 @@ class ReleaseCliTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('-DFILEO', self.calls()[-1])
         self.data()
-        for option in ('--file-io=auto', '-f=auto'):
+        cli_fixtures.CliTest.set_file_io_mode(self)
+        for option in ('--file-io', '-f'):
             result = self.invoke(self.source.name, option, env={'FAKE_PROGRAM_STDIN': '1'})
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual((self.cwd / 'out.txt').read_text(), 'hello\n')
@@ -209,10 +211,11 @@ class ReleaseCliTest(unittest.TestCase):
                 process.kill(); process.communicate()
 
     def test_setup_failure_does_not_replace_binary_history(self):
+        cli_fixtures.CliTest.set_file_io_mode(self)
         first = self.binary('first.bin', 'printf "first\\n"\n')
         second = self.binary('second.bin')
         self.invoke('run', first)
-        failed = self.invoke('run', second, '--file-io=auto', 'missing.input')
+        failed = self.invoke('run', second, '--file-io', 'missing.input')
         self.assertNotEqual(failed.returncode, 0)
         self.assertEqual(self.invoke('run', '-').stdout, 'first\n')
 

@@ -72,14 +72,24 @@ For independent samples, create numbered pairs:
 
 ```text
 tests/
-  1.in    1.ans
-  2.in    2.ans
+  in1.txt    ans1.txt
+  in2.txt    ans2.txt
 ```
 
 ```sh
 cp-run test=mult --cout         # Run every sample
 cp-run test=mult 2 --cout       # Reproduce only sample 2
+cp-run test=mult --test-f=samples --cout  # Choose this task's sample folder
 ```
+
+**One task, one folder.** The default is `{wsp-dir}/tests`; choose another with `--test-f=DIR` or save it in `cp-run configure`. Numbered filenames are fixed. To collect or restore the folder without compiling:
+
+```sh
+cp-run pack samples.in samples.ans
+cp-run unpack samples.in samples.ans --test-f=restored
+```
+
+Omit both filenames to use saved Input/Answer defaults (`in.txt`/`ans.txt`); `=in` or `=ans` selects just one stream. [Bundle examples](docs/TESTING.md#pack-and-unpack).
 
 Each sample gets **AC, WA, TLE, MLE or RE**, its own time and peak memory. Preparation failures are **CE**. A failed sample does not skip the next one. Checking defaults to **1500 ms / 256 MiB per process**; ordinary runs are unlimited.
 
@@ -113,7 +123,7 @@ cp-run main.cpp --profile=pragma-native
 
 C/C++ use **`-O2`** and the newest ISO standard advertised by the compiler, including draft modes. Native debug profiles use sanitizers and checks selected from the **actual C++ library**; Python profiles use interpreter diagnostics. The `pragma` profiles provide native optimization flag sets. Fast-math changes floating-point behavior, and host-tuned binaries may not run on another CPU. [Profile components and safeguards](docs/CLI.md#languages-and-profiles).
 
-**Make it yours:** `cp-run --set-defaults` → **Languages & tools → Language/compiler defaults** selects a preferred language, separate C/C++ compilers and the Python interpreter. Settings also cover profiles, warnings, paths and limits. Use **`{wsp-dir}/data/in.txt`** in a file default to keep it relative to the workspace; [path examples](docs/CLI.md#workspace-rooted-file-preferences). Explicit command options override saved defaults. [Discovery and precedence](docs/CLI.md#source-discovery-and-language-defaults).
+**Make it yours:** `cp-run configure` → **Languages & tools → Language/compiler defaults** selects a preferred language, separate C/C++ compilers and the Python interpreter. Settings also cover profiles, warnings, paths and limits. Use **`{wsp-dir}/data/in.txt`** in a file default to keep it relative to the workspace; [path examples](docs/CLI.md#workspace-rooted-file-preferences). Explicit command options override saved defaults. [Discovery and precedence](docs/CLI.md#source-discovery-and-language-defaults).
 
 Settings live inside the installed script. Before replacing it, export them, install the new version, then import:
 
@@ -122,6 +132,8 @@ cp-run --export-settings cp-run-settings.json
 # Install the new cp-run.zsh with the command above.
 cp-run --import-settings cp-run-settings.json
 ```
+
+**Choose file I/O once:** `cp-run configure` → **Files → Bare -f action**. Factory `macro` adds `-DFILEO` for C/C++; choose `auto` to use `in.txt`/`out.txt`. Then use `cp-run main.py -f`, adding `--cout` for console output or `--cin` for console input. Both together are an error. `-f` takes no `=VALUE`.
 
 ## Format your source
 
@@ -133,7 +145,7 @@ cp-run main.py --make-prettier=check  # Check style; do not edit or run
 cp-run --make-prettier                # Find a source, format it, then stop
 ```
 
-Only selected source files are formatted, using project style settings where present. No lint fixes are applied. Black can replace Ruff in **`--set-defaults` → Languages & tools → Interpreter/source/standard/tools**. [Formatter behavior and setup](docs/CLI.md#formatting).
+Only selected source files are formatted, using project style settings where present. No lint fixes are applied. Black can replace Ruff in **`cp-run configure` → Languages & tools → Interpreter/source/standard/tools**. [Formatter behavior and setup](docs/CLI.md#formatting).
 
 ## Build from modules
 

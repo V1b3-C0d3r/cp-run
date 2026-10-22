@@ -15,7 +15,7 @@ append_native_cpu() {
     case "${MODE_CPU[$profile]-default}" in
         default) return 0 ;;
         native) ;;
-        *) fail 'invalid saved CPU policy; use --set-defaults' ;;
+        *) fail 'invalid saved CPU policy; use cp-run configure' ;;
     esac
     # Explicit target selection wins. Opaque forwarding can also hide a target;
     # do not expand it or guess. Skip known operands so -I -march=folder is data.

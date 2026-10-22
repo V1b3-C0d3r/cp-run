@@ -67,52 +67,41 @@ cp-run test main.py --out=results.txt --cout
 cp-run test main.py --wsp-dir=/projects/contest --out='{wsp-dir}/results/actual.txt'
 ```
 
-The first command keeps raw stdout in `results.txt` and prints the protocol, with lines such as `results.txt:1`. The second stores it at `/projects/contest/results/actual.txt`; create `results/` first. Under **`--set-defaults` → Files → Program output**, save this filename or workspace-prefixed path for all checks and ordinary `-f=auto/out` redirection. Factory files are **`in.txt`, `out.txt`, `ans.txt`, `test_out`**. Imported preferences retain their saved filenames.
+The first command keeps raw stdout in `results.txt` and prints the protocol, with lines such as `results.txt:1`. The second stores it at `/projects/contest/results/actual.txt`; create `results/` first. Under **`cp-run configure` → Files → Program output**, save this filename or workspace-prefixed path for all checks and ordinary `-f=auto/out` redirection. Factory files are **`in.txt`, `out.txt`, `ans.txt`, `test_out`**. Imported preferences retain their saved filenames.
 
 ## Separate files: `test=mult`
 
-Keep the same main.py and create:
+Keep the same `main.py`. One task folder contains fixed filenames:
 
 ```text
 tests/
-  1.in     contains: 2 3 + newline
-  1.ans    contains: 5 + newline
-  2.in     contains: 7 8 + newline
-  2.ans    contains: 15 + newline
+  in1.txt     contents: 2 3 + newline
+  ans1.txt    contents: 5 + newline
+  in2.txt     contents: 7 8 + newline
+  ans2.txt    contents: 15 + newline
 ```
+
+`in` marks program input, `ans` marks expected stdout, and the matching number identifies a test. `.txt` is part of the required filename. These names are not configurable.
 
 ```sh
 cp-run test=mult main.py --cout
-cp-run test=mult 2 1 main.py --cout         # Test 2, then test 1
-cp-run test=mult main.py --test-iters=1     # Only first selected test
+cp-run test=mult 2 1 main.py --cout          # Test 2, then test 1
+cp-run test=mult main.py --test-iters=1      # Only first selected test
+cp-run test=mult main.py --test-f=samples --cout
 ```
 
-The directory defaults to `tests`; set `--dest-dir=DIR` or a separate `--test-dir=DIR`. IDs are positive integers, sorted numerically unless selected explicitly. Gaps are accepted: 1 and 3 do not require 2. `1.in` plus `01.in` is ambiguous and rejected. Missing inputs/answers fail before compilation/execution.
+The factory folder is **`{wsp-dir}/tests`**. In the last command, `samples` is relative to the current directory. Set a permanent folder under **`cp-run configure` → Test files & integrations → Test folder**; `--test-f` overrides it for one invocation. Both `--test-f=samples` and `--test-f samples` work.
 
-Templates are literal paths with **`{n}` = test ID** and **`{stem}` = source basename without extension**:
+For a specific task inside a shared workspace:
 
 ```sh
-cp-run test=mult sum.cpp --dest-dir=tests \
-  --in-tmp='{stem}/{n}.in' --ans-tmp='{stem}/{n}.ans'
+cp-run test=mult src/A.cpp --wsp-dir=/projects/contest \
+  --test-f='{wsp-dir}/tasks/A/tests' --cout
 ```
 
-This reads `tests/sum/1.in` and `tests/sum/1.ans`. Quotes protect braces/spaces from shell interpretation; they are not part of the path. `{filename-noExt}`, `{file-name-no-ext}`, `{filename-no-ext}` are accepted stem aliases. No other expressions/placeholders are evaluated.
+This reads **`/projects/contest/tasks/A/tests/in1.txt`** and **`ans1.txt`** in the same folder. `{wsp-dir}` is the only path placeholder; it expands to `/projects/contest`. Nothing is inferred from `A.cpp`. `--dest-dir` and `--save-relpath` route binaries independently and do not change test data.
 
-`--save-relpath` routes binaries under their workspace-relative source directory. `--save-test-relpath` does the same independently for data. For workspace `/project`, source `/project/tasks/A/main.cpp`, and data root `tests`, the latter reads `/project/tests/tasks/A/1.in`. `run --find` uses the corresponding invocation-relative artifact subtree.
-
-## Workspace-rooted test files
-
-To keep data at fixed workspace locations, use the literal **`{wsp-dir}`** prefix:
-
-```sh
-cp-run test=mult src/sum.cpp --wsp-dir=/projects/contest \
-  --in-tmp='{wsp-dir}/samples/{stem}/{n}.in' \
-  --ans-tmp='{wsp-dir}/answers/{stem}/{n}.ans' --cout
-```
-
-For test 2 of `sum.cpp`, those patterns read **`/projects/contest/samples/sum/2.in`** and **`/projects/contest/answers/sum/2.ans`**. `{wsp-dir}` is the workspace, `{stem}` is `sum`, and `{n}` is `2`. The explicit root replaces the usual data destination and relative subtree for that pattern; binary routing stays independent.
-
-Save these patterns under **`--set-defaults` → Test files & integrations** to reuse them. Companion and pack/unpack use the same patterns. Ordinary input/answer/report defaults also support the prefix; see [file preferences](CLI.md#workspace-rooted-file-preferences).
+IDs are positive integers and sorted numerically unless selected explicitly. Gaps are accepted: tests 1 and 3 do not require test 2. `in1.txt` plus `in01.txt` is ambiguous and rejected. A missing input/answer pair fails before compilation. Subdirectories are not searched.
 
 ## Separated blocks: `test=auto`
 
@@ -139,25 +128,71 @@ cp-run test=auto main.py samples.in samples.ans --sep='\n###\n' --cout
 cp-run test=auto 2 main.py samples.in samples.ans --sep='\n###\n'
 ```
 
-Here `\n` is a newline escape decoded by cp-run; `###` is literal text. The separator's surrounding newlines belong to the delimiter. Test 1 input is exactly `2 3`, not `2 3` plus a trailing newline. Choose mult files when exact boundary whitespace matters. Legacy auto input has **no header count**, and drops one terminal delimiter as in 1.0.
+Here `\n` is a newline escape decoded by cp-run; `###` is literal text. The separator's surrounding newlines belong to the delimiter. Test 1 input is exactly `2 3`, not `2 3` plus a trailing newline. Choose mult files when exact boundary whitespace matters. The default uncounted auto format has **no header count** and ignores one terminal delimiter. Do not pass a packed file without `--bundle-format=counted`.
 
 Auto and mult run each test independently, compare it independently, and apply TLE/MLE independently. A mismatch, crash or resource failure does not prevent the next test.
 
-## Pack/unpack without losing blank lines
+## Pack and unpack
 
-A counted bundle starts with the decimal record count and LF. Remaining records are joined with the internal delimiter; payloads are never trimmed or given an extra final newline. The count disambiguates empty final records. Under the RS codec, RS is reserved in payloads; ambiguous custom markers are rejected before writing.
+**Pack collects one task's numbered tests into two files. Unpack restores those files into a chosen folder.** Use mult when you prefer to edit separate files; bundle them for storage or `test=auto`.
+
+Starting with the two tests above:
 
 ```sh
-cp-run --pack=in tests inputs.bundle --source=main.py
-cp-run --pack ans tests answers.bundle --source main.py
-cp-run test=auto main.py inputs.bundle answers.bundle --bundle-format=counted
-cp-run --unpack=in inputs.bundle restored --source=main.py
-cp-run --unpack=ans answers.bundle restored --source=main.py
+cp-run pack samples.in samples.ans
 ```
 
-The templates also apply to packing/unpacking. Files 1 and 3 are packed in numerical order as container records 1 and 2; the mapping is printed. A plain counted container does not retain sparse filename IDs. Existing conflicting files are refused; use `--overwrite` for planned replacements. Missing DIR/BUNDLE uses routed test root and `in.bundle`/`ans.bundle` (derived from saved input/answer names).
+This reads `tests/in1.txt`, `in2.txt` into `samples.in`, and `tests/ans1.txt`, `ans2.txt` into `samples.ans`. No source file or compiler is used.
 
-For manual editing, use a separate configurable text marker. `manual.in`:
+```sh
+cp-run unpack samples.in samples.ans --test-f=restored
+```
+
+The result is:
+
+```text
+restored/
+  in1.txt     exact original bytes from tests/in1.txt
+  ans1.txt    exact original bytes from tests/ans1.txt
+  in2.txt     exact original bytes from tests/in2.txt
+  ans2.txt    exact original bytes from tests/ans2.txt
+```
+
+Check either representation:
+
+```sh
+cp-run test=mult main.py --test-f=restored --cout
+cp-run test=auto main.py samples.in samples.ans --bundle-format=counted --cout
+```
+
+### Filenames and defaults
+
+| Command | Files used |
+| --- | --- |
+| `cp-run pack` | Write saved Input and Answer filenames; factory `in.txt`, `ans.txt`. |
+| `cp-run unpack` | Read those same saved filenames. |
+| `cp-run pack custom.in` | Write `custom.in` and the saved Answer filename. |
+| `cp-run unpack custom.in custom.ans` | Read these two files. |
+| `cp-run pack=in inputs.bundle` | Pack only input files; do not read/write answers. |
+| `cp-run unpack=ans answers.bundle` | Unpack only answer files. |
+| `cp-run pack=ans` | Pack only answers into the saved Answer filename. |
+
+The first positional filename is IN, the second is ANS. With `=ans`, the single filename is ANS instead. Stream selectors require `=`: `pack in` treats `in` as a filename, not a selector. Files may use a quoted `{wsp-dir}/PATH` prefix. The folder always comes from `--test-f` or its saved default, never a positional DIR, source name or binary destination.
+
+Packing both streams requires matching case IDs. Sparse IDs are collected in numeric order and become records 1..N; the renumbering is printed. Unpacking both requires equal record counts. Existing identical files are accepted; changed files require `--overwrite`. Stale extra numbered tests are refused even with overwrite: choose a clean folder instead. Validation errors leave both streams intact. Handled write failures are rolled back; a multi-file update is not guaranteed crash-atomic.
+
+### What is inside a bundle?
+
+There is one pack/unpack format: a **decimal record count**, one newline, then records joined by a delimiter. The count belongs to the container, not to program stdin. Payload bytes are never trimmed or given extra newlines. This preserves blank lines, empty tests, CRLF and missing final newlines.
+
+The default delimiter is LF, ASCII Record Separator (byte **0x1E**), LF, written **`\n\x1e\n`** in settings. Pack inserts it; do not type the invisible character manually. For a readable example, choose `--sep='\n###\n'` in **both** directions:
+
+```sh
+cp-run pack samples.in samples.ans --sep='\n###\n'
+cp-run unpack samples.in samples.ans --test-f=copy --sep='\n###\n'
+```
+
+For records containing exactly `2 3` and `7 8` without final newlines, `samples.in` is:
 
 ```text
 2
@@ -166,14 +201,11 @@ For manual editing, use a separate configurable text marker. `manual.in`:
 7 8
 ```
 
-The **first 2 is container metadata**, not part of the first program input. Convert in either direction:
+The first `2` says there are two records. `###` and its surrounding newlines form the delimiter and are not sent to the program. In a real text file, a final newline after `7 8` belongs to the second record; pack preserves whether it exists. The file extension does not determine its format.
 
-```sh
-cp-run --pack=in manual.in inputs.bundle --text-sep='\n###\n'
-cp-run --unpack=in inputs.bundle editable.in --text-sep='\n###\n'
-```
+Allowed separator characters are ASCII letters, digits, spaces, `#=_.:+-`, newline escapes and the reserved RS escape. Separators must begin/end with a newline. Under the default codec, RS cannot occur inside a record. Custom-marker collisions, including overlapping record boundaries, fail before writes; choose another delimiter. The bundle stores neither the chosen delimiter nor sparse original IDs, so use the same `--sep` when unpacking/checking.
 
-Use `--text` to select the saved manual marker, or an explicit `--text-sep` to override it. This selects a single manual file instead of a numbered directory. The marker is configurable in defaults. Conversion parses records, checks their count and lossless framing, then writes the other representation. It never globally replaces marker text inside payloads. If a marker collides with data or a partial boundary, choose another one; previous outputs remain intact on validation errors.
+`test=auto` defaults to **uncounted** input for hand-written files; `--bundle-format=counted` tells it to read pack output. This option selects only the auto reader, not a different pack format. The old `--source`, template options and `--text` conversion modes are removed.
 
 ## Console input
 
@@ -201,7 +233,8 @@ Public verdicts:
 | **MLE** | Memory limit exceeded by this execution. |
 | **RE** | Runtime error: nonzero exit or signal, with diagnostics in the report. |
 | **CE** | Compilation/preparation error; affected tests do not run. |
- The final summary lists every affected test ID. Its deterministic headline uses CE > MLE > TLE > RE > WA > AC. A compiler failure marks tests NOT RUN; partial crash output cannot turn RE/TLE/MLE into WA. Checker limits, broken generator/oracle and cancellation are separately identified as unfinished/infrastructure states, never AC.
+
+The final summary lists every affected test ID. Its deterministic headline uses CE > MLE > TLE > RE > WA > AC. A compiler failure marks tests NOT RUN; partial crash output cannot turn RE/TLE/MLE into WA. Checker limits, broken generator/oracle and cancellation are separately identified as unfinished/infrastructure states, never AC.
 
 ```sh
 cp-run test=mult main.py -tm --average=3 --warm-up=1 --cout
@@ -243,8 +276,8 @@ The strategy follows [delta debugging](https://www.cs.purdue.edu/homes/xyzhang/f
 2. Extension settings → Custom ports: add **27122**.
 3. Beside your source, run `cp-run companion main.py`.
 4. Open one problem page and click the extension. The foreground receiver saves numbered samples and exits.
-5. Run `cp-run test=mult main.py --cout`.
+5. Run `cp-run test=mult main.py --cout`. Samples are `tests/in1.txt`, `tests/ans1.txt`, and so on.
 
-Port and wait seconds: `--port=27122 --wait=120`. Templates and data routing are shared with mult; use identical options for importing and checking. Imports preserve the received strings, including blank lines and empty answers. Remote file paths/limits are not applied. A site's internal testcase count is program input and remains untouched.
+Port and wait seconds: `--port=27122 --wait=120`. The task folder is shared with mult; use the same `--test-f=DIR` when importing and checking. For example, `cp-run companion --test-f=samples`, then `cp-run test=mult main.py --test-f=samples --cout`. No automatic source-name subfolder is created. Imports preserve the received strings, including blank lines and empty answers. Remote file paths/limits are not applied. A site's internal testcase count is program input and remains untouched.
 
 The listener binds loopback only, accepts bounded JSON, and performs no compilation/formatting inside requests. It accepts one problem; a contest batch is rejected before writes. Repeated identical samples are idempotent. Changed files need `--overwrite`; stale extra samples require a clean destination to avoid accidentally mixing problems. Requests and imports never overwrite sources or binaries. On WSL, verify browser localhost forwarding for your setup.

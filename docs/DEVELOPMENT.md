@@ -8,7 +8,7 @@ Applies to the maintained 1.x sources. Progress and verification are recorded in
 - zsh owns lightweight parsing, defaults, tool discovery and native execution. Python owns supervision, structured checking, report rendering and advanced integrations.
 - Keep explicit build manifests. A module needs a distinct responsibility, not just a few functions. Prefer clear functions and small records over a plugin framework or generic pipeline machinery.
 - Parse, resolve defaults, validate, plan paths, prepare, execute and render as separate phases. Validate before side effects. Pass structured build/launch/case outcomes instead of inferring status from diagnostic text.
-- Use one shared implementation for routing, case templates, codecs, verdicts and process observation. Do not duplicate these inside Companion, stress or settings.
+- Use one shared implementation for artifact routing, the fixed test-folder layout, codecs, verdicts and process observation. Do not duplicate these inside Companion, stress or settings.
 
 ## Naming, language and comments
 
@@ -22,7 +22,7 @@ Applies to the maintained 1.x sources. Progress and verification are recorded in
 
 - Use zsh-native operations on the common path. Preserve array element boundaries from CLI through child argv. Never execute a rendered command string.
 - No `eval`, untrusted `source`, shell=True subprocesses, or unquoted expansion for user values. Display quoting is only for display.
-- Required option values accept `=VALUE` and separate VALUE. Recognize optional operands with a documented grammar; preserve explicit-given markers until default resolution finishes.
+- Required option values accept `=VALUE` and separate VALUE; pack/unpack command selectors and formatter check use their documented attached forms; -f has no mode value. Recognize optional operands with a documented grammar; preserve explicit-given markers until default resolution finishes.
 - The existing `--` boundaries are a public contract. Program arguments are opaque. Guarded diagnostic profiles inspect relevant backend arguments without consuming a different option's operand.
 - Use GNU-style `--help`, `--version`, readable usage errors and stderr diagnostics. Existing short options and the two-boundary extension are intentionally documented exceptions to a generic GNU parser.
 - Reserve stdout for the program, compile's target path, explicit data actions or the requested report. Commands appear only with `--show-command`.
@@ -39,7 +39,7 @@ Applies to the maintained 1.x sources. Progress and verification are recorded in
 ## Files, settings and imports
 
 - Distinguish absent, false, empty and inherited settings. Resolve fields independently using the documented precedence. Validate settings import/export through one schema and migrate older exports explicitly.
-- Treat imported JSON, template values, website metadata and filenames as data. Never fetch a supplied URL, execute embedded commands, or trust remote paths.
+- Treat imported JSON, workspace-prefixed paths, website metadata and filenames as data. Never fetch a supplied URL, execute embedded commands, or trust remote paths.
 - Preflight collisions and physical containment before mkdir/write. Protect source, input, answer, artifact and report aliases, including hardlinks and symlink parents.
 - Stage on the target filesystem; use atomic replacement where it actually applies. Do not call a multi-file replacement crash-atomic without a transaction/recovery mechanism.
 - Default overwrite refusal and explicit replacement permission cover only the planned target files. Never remove unrelated user files while refreshing imported tests.
@@ -62,3 +62,17 @@ Applies to the maintained 1.x sources. Progress and verification are recorded in
 - Final review compares the implementation against the approved release checklist, validates the extracted package and records remaining platform limitations. A plan checkbox alone is not proof of completion.
 
 Reference: [GNU command-line interface standards](https://www.gnu.org/prep/standards/html_node/Command_002dLine-Interfaces.html).
+
+## Build and verification
+
+From a source checkout, edit `development/src/`, then run:
+
+```sh
+python3 -B development/build.py
+python3 -B -m unittest discover -s development/tests -v
+python3 -B development/package.py
+```
+
+The generated `cp-run.zsh` is the only installed file. The ZIP includes that script, source modules, tests, docs and examples. Building or packaging never requires optional formatters; their integration tests run when the executables are available. The service uses only Python's standard library.
+
+Before release, verify the extracted ZIP, rebuild it byte-for-byte, run the documented examples, check Markdown links/tables, and review the change against the release checklist. Record passed checks and remaining limits in `development/JOURNAL.md`. Keep published snapshots unchanged.

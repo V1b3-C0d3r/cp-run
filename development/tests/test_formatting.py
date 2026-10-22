@@ -69,9 +69,9 @@ class FormattingTest(unittest.TestCase):
         self.assertEqual(self.formatted()[-1][0], 'format')
         self.assertEqual(self.calls(include_probes=True), [])
 
-    def test_check_accepts_both_value_forms_and_keeps_source_unchanged(self):
+    def test_check_requires_attached_value_and_keeps_source_unchanged(self):
         original = self.source.read_bytes()
-        for options in (('--make-prettier=check',), ('--make-prettier', 'check')):
+        for options in (('--make-prettier=check',),):
             result = self.invoke(self.source, *options)
             self.assertEqual((result.returncode, result.stdout), (1, ''), result.stderr)
             self.assertEqual(self.source.read_bytes(), original)
@@ -80,7 +80,7 @@ class FormattingTest(unittest.TestCase):
 
     def test_removed_modes_and_runtime_build_options_are_rejected(self):
         for options in (('--make-prettier=only',), ('--make-prettier=before',),
-                        ('--make-prettier=',), ('--make-prettier', 'only'),
+                        ('--make-prettier=',), ('--make-prettier', 'only'), ('--make-prettier', 'check'),
                         ('--make-prettier', '-t'), ('--make-prettier', '-f'),
                         ('--make-prettier', '-o', 'ignored.out'),
                         ('--make-prettier', '--out=ignored.txt'),
