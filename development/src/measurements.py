@@ -1,4 +1,4 @@
-"""Repeated runs reuse one supervisor and expose one measured stdout only."""
+"""Repeated runs reuse one supervisor and expose one visible stdout only."""
 
 from contextlib import ExitStack
 import stat
@@ -21,7 +21,7 @@ def run_series(runner, config, launch, validate=None, label=None):
     count = repetition_count(config.get('average', 1)) if observed else 1
     if observed and config.get('warmup'):
         warm = launch(-1)
-        if warm.verdict in ('INTERRUPTED', 'TLE', 'MLE') or (config.get('operation') in ('test', 'stress') and warm.status):
+        if warm.verdict in ('INTERRUPTED', 'TLE', 'MLE') or ((config.get('operation') in ('test', 'stress') or config.get('_strict_warmup')) and warm.status):
             if config.get('operation') not in ('test', 'stress'): runner.diagnostic(warm, label)
             return warm
     durations, peak, result = [], 0, None
@@ -45,47 +45,133 @@ def run_series(runner, config, launch, validate=None, label=None):
     return result
 
 
+def record_terminal_input(runner, argv, recording, maximum):
+    """Run visibly while teeing terminal input to a bounded replay file.
+
+    The relay reads only while the child runs, so a program needing no input
+    never waits for terminal EOF. A stop pipe wakes it immediately on exit or
+    cancellation. Only this explicit repeated-TTY path starts a helper thread.
+    """
+    import threading
+
+    failures = []
+    with ExitStack() as stack:
+        reader_fd, writer_fd = os.pipe()
+        incoming = stack.enter_context(os.fdopen(reader_fd, 'rb', buffering=0))
+        outgoing = stack.enter_context(os.fdopen(writer_fd, 'wb', buffering=0))
+        stop_reader, stop_writer = os.pipe()
+        stack.callback(os.close, stop_reader)
+        stack.callback(os.close, stop_writer)
+        os.set_blocking(writer_fd, False)
+
+        def relay():
+            pending, copied = b'', 0
+            try:
+                while True:
+                    readable, writable, _ = select.select(
+                        [stop_reader] + ([] if pending else [0]),
+                        [writer_fd] if pending else [], [], None)
+                    if stop_reader in readable:
+                        return
+                    if 0 in readable:
+                        block = os.read(0, 65536)
+                        if not block:
+                            return
+                        copied += len(block)
+                        if copied > maximum:
+                            raise CheckSetupError('replayed input exceeds spool byte limit')
+                        recording.write(block)
+                        pending = block
+                    if writer_fd in writable:
+                        try:
+                            pending = pending[os.write(writer_fd, pending):]
+                        except BlockingIOError:
+                            continue
+            except BrokenPipeError:
+                pass  # Child exited or deliberately closed stdin.
+            except BaseException as error:
+                failures.append(error)
+            finally:
+                outgoing.close()  # Deliver EOF when the terminal supplied EOF.
+
+        thread = threading.Thread(target=relay, name='cp-run-input', daemon=True)
+        thread.start()
+        try:
+            result = runner.run(argv, stdin=incoming, report=False)
+        finally:
+            os.write(stop_writer, b'!')
+            thread.join()
+        if failures:
+            raise failures[0]
+        recording.flush()
+        recording.seek(0)
+        return result
+
+
+def replay_stderr(source):
+    """Replay a failed hidden run byte-for-byte without buffering it in RAM."""
+    source.seek(0)
+    with os.fdopen(os.dup(2), 'wb') as destination:
+        shutil.copyfileobj(source, destination)
+
+
 def supervise(config):
-    """Snapshot only input needing replay; opening/copying is outside child timing."""
+    """One visible run; copied input and hidden repetitions share one observer."""
     runner = _runner(config)
     argv = [*config.get('main_argv', [config['executable']]), *config.get('runtime_args', [])]
     observed = bool(config.get('show_time') or config.get('show_memory'))
     count = repetition_count(config.get('average', 1)) if observed else 1
-    if count > 1 and os.isatty(0):
-        raise CheckUsageError('repeated measurements need redirected input, not a terminal')
     with ExitStack() as stack:
         sink = stack.enter_context(open(os.devnull, 'wb'))
-        no_input = stack.enter_context(open(os.devnull, 'rb'))
-        replay = None
-        replay_offset = 0
-        if count > 1:
-            source = stack.enter_context(os.fdopen(os.dup(0), 'rb'))
-            if stat.S_ISREG(os.fstat(0).st_mode):
-                replay = source; replay_offset = source.tell()
-            else:
+        errors = stack.enter_context(tempfile.TemporaryFile())
+        replay, replay_offset, captured_terminal = None, 0, False
+        if count > 1 or (observed and config.get('warmup')):
+            maximum = positive_setting(config.get('max_spool', 268435456), 'spool limit')
+            if os.isatty(0):
                 replay = stack.enter_context(tempfile.TemporaryFile())
-                maximum = positive_setting(config.get('max_spool', 268435456), 'spool limit')
-                copied = 0
-                while True:
-                    block = source.read(65536)
-                    if not block: break
-                    copied += len(block)
-                    if copied > maximum: raise CheckSetupError('replayed input exceeds spool byte limit')
-                    replay.write(block)
+                if config.get('show_command'):
+                    print(shlex.join(argv), file=sys.stderr, flush=True)
+                runner.on_launch = lambda: remember_launch(config)
+                # This visible capture is not a measurement: human typing must
+                # not contaminate the median. Its errors still stop the job.
+                initial = record_terminal_input(runner, argv, replay, maximum)
+                if initial.status:
+                    runner.diagnostic(initial)
+                    return initial.status
+                captured_terminal = True
+            else:
+                source = stack.enter_context(os.fdopen(os.dup(0), 'rb'))
+                if stat.S_ISREG(os.fstat(0).st_mode):
+                    replay = source; replay_offset = source.tell()
+                else:
+                    replay = stack.enter_context(tempfile.TemporaryFile())
+                    copied = 0
+                    while True:
+                        block = source.read(65536)
+                        if not block: break
+                        copied += len(block)
+                        if copied > maximum: raise CheckSetupError('replayed input exceeds spool byte limit')
+                        replay.write(block)
+        # Ordinary warm-ups now receive the same recorded data as measurements;
+        # every nonzero execution must stop the series and expose its stderr.
+        series_config = dict(config, _strict_warmup=True)
+
         def launch(index):
             if replay is not None:
                 replay.seek(replay_offset); incoming = replay
-            elif index < 0:
-                incoming = no_input
-                if config.get('warmup_input'):
-                    incoming = stack.enter_context(open(config['warmup_input'], 'rb'))
-            else: incoming = None
-            if index == 0 and config.get('show_command'):
+            else:
+                incoming = None
+            visible = index == 0 and not captured_terminal
+            if visible and config.get('show_command'):
                 print(shlex.join(argv), file=sys.stderr, flush=True)
             runner.on_launch = (lambda: remember_launch(config)) if index >= 0 else None
-            return runner.run(argv, stdin=incoming, stdout=None if index == 0 else sink,
-                              stderr=sink if index < 0 else None, report=False)
-        return run_series(runner, config, launch).status
+            errors.seek(0); errors.truncate()
+            result = runner.run(argv, stdin=incoming, stdout=None if visible else sink,
+                                stderr=None if visible else errors, report=False)
+            if not visible and result.status:
+                replay_stderr(errors)
+            return result
+        return run_series(runner, series_config, launch).status
 
 
 def run_candidate(runner, config, argv, incoming, outgoing, answer, label):

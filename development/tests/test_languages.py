@@ -120,7 +120,7 @@ class LanguagesTest(unittest.TestCase):
     def test_python_debug_and_native_only_options(self):
         path = self.source(content="print(__debug__)\n")
         for command in ("debug", "debug=extra"):
-            result = self.invoke(command, path)
+            result = self.invoke(command, 'run', path)
             self.assertEqual((result.returncode, result.stdout), (0, "True\n"), result.stderr)
         for args in (("-std=23",), ("-f",), ("-o", "x"), ("--profile=pragma",)):
             self.assertEqual(self.invoke(path, *args).returncode, 2)
@@ -145,7 +145,7 @@ class LanguagesTest(unittest.TestCase):
 
     def test_python_history_retains_diagnostic_interpreter_options(self):
         path = self.source(content="import sys\nprint(sys.flags.dev_mode)\n")
-        first = self.invoke("debug", path, "--interpreter", sys.executable)
+        first = self.invoke("debug", "run", path, "--interpreter", sys.executable)
         self.assertEqual(first.returncode, 0, first.stderr)
         recalled = self.invoke("run", "-")
         self.assertEqual(recalled.stdout, first.stdout, recalled.stderr)
@@ -153,7 +153,7 @@ class LanguagesTest(unittest.TestCase):
 
     def test_history_accepts_new_explicit_interpreter_arguments(self):
         source = self.source(content='import sys; print(sys.flags.dev_mode, bool(sys.flags.dont_write_bytecode))\n')
-        first = self.invoke('debug', source)
+        first = self.invoke('debug', 'run', source)
         self.assertEqual((first.returncode, first.stdout), (0, 'True False\n'), first.stderr)
         recalled = self.invoke('run', '-', '--interpreter-arg=-B')
         self.assertEqual((recalled.returncode, recalled.stdout), (0, 'True True\n'), recalled.stderr)
@@ -163,7 +163,7 @@ class LanguagesTest(unittest.TestCase):
     @unittest.skipUnless(shutil.which("pypy3"), "PyPy is optional; exercised on Linux CI")
     def test_pypy_profiles_and_checking(self):
         path = self.source(content='print("hello")\n')
-        for args in ((path,), ("debug", path), ("debug=extra", path)):
+        for args in ((path,), ("debug", "run", path), ("debug=extra", "run", path)):
             result = self.invoke(*args, "--interpreter=pypy3")
             self.assertEqual((result.returncode, result.stdout), (0, "hello\n"), result.stderr)
         (self.cwd / "input.txt").write_text("")
@@ -202,7 +202,7 @@ class LanguagesTest(unittest.TestCase):
         for args in (("-BO",), ("-vWignore",), ("-cprint(42)",), ("-W", "ignore"), ("-Wi",), ("-Wonce",)):
             result = self.invoke("debug", source, "--", *args)
             self.assertEqual(result.returncode, 2, result.stderr)
-        accepted = self.invoke("debug", source, "--", "-X", "-O")
+        accepted = self.invoke("debug", "run", source, "--", "-X", "-O")
         self.assertEqual((accepted.returncode, accepted.stdout), (0, "True\n"), accepted.stderr)
         accepted = self.invoke("debug", source, "--", "-W", "default")
         self.assertEqual(accepted.returncode, 0, accepted.stderr)
@@ -222,7 +222,7 @@ class LanguagesTest(unittest.TestCase):
         path = self.source("main.c", '#include <stdio.h>\nint main(void) { puts("C"); }\n')
         result = self.invoke(path, "--compiler=clang", "-std", "17")
         self.assertEqual((result.returncode, result.stdout), (0, "C\n"), result.stderr)
-        result = self.invoke("debug", path, "--compiler=clang")
+        result = self.invoke("debug", "run", path, "--compiler=clang")
         self.assertEqual((result.returncode, result.stdout), (0, "C\n"), result.stderr)
 
     @unittest.skipUnless(shutil.which("clang++"), "Clang required")

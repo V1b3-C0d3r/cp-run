@@ -36,11 +36,11 @@ build_artifact() {
     CLEANUP_DIRS+=("$stage")
     command_args=("$compiler" "$source_file" "${flags[@]}" "${compiler_args[@]}" "${profile_levels[@]}" -o "$stage/${target:t}")
     if (( show_command )); then printf '%q ' "${command_args[@]}" >&2; printf '\n' >&2; fi
-    if [[ $action == compile || $action == test || $action == stress ]]; then "${command_args[@]}" >&2 || rc=$?
+    if (( compile_only )) || [[ $action == test || $action == stress ]]; then "${command_args[@]}" >&2 || rc=$?
     else "${command_args[@]}" || rc=$?; fi
     (( rc == 0 )) || return $rc
     [[ -f $stage/${target:t} ]] || fail 'compiler produced no fresh output artifact' 1
-    if [[ $action != compile ]]; then [[ -x $stage/${target:t} ]] || fail 'compiler output is not executable' 126; fi
+    if (( ! compile_only )); then [[ -x $stage/${target:t} ]] || fail 'compiler output is not executable' 126; fi
     mv -f -- "$stage/${target:t}" "$target" || fail "cannot install binary: $final" 1
     # Darwin emits .dSYM bundles beside a linked debug executable. Preserve
     # those (and ordinary compiler sidecars), otherwise external debugging

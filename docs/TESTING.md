@@ -91,6 +91,20 @@ This reads `tests/sum/1.in` and `tests/sum/1.ans`. Quotes protect braces/spaces 
 
 `--save-relpath` routes binaries under their workspace-relative source directory. `--save-test-relpath` does the same independently for data. For workspace `/project`, source `/project/tasks/A/main.cpp`, and data root `tests`, the latter reads `/project/tests/tasks/A/1.in`. `run --find` uses the corresponding invocation-relative artifact subtree.
 
+## Workspace-rooted test files
+
+To keep data at fixed workspace locations, use the literal **`{wsp-dir}`** prefix:
+
+```sh
+cp-run test=mult src/sum.cpp --wsp-dir=/projects/contest \
+  --in-tmp='{wsp-dir}/samples/{stem}/{n}.in' \
+  --ans-tmp='{wsp-dir}/answers/{stem}/{n}.ans' --cout
+```
+
+For test 2 of `sum.cpp`, those patterns read **`/projects/contest/samples/sum/2.in`** and **`/projects/contest/answers/sum/2.ans`**. `{wsp-dir}` is the workspace, `{stem}` is `sum`, and `{n}` is `2`. The explicit root replaces the usual data destination and relative subtree for that pattern; binary routing stays independent.
+
+Save these patterns under **`--set-defaults` → Test files & integrations** to reuse them. Companion and pack/unpack use the same patterns. Ordinary input/answer/report defaults also support the prefix; see [file preferences](CLI.md#workspace-rooted-file-preferences).
+
 ## Separated blocks: `test=auto`
 
 The internal delimiter is LF, ASCII **Record Separator** (byte 0x1E), LF. It is written `\n\x1e\n` in settings; pack/unpack insert it automatically. Do not manually type an invisible RS character.

@@ -44,30 +44,34 @@ def companion_samples(payload):
 def import_companion(config, payload):
     samples = companion_samples(payload)
     stem = Path(config.get("source_anchor", "main.cpp")).stem
-    entries = []
-    for number, (incoming, answer) in enumerate(samples, 1):
-        entries.extend(
-            (
-                (case_template(config.get("in_template", "./{n}.in"), stem, number), incoming),
-                (case_template(config.get("ans_template", "./{n}.ans"), stem, number), answer),
-            )
-        )
     root = layout_root(config)
+    patterns = [config.get("in_template", "./{n}.in"), config.get("ans_template", "./{n}.ans")]
+    # Mixed anchored/plain templates still share one preflight and transaction.
+    write_root = Path(config.get("workspace", ".")).resolve() if any(
+        workspace_path_suffix(pattern) is not None for pattern in patterns
+    ) else root
+    entries = []
+    for number, sample in enumerate(samples, 1):
+        for pattern, content in zip(patterns, sample):
+            case_root, relative = case_location(config, root, pattern)
+            target = contained_target(case_root, case_template(relative, stem, number))
+            entries.append((target.relative_to(write_root), content))
     # Detect stale samples: never leave a previous problem's extra tests behind
     # and accidentally run them as part of a new import.
     for key, suffix in (("in_template", "in"), ("ans_template", "ans")):
         pattern = config.get(key, "./{n}." + suffix)
-        if root.is_dir():
+        case_root, pattern = case_location(config, root, pattern)
+        if case_root.is_dir():
             try:
-                old = discover_cases(root, pattern, stem)
+                old = discover_cases(case_root, pattern, stem)
             except CheckSetupError:
                 old = {}
             if set(old) - set(range(1, len(samples) + 1)):
                 raise CheckUsageError(
                     "existing extra samples would remain; choose a clean test directory"
                 )
-    write_test_files(root, entries, bool(config.get("overwrite")), config.get("protected", []))
-    return len(samples), root
+    write_test_files(write_root, entries, bool(config.get("overwrite")), config.get("protected", []))
+    return len(samples), write_root
 
 
 def companion_server(address, handler):

@@ -190,17 +190,23 @@ class ReleaseCliTest(unittest.TestCase):
         self.assertEqual((self.cwd / 'real-out.txt').read_text(), 'hello\n')
         self.assertIn('FAILED REPEAT 2', (self.cwd / 'test_out').read_text())
 
-    def test_repeated_terminal_input_is_rejected_without_launch(self):
+    def test_repeated_terminal_input_is_recorded_once_and_replayed(self):
         program, counter = self.counter_program()
         master, slave = os.openpty()
+        process = None
         try:
-            result = subprocess.run([str(SCRIPT), 'run', str(program), '-t', '--average=2'],
-                stdin=slave, cwd=self.cwd, env=self.environment(), capture_output=True, timeout=20)
-            self.assertEqual(result.returncode, 2, result.stderr)
-            self.assertIn(b'terminal', result.stderr)
-            self.assertFalse(counter.exists())
+            process = subprocess.Popen([str(SCRIPT), 'run', str(program), '-t', '--average=2'],
+                stdin=slave, cwd=self.cwd, env=self.environment(),
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            os.write(master, b'terminal input\n\x04')
+            stdout, stderr = process.communicate(timeout=20)
+            self.assertEqual(process.returncode, 0, stderr)
+            self.assertEqual(stdout, b'run=1\nterminal input\n')
+            self.assertEqual(counter.read_text(), '4')
         finally:
             os.close(master); os.close(slave)
+            if process is not None and process.poll() is None:
+                process.kill(); process.communicate()
 
     def test_setup_failure_does_not_replace_binary_history(self):
         first = self.binary('first.bin', 'printf "first\\n"\n')

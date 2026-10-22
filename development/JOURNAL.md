@@ -62,3 +62,18 @@
 
 - A language-specific settings audit caught native operand rules being applied to Python's standalone -B/-I switches. The shared editor now receives the backend grammar explicitly; added menu, toggle and actual-interpreter regressions. No execution-path work was added.
 - Owner requested more visible beginner commands and a stronger README. The lead now demonstrates source discovery, sample checking, stress and reduction before installation/reference details.
+
+## Workspace-rooted paths and interactive repeated runs
+
+- Added literal {wsp-dir}/PATH support to saved source/input/output/answer/report paths, stress-role defaults and numbered templates. CLI file roles use the same expansion. Workspace lookup is lazy and separate from artifact destination validation, preserving exact -o bypass.
+- Shared rooted template handling across mult, pack/unpack and Companion; kept parent/symlink/collision checks and added nested-workspace, menu/export and mixed-root coverage. Published version snapshots and release assets remain untouched.
+- Replaced the repeated-TTY rejection with one visible, bounded input-recording run, followed by hidden warm-up/measurements using the saved bytes. The capture is outside statistics. No-input programs need no EOF; cancellation stops the relay.
+- Hidden successful stderr is discarded; hidden execution errors replay complete stderr and preserve status. Added real PTY/no-input/failure/cancellation checks and an exact median-ownership regression. Test/stress repetition semantics are unchanged.
+
+- Full first checkpoint: 441 tests, three errors: an obsolete test still expected terminal rejection, and two local-HTTP tests were denied by the filesystem-only sandbox grant. Updated the obsolete contract test and requested network access for actual loopback verification.
+- Extended recorded input to warm-up-only ordinary runs as well, so warm-ups use the same data and no runtime failure is silently discarded. Updated ordinary-launch regressions only; checking/stress execution and verdict contracts remain unchanged.
+- Added --compile, --debug[=PROFILE] and --run command aliases, accepted first or after FILE. Conflicting operations fail before tool discovery; backend/runtime tails and native option operands stay literal. Eight focused alias regressions pass, including Python syntax-only compilation and run --find.
+- Before the final behavior change, the isolated archive passed all 452 tests in 260.109 s. A source-tree checkpoint was invalidated by temporary ENOENT for the installable script; the final gate uses an isolated archive.
+- Owner changed the debug command contract before commit: debug/--debug now only prepare and print the target path; debug run and combined --debug --run explicitly build and execute. Kept debug profile/routing ownership, added a shared build-only guard and two argument boundaries for debug run. Updated documentation and execution-specific regressions; final checks are pending.
+- Final changed-code archive: 456 tests in 265.874 s; 454 passed, and two newly added native assertions needed macOS /var -> /private/var canonicalization. Corrected only their expected path, then reran all 16 real GCC/Clang regressions: passed in 18.343 s. No application code changed after that full run. Real C/Python smoke checks independently confirm build-only debug and explicit debug-run status propagation.
+- Verified 26 local Markdown links/anchors, generated-script reproducibility, exact script/new-test inclusion in the archive, zsh syntax and clean diff whitespace. All 39 frozen snapshot hashes match. Public v1.1 assets and frozen version folders are unchanged; the follow-up is a source commit.

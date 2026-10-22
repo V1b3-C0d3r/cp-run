@@ -12,7 +12,8 @@ Open a directory containing your solution — `main.cpp`, `main.c` or `main.py` 
 
 ```sh
 cp-run                         # Find the source, compile if needed, and run
-cp-run debug                   # Run with a diagnostic profile
+cp-run debug                   # Build with diagnostics; do not run
+cp-run debug run               # Build with diagnostics, then run
 cp-run compile                 # Prepare the program without running it
 cp-run test --cout             # Check input.txt against ans.txt
 cp-run stress --test-iters=100  # Find main, brute and gen; compare 100 generated tests
@@ -105,14 +106,14 @@ cp-run main.c --compiler=clang
 cp-run main.py                        # PyPy, with its normal JIT enabled
 cp-run main.py --interpreter=python3  # CPython instead
 cp-run main.py -- -- --input data.txt # Arguments for your program
-cp-run debug=extra main.cpp           # Stricter diagnostic profile
+cp-run debug=extra run main.cpp       # Build and run a stricter diagnostic profile
 cp-run main.cpp -tm --average=5       # One stdout; median time, maximum peak RSS
 cp-run main.cpp --profile=pragma-native
 ```
 
 C/C++ use **`-O2`** and the newest ISO standard advertised by the compiler, including draft modes. Native debug profiles use sanitizers and checks selected from the **actual C++ library**; Python profiles use interpreter diagnostics. The `pragma` profiles provide native optimization flag sets. Fast-math changes floating-point behavior, and host-tuned binaries may not run on another CPU. [Profile components and safeguards](docs/CLI.md#languages-and-profiles).
 
-**Make it yours:** `cp-run --set-defaults` → **Languages & tools → Language/compiler defaults** selects a preferred language, separate C/C++ compilers and the Python interpreter. Settings also cover profiles, warnings, paths and limits. Explicit command options override saved defaults. [Discovery and precedence](docs/CLI.md#source-discovery-and-language-defaults).
+**Make it yours:** `cp-run --set-defaults` → **Languages & tools → Language/compiler defaults** selects a preferred language, separate C/C++ compilers and the Python interpreter. Settings also cover profiles, warnings, paths and limits. Use **`{wsp-dir}/data/input.txt`** in a file default to keep it relative to the workspace; [path examples](docs/CLI.md#workspace-rooted-file-preferences). Explicit command options override saved defaults. [Discovery and precedence](docs/CLI.md#source-discovery-and-language-defaults).
 
 Settings live inside the installed script. Before replacing it, export them, install the new version, then import:
 

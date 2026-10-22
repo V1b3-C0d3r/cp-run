@@ -9,6 +9,7 @@
 ```text
 cp-run [FILE] [OPTIONS] [-- BACKEND_ARGS [-- PROGRAM_ARGS]]
 cp-run compile|debug[=PROFILE] [FILE] [OPTIONS] [-- BACKEND_ARGS]
+cp-run debug[=PROFILE] run [FILE] [OPTIONS] [-- BACKEND_ARGS [-- PROGRAM_ARGS]]
 cp-run run [TARGET] [OPTIONS] [-- PROGRAM_ARGS]
 cp-run test[=auto|mult] [run] [CASE...] [FILE [IN [ANS [REPORT]]]] [OPTIONS]
 cp-run stress [run] [MAIN [BRUTE [GEN]]] [OPTIONS]
@@ -17,16 +18,21 @@ cp-run --pack=in|ans [DIR [BUNDLE]] [OPTIONS]
 cp-run --unpack=in|ans [BUNDLE [DIR]] [OPTIONS]
 ```
 
-The ordinary command and source test/stress accept two boundaries: the first starts backend arguments, the second starts program arguments. Binary/interpreted `run` variants have one program boundary. `compile` and `debug` retain their one-backend-tail contract.
+**`debug` never runs by default.** Like `compile`, it prepares the program and prints its absolute target path. Add `run` explicitly: `cp-run debug run main.cpp` or `cp-run debug=extra run main.cpp`. Runtime options such as `-t`, `-m` and stream redirection require that explicit run.
+
+**Extension aliases:** `--compile`, `--debug[=PROFILE]` and `--run` select the corresponding command. Put them first or after FILE, before an argument boundary. `cp-run --compile main.cpp` and `cp-run main.cpp --compile` both compile without running. `cp-run main.cpp --debug` builds without running; **`cp-run --debug --run main.cpp`** builds and runs. The two flags also work after FILE and in either order. Standalone `--run` runs an existing target: `cp-run ./main.out --run -- --verbose`. Other conflicting commands are errors. After `--`, aliases remain literal backend/program arguments. To request the compiler's debug information alone, use `-g` (or pass GNU `--debug` in the backend tail).
+
+The ordinary command, `debug run` and source test/stress accept two boundaries: the first starts backend arguments, the second starts program arguments. Binary/interpreted `run` variants have one program boundary. Build-only `compile` and `debug` have one backend tail.
 
 ```sh
 cp-run main.cpp -- -I include -- --input data.txt
 cp-run main.py -- -X dev -- --input data.txt
 cp-run run ./main.out -- --input data.txt
+cp-run debug run main.cpp -- -DTRACE -- --input data.txt
 cp-run test main.cpp -- -DTESTING -- --verbose
 ```
 
-Unknown options before a boundary go to the backend. After the runtime boundary, everything is program data. Managed numeric `-std` shorthand is translated only before the backend boundary; `-- -std=20` remains literally `-std=20` for the compiler to accept/reject. Use `--show-command` to inspect the actual escaped build/launch argv on stderr. Display quoting is never executed. Before the backend boundary, legacy GNU aliases (`--ansi`, `--no-warnings`, `--optimize`, `--debug`) have their equivalent Clang spelling when Clang is selected; the raw tail is never translated.
+Unknown options before a boundary go to the backend. After the runtime boundary, everything is program data. Managed numeric `-std` shorthand is translated only before the backend boundary; `-- -std=20` remains literally `-std=20` for the compiler to accept/reject. Use `--show-command` to inspect the actual escaped build/launch argv on stderr. Display quoting is never executed. Before the backend boundary, legacy GNU aliases (`--ansi`, `--no-warnings`, `--optimize`) have their equivalent Clang spelling when Clang is selected; the raw tail is never translated.
 
 ## Source discovery and language defaults
 
@@ -57,7 +63,7 @@ FILE `-` recalls the workspace's last source or launched target; `./-` is litera
 | `--no-w` | Removes baseline native warnings. Incompatible with diagnostic profiles; explicit/common profile warning flags remain. |
 | `--show-command` | Show escaped build/run commands on stderr. Otherwise compiler/program diagnostics are unwrapped. |
 
-`compile` prints an absolute native artifact path. For Python it validates syntax without running/importing the program and prints the original source path; no `.out`/portable `.pyc` is created. `run` accepts readable `.py` even without executable permission. Python does not support explicit native `-o`, `-std` or macro action.
+`compile` and build-only `debug` print an absolute native artifact path. For Python they validate syntax without running/importing the program and print the original source path; no `.out`/portable `.pyc` is created. `debug run` explicitly executes the prepared program. `run` accepts readable `.py` even without executable permission. Python does not support explicit native `-o`, `-std` or macro action. `--profile` selects flags without changing the operation: ordinary `cp-run main.cpp --profile=debug` still builds and runs.
 
 **Built-in diagnostic components:**
 
@@ -71,7 +77,7 @@ FILE `-` recalls the workspace's last source or launched target; `./-` is litera
 
 Native `debug` combines sanitizers, frame pointers and assertions for actual libstdc++/libc++ headers. `extra` strengthens warnings, bounds/library checks and debug information. C omits C++ library flags. Diagnostic profiles reject known weakening options in both managed and backend arguments; unsupported required diagnostics fail clearly. For example, `debug -- -O0` is allowed, but `debug -- -O3`, disabling sanitizers, response files and warning suppression are rejected.
 
-For example, `cp-run debug main.py --interpreter=python3 --show-command` launches `python3 -X dev -W default main.py` (paths are resolved in actual output). `debug=extra` replaces the warning action with `error`.
+For example, `cp-run debug run main.py --interpreter=python3 --show-command` launches `python3 -X dev -W default main.py` (paths are resolved in actual output). Without `run`, it only validates syntax and prints the source path. `debug=extra run` replaces the warning action with `error`.
 
 Python `debug`/`extra` use implementation-specific runtime diagnostics, not native sanitizers or an automatic debugger. Assertion-removing optimization and conflicting warning filters are rejected, including `PYTHONOPTIMIZE`. The requested interpreter reports its implementation/version; CPython development diagnostics require 3.7+. Ordinary Python execution has no extra version-probe process. Native `-O` is unrelated to Python's `-O`/`-OO` assertion removal.
 
@@ -94,6 +100,31 @@ Plain `pragma`, `pragma-fast`, `pragma-native` are native driver flag sets, not 
 Settings precedence, per field: **explicit CLI > selected profile override > operation/submode override > global fallback > factory value**. An absent map entry inherits; `0` explicitly disables a saved boolean. Submodes inherit `test`. These settings are editable under `--set-defaults` → Action/profile routing.
 
 Relative-path binary lookup is exactly `workspace/destination/relative-path/NAME[.out]`. Relative source/data paths are physically checked for containment. Do not use `..` in workspace-relative destinations/templates. Exact output bypass does not exempt independently used test-data paths from checks.
+
+## Workspace-rooted file preferences
+
+Prefix a saved filename with **`{wsp-dir}/`** to resolve it from the selected workspace, including when running from a nested directory. For example, in **`--set-defaults` → Files**:
+
+| Setting | Example |
+| --- | --- |
+| Fallback source | `{wsp-dir}/src/main.cpp` |
+| Input | `{wsp-dir}/data/input.txt` |
+| Answer | `{wsp-dir}/data/ans.txt` |
+| Redirected output | `{wsp-dir}/data/output.txt` |
+| Test/stress report | `{wsp-dir}/logs/test_out` |
+
+C/Python fallback sources, the stress reference and generator accept the same prefix in their menus. Parent directories for ordinary I/O and report files must already exist. Discovery still prefers a sole local source before consulting the configured fallback.
+
+Without the prefix, relative file paths keep their usual meaning: **relative to the invocation directory**. The token must be at the start, followed by `/` and a path; `..` and symlinks escaping the workspace are rejected. It is literal data, never shell expansion. Settings export/import preserves it.
+
+The same prefix works in explicit source, `-o`, redirection and checking file operands; quote it in shell commands:
+
+```sh
+cp-run test '{wsp-dir}/src/main.cpp' '{wsp-dir}/data/input.txt' \
+  '{wsp-dir}/data/ans.txt' --wsp-dir=/projects/contest --cout
+```
+
+Numbered patterns also accept it: **`{wsp-dir}/samples/{stem}/{n}.in`** starts at the workspace instead of the usual test-data destination/subtree. Input and answer patterns may use different roots. Mult, pack/unpack and Companion share this interpretation. [Concrete template example](TESTING.md#workspace-rooted-test-files).
 
 ## File I/O
 
@@ -118,9 +149,11 @@ Bare action and macro name are editable. Auto defaults to input.txt/output.txt. 
 | `--average[=N]` | Saved default 1; bare uses saved value; 0 means one. Up to 100000. |
 | `--time-unit=s|ms` | ms. |
 | `--memory-unit=B|KB|KiB|MB|MiB` | KiB; larger-unit equivalent is added when appropriate. |
-| `--TLE=MS`, `--MLE=MiB` | Positive integers or `inf`. Ordinary/debug/run unlimited; test/stress 1500 ms / 256 MiB per process. |
+| `--TLE=MS`, `--MLE=MiB` | Positive integers or `inf`. Ordinary execution, `debug run` and `run` are unlimited; test/stress use 1500 ms / 256 MiB per process. |
 
-Repetition needs `-t` or `-m`. Build once, warm once when selected, measure N launches. Report median elapsed time and maximum peak RSS; expose first measured stdout once. Every measured output is checked. A hidden failed repeat has separate evidence and cannot replace the first stdout or disappear in a median. Repeated terminal stdin is rejected; redirected input is replayed with a bounded spool.
+Repetition needs `-t` or `-m`. Build once, warm once when selected, measure N launches. Report median elapsed time and maximum peak RSS; expose first measured stdout once. Every measured output is checked. A hidden failed repeat has separate evidence and cannot replace the first stdout or disappear in a median. For redirected input, the first measured stdout is shown and input is replayed from the file or a bounded spool.
+
+With **terminal input and several launches (`--average>1` or an enabled warm-up)**, cp-run first runs the program visibly and records stdin through a pipe. This preparation run is excluded from statistics so typing does not affect the median. A program needing no input finishes without waiting for EOF. Then the recorded input feeds the optional hidden warm-up and N hidden measured runs. Thus this path performs one extra visible launch. Only that visible stdout is shown; successful hidden stdout/stderr is discarded. A failed visible, replayed warm-up or measured run stops the job with its status; failed hidden stderr is replayed in full. Limits still apply to each execution. A single terminal measurement without warm-up remains direct. Test/stress protocols retain their existing behavior.
 
 Measurements exclude compilation/preparation/checking. Python includes interpreter startup/imports. PyPy JIT state does not persist across fresh processes. Native OS peak RSS is measured in bytes internally; it is not virtual address-space size or a promise of online-judge equivalence.
 
@@ -184,6 +217,6 @@ Formatter output goes to stderr, leaving stdout for program output or the compil
 
 ## Diagnostics and exit status
 
-`--doctor` lists required/optional tools without installing them. `--help` needs no compiler; `--version` shows script and selected compiler versions; an explicit interpreter selects its version instead. Compilation diagnostics stay on console. Test runtime stderr is captured fully in its protocol; ordinary stderr stays direct.
+`--doctor` lists required/optional tools without installing them. `--help` needs no compiler; `--version` shows script and selected compiler versions; an explicit interpreter selects its version instead. Compilation diagnostics stay on console. Test runtime stderr is captured fully in its protocol; the visible ordinary run keeps direct stderr; successful hidden runs stay silent and failed hidden stderr is replayed.
 
 Exit 0 means success; wrapper usage errors use 2, WA 3, unfinished comparison 4, TLE 124, MLE 125, interruption 130/143. Native compiler/runtime errors retain meaningful nonzero statuses. Do not infer verdicts from exit number alone; a program's own exit 3 is RE, not WA.

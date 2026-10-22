@@ -100,6 +100,8 @@ In `runtime/`:
 ```sh
 cp-run main.cpp -tm -- -- --echo='hello world' --sleep=60 --memory=16
 cp-run compile main.cpp -o program.out
+cp-run debug main.cpp                 # Build only; print the target path
+cp-run debug run checks.cpp           # Deliberate undefined behavior; nonzero exit
 cp-run run ./program.out -tm --average=3 --warm-up=0 -- --echo=once --sleep=60
 cp-run run - -- --echo=history
 ```

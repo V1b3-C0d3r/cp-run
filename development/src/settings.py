@@ -194,14 +194,28 @@ def _settings_choice(*choices):
 
 
 def _settings_filename(value):
-    if '/' in value or value in ('.', '..') or not value.endswith(('.cpp', '.cc', '.cxx', '.C', '.c', '.py')):
-        raise ValueError('use a C/C++/Python filename without directory components')
+    _settings_file_path(value)
+    if not value.endswith(('.cpp', '.cc', '.cxx', '.C', '.c', '.py')):
+        raise ValueError('use a C/C++/Python source path')
+    return value
+
+
+def _settings_file_path(value):
+    """Saved file paths are literal; only a leading workspace token is special."""
+    relative = workspace_path_suffix(value)
+    if not value or relative == "":
+        raise ValueError('use a filename, optionally prefixed with {wsp-dir}/')
     return value
 
 
 def _settings_destination(value):
     """Match routing's lexical rules; physical containment is checked at use."""
-    if Path(value).is_absolute() or '..' in Path(value).parts:
+    relative = workspace_path_suffix(value)
+    if relative is not None:
+        value_for_check = relative or '.'
+    else:
+        value_for_check = value
+    if Path(value_for_check).is_absolute() or '..' in Path(value_for_check).parts:
         raise ValueError('use a workspace-relative path without .. components')
     return value
 
@@ -504,9 +518,9 @@ def edit_settings(script_path):
         ('DEFAULT_SOURCE', 'Fallback source', _settings_filename),
         ('DEFAULT_WORKSPACE', 'Workspace path', None),
         ('DEFAULT_DESTINATION', 'Workspace-relative destination', _settings_destination),
-        ('DEFAULT_INPUT', 'Input file', None), ('DEFAULT_ANSWER', 'Answer file', None),
-        ('DEFAULT_OUTPUT', 'Redirected program output', None),
-        ('DEFAULT_REPORT', 'Test/stress report', None),
+        ('DEFAULT_INPUT', 'Input file ({wsp-dir}/PATH supported)', _settings_file_path), ('DEFAULT_ANSWER', 'Answer file ({wsp-dir}/PATH supported)', _settings_file_path),
+        ('DEFAULT_OUTPUT', 'Redirected program output', _settings_file_path),
+        ('DEFAULT_REPORT', 'Test/stress report', _settings_file_path),
         ('DEFAULT_F_MODE', 'Bare -f action', _settings_choice('macro', 'auto', 'in', 'out')),
         ('DEFAULT_MACRO', '-f macro identifier', _settings_macro),
         ('DEFAULT_RELPATH_DESTINATION', 'Destination with --save-relpath', _settings_destination),

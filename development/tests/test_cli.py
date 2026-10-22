@@ -870,19 +870,16 @@ class CliTest(unittest.TestCase):
         self.assertEqual(result.stderr.count('peak RSS:'), 1)
         self.assertNotIn('cp-run: time:', result.stderr)
 
-    def test_warmup_first_time_and_failure_are_discarded(self):
+    def test_warmup_runtime_error_stops_and_preserves_stderr(self):
         counter = self.root / 'starts'
         result = self.invoke(self.source.name, '-tm', env={
-            'FAKE_PROGRAM_COUNTER': str(counter), 'FAKE_FIRST_SLEEP': '.3',
-            'FAKE_FIRST_STDOUT': 'hidden output\n', 'FAKE_FIRST_STDERR': 'hidden error\n',
-            'FAKE_FIRST_STATUS': '7', 'FAKE_PROGRAM_SLEEP': '.03', 'FAKE_PROGRAM_STDOUT': 'measured\n'})
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(counter.read_text(), '2')
-        self.assertEqual(result.stdout, 'measured\n')
-        self.assertNotIn('hidden', result.stderr)
-        shown = float(re.search(r'time: (\d+\.\d{3}) ms', result.stderr)[1])
-        self.assertGreaterEqual(shown, 25)
-        self.assertLess(shown, 250, 'the first 300ms sleep must stay outside the second timer')
+            'FAKE_PROGRAM_COUNTER': str(counter),
+            'FAKE_FIRST_STDOUT': 'hidden output\n', 'FAKE_FIRST_STDERR': 'runtime error\n',
+            'FAKE_FIRST_STATUS': '7', 'FAKE_PROGRAM_STDOUT': 'must not run\n'})
+        self.assertEqual(result.returncode, 7, result.stderr)
+        self.assertEqual(counter.read_text(), '1')
+        self.assertEqual(result.stdout, '')
+        self.assertEqual(result.stderr, 'runtime error\n')
 
     def test_warmup_does_not_consume_piped_runtime_input(self):
         counter = self.root / 'starts'
@@ -917,7 +914,7 @@ class CliTest(unittest.TestCase):
     def test_warmup_second_exit_status_is_preserved(self):
         counter = self.root / 'starts'
         result = self.invoke(self.source.name, '-t', env={
-            'FAKE_PROGRAM_COUNTER': str(counter), 'FAKE_FIRST_STATUS': '7', 'FAKE_PROGRAM_STATUS': '9'})
+            'FAKE_PROGRAM_COUNTER': str(counter), 'FAKE_FIRST_STATUS': '0', 'FAKE_PROGRAM_STATUS': '9'})
         self.assertEqual(result.returncode, 9, result.stderr)
         self.assertEqual(counter.read_text(), '2')
 
@@ -952,7 +949,7 @@ class CliTest(unittest.TestCase):
             os.write(master, b'terminal input\n')
             stdout, stderr = process.communicate(timeout=20)
             self.assertEqual(process.returncode, 0, stderr)
-            self.assertEqual(counter.read_text(), '2')
+            self.assertEqual(counter.read_text(), '3')
             self.assertEqual(stdout, 'terminal input\n')
         finally:
             os.close(master)
@@ -982,7 +979,7 @@ class CliTest(unittest.TestCase):
 
     def test_warmup_applies_to_explicit_debug_and_binary_run(self):
         counter = self.root / 'starts'
-        result = self.invoke('debug', self.source.name, '-tm', env={'FAKE_PROGRAM_COUNTER': str(counter)})
+        result = self.invoke('debug', 'run', self.source.name, '-tm', env={'FAKE_PROGRAM_COUNTER': str(counter)})
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(counter.read_text(), '2')
         result = self.invoke('run', str(self.cwd / 'main file.out'), '-tm', env={'FAKE_PROGRAM_COUNTER': str(counter)})

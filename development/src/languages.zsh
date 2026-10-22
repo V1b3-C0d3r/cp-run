@@ -132,6 +132,7 @@ resolve_action_defaults() {
 # An explicit saved filename still wins when it exists.
 discover_role() {
     local requested=$1 stem=$2 preferred suffix
+    workspace_file_path "$requested"; requested=$value
     if [[ -f $requested ]]; then value=$requested; return; fi
     case "$primary_language" in c) suffix=c ;; python) suffix=py ;; *) suffix=cpp ;; esac
     preferred="$stem.$suffix"

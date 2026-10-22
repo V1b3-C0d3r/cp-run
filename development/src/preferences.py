@@ -47,6 +47,10 @@ def validate_preferences(values):
         _settings_destination(data[key])
     for key in ('DEFAULT_WORKSPACE', 'DEFAULT_INPUT', 'DEFAULT_OUTPUT', 'DEFAULT_ANSWER', 'DEFAULT_REPORT'):
         if not data[key]: raise ValueError('empty setting: ' + key)
+    for key in ('DEFAULT_INPUT', 'DEFAULT_OUTPUT', 'DEFAULT_ANSWER', 'DEFAULT_REPORT'):
+        _settings_file_path(data[key])
+    if '{wsp-dir}' in data['DEFAULT_WORKSPACE']:
+        raise ValueError('workspace path cannot refer to itself with {wsp-dir}')
     # Optional map entries inherit; an explicit zero remains a real override.
     actions = {'ordinary', 'compile', 'debug', 'run', 'test', 'test-auto', 'test-mult', 'stress', 'companion'}
     for key in ('ACTION_DEST_DIR', 'ACTION_SAVE_RELPATH', 'ACTION_SAVE_TEST_RELPATH'):

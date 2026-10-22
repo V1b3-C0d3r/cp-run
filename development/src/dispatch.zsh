@@ -14,6 +14,8 @@ cleanup() {
 
 main() {
     local interpreter_info=
+    # Discovery fallbacks remain editable data, scoped to this invocation.
+    local DEFAULT_SOURCE=$DEFAULT_SOURCE C_SOURCE=$C_SOURCE PYTHON_SOURCE=$PYTHON_SOURCE
     local language=c++ primary_language=c++ interpreter= interpreter_choice=$DEFAULT_INTERPRETER language_choice=$DEFAULT_LANGUAGE
     local action=ordinary source_file= compiler_choice=$DEFAULT_COMPILER family= compiler= compiler_banner= profile=none
     local workspace_dir=$DEFAULT_WORKSPACE workspace_name= destination=$DEFAULT_DESTINATION workspace= workspace_prefix=
@@ -35,7 +37,7 @@ main() {
     local -i data_controls=0 layout_controls=0 companion_controls=0 source_given=0 report_controls=0 bundle_given=0
     local -i overwrite=0 text_conversion=0 stop_on_failure=0
     local -i positional_count=0 mult=0 save_test_relpath=0 relpath_given=0 test_relpath_given=0
-    local -i timeout_given=0 memory_given=0 measurement_controls=0
+    local -i timeout_given=0 memory_given=0 measurement_controls=0 debug_run=0 compile_only=0
     local -a interpreter_args=() recalled_launch=() launch_args=() primary_launch=() original_compiler_args=() original_standards=()
     local -a compiler_args=() runtime_args=() cases=() sources=() artifacts=() protected_files=() build_indices=()
     local -A config=() compiler_paths=() compiler_banners=() standard_vocab=()
@@ -45,6 +47,9 @@ main() {
     # A normal exec replaces this process only after all temporary work is done.
     trap cleanup EXIT
     parse_cli "$@"
+    # Build-only debug retains its own profile/routing defaults. Only an
+    # explicit run modifier permits runtime I/O, observation and execution.
+    if [[ $action == compile || $action == debug && $debug_run == 0 ]]; then compile_only=1; fi
     if (( help_requested )); then show_help; return; fi
     if (( doctor_requested )); then
         config=(interpreter "$interpreter_choice" native_formatter "$NATIVE_FORMATTER" python_formatter "$PYTHON_FORMATTER")
@@ -53,7 +58,8 @@ main() {
     if [[ $prettier == only || $prettier == check || $prettier == auto && $action == ordinary && $positional_count == 0 ]]; then
         (( ! binary_mode && ! ${#compiler_args} && ! ${#runtime_args} && ! output_given )) || fail 'format-only action does not compile or run; provide a source file'
         [[ $profile == none || -n ${MODE_KIND[$profile]-} ]] || fail "profile not found: $profile"
-        [[ -n $source_file ]] || select_source
+        if [[ -n $source_file ]]; then workspace_file_path "$source_file"; source_file=$value
+        else select_source; fi
         protected_files=("${source_file:A}")
         config=(prettier "$prettier" native_formatter "$NATIVE_FORMATTER" python_formatter "$PYTHON_FORMATTER")
         python_action format; return $?
@@ -112,7 +118,6 @@ main() {
     [[ -z $minimize && -z $validator || $action == stress ]] || fail 'counterexample reduction requires stress'
     [[ -z $validator || -n $minimize ]] || fail '--validator requires --minimize'
     if [[ $minimize == lines || $minimize == cases ]]; then [[ -n $validator ]] || fail 'this reduction strategy requires --validator'; fi
-    if [[ -n $validator ]]; then validator=${validator:A}; [[ -f $validator && ( -x $validator || $validator == *.py ) ]] || fail 'validator must be executable or a Python script'; fi
     resolve_action_defaults
     # Select routing defaults after parsing so an explicit destination wins
     # in either option order. Exact -o paths still bypass routing entirely.
@@ -128,7 +133,7 @@ main() {
     if (( binary_mode )); then
         [[ $profile == none && $f_mode != macro ]] && (( ! ${#compiler_args} && ! output_given )) || fail 'binary execution cannot use compilation options'
     elif [[ -n $find_name ]]; then fail '--find requires run, test run or stress run'; fi
-    if [[ $action == compile ]]; then
+    if (( compile_only )); then
         (( ! measure_time && ! measure_memory && ! ${#runtime_args} )) && [[ $f_mode != auto && $f_mode != in && $f_mode != out ]] || fail 'runtime options require an execution command'
     fi
     case "$f_mode" in none|auto|in|out) ;; macro) macro_file_io=1 ;; *) fail 'invalid saved -f mode; use --set-defaults' ;; esac
@@ -138,6 +143,34 @@ main() {
         [[ $value == <-> && ${#value} -le 12 ]] && (( 10#$value > 0 )) || fail "$option_name requires a positive integer (up to 12 digits) or inf"
     done
     cwd=$(pwd -P) || fail 'cannot resolve the current directory' 1
+    # Expand only file roles used by this operation; unused preferences must
+    # not turn a direct run/-o invocation into a workspace lookup.
+    if [[ -n $source_file ]]; then workspace_file_path "$source_file"; source_file=$value; fi
+    if (( output_given )); then workspace_file_path "$output"; output=$value; fi
+    if [[ $action == test ]] && (( ! console_in && ! mult )); then
+        workspace_file_path "$input_file"; input_file=$value
+        workspace_file_path "$answer_file"; answer_file=$value
+    fi
+    if [[ $action == test || $action == stress ]] && (( ! console_out )); then
+        workspace_file_path "$report_file"; report_file=$value
+    fi
+    if [[ $f_mode == auto || $f_mode == in ]]; then workspace_file_path "$input_file"; input_file=$value; fi
+    if [[ $f_mode == auto || $f_mode == out ]]; then workspace_file_path "$result_file"; result_file=$value; fi
+    if [[ -n $validator ]]; then
+        workspace_file_path "$validator"; validator=${value:A}
+        [[ -f $validator && ( -x $validator || $validator == *.py ) ]] || fail 'validator must be executable or a Python script'
+    fi
+    if [[ $action == stress ]]; then
+        workspace_file_path "$brute_file"; brute_file=$value
+        workspace_file_path "$generator_file"; generator_file=$value
+    fi
+    if [[ $action == pack || $action == unpack ]]; then
+        workspace_file_path "$data_input"; data_input=$value
+        workspace_file_path "$data_output"; data_output=$value
+        # These defaults also supply the manual-file and .bundle names.
+        if [[ $bundle_stream == in ]]; then workspace_file_path "$input_file"; input_file=$value
+        else workspace_file_path "$answer_file"; answer_file=$value; fi
+    fi
     if [[ $source_file == - ]]; then
         resolve_workspace
         history_location || fail 'launch history is not accessible' 1
@@ -157,6 +190,7 @@ main() {
     fi
     if [[ $action == companion ]]; then
         source_file=${source_file:-$DEFAULT_SOURCE}
+        workspace_file_path "$source_file"; source_file=$value
         config=(source_anchor "${source_file:A}" workspace "$workspace" destination "$destination" test_dir "$test_dir"
                 save_test_relpath "$save_test_relpath" in_template "$in_template" ans_template "$ans_template"
                 overwrite "$overwrite" port "$companion_port" wait "$companion_wait" max_spool "$MAX_SPOOL_BYTES")
@@ -169,6 +203,7 @@ main() {
             if (( ${#anchors} == 1 )); then source_file=${anchors[1]}
             else source_file=$DEFAULT_SOURCE; fi
         fi
+        workspace_file_path "$source_file"; source_file=$value
         config=(operation "$action" workspace "$workspace" destination "$destination" test_dir "$test_dir"
                 save_test_relpath "$save_test_relpath" default_input "$input_file" default_answer "$answer_file"
                 bundle_stream "$bundle_stream" data_input "$data_input" data_output "$data_output"
@@ -285,7 +320,7 @@ main() {
                     (( ! output_given && ! macro_file_io && ! std_seen )) || fail 'Python does not use -o, -std or a file-I/O macro'
                 fi
                 python_launch "${sources[index]}" "$profile" || return $?
-                if [[ $action == compile || $action == test || $action == stress ]]; then
+                if (( compile_only )) || [[ $action == test || $action == stress ]]; then
                     compiler_banner=$("$interpreter" -c 'import pathlib,sys; p=sys.argv[1]; compile(pathlib.Path(p).read_bytes(), p, "exec"); print(sys.implementation.name, sys.version)' "${sources[index]}") || {
                         local build_status=$?
                         if [[ $action == test || $action == stress ]]; then config[build_status]=$build_status; config[failed_role]=$role; python_action ce; fi
@@ -359,7 +394,7 @@ main() {
             fi
         done
     fi
-    if [[ $action == compile ]]; then printf '%s\n' "$output_abs"; return; fi
+    if (( compile_only )); then printf '%s\n' "$output_abs"; return; fi
     if history_location; then config[history_binary]="$history_directory/binary"; fi
     if [[ $action == test || $action == stress ]]; then python_action "$action"; return $?; fi
 
@@ -370,10 +405,9 @@ main() {
         printf '\n' >&2
         config[show_command]=0; show_command=0
     fi
-    # Open only requested streams. Native and observed paths inherit the same
-    # descriptors; only redirected input is eligible for warm-up replay.
+    # Redirect before launching the observer so it can replay the same input.
+    # Direct and measured execution inherit identical program descriptors.
     if [[ $f_mode == auto || $f_mode == in ]]; then
-        config[warmup_input]=$input_file
         exec < "$input_file" || return $?
     fi
     if [[ $f_mode == auto || $f_mode == out ]]; then exec > "$result_file" || return $?; fi

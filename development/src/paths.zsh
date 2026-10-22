@@ -1,6 +1,7 @@
 # Resolve workspace routing once, for compilation or run --find.
 # An explicit binary path skips this branch just like an explicit -o path.
-resolve_workspace() {
+resolve_workspace_root() {
+    [[ -z $workspace ]] || return 0
     local requested
     if (( name_given )); then
         case "$workspace_name" in ''|.|..|*/*) fail 'workspace name must be one nonempty directory name' ;; esac
@@ -8,7 +9,7 @@ resolve_workspace() {
     if (( dir_given || ! name_given )); then
         requested=$workspace_dir
         case "$requested" in
-            .|./|"$cwd"|"$cwd"/) workspace=$cwd ;;
+            .|./|"$cwd"|"$cwd"/) workspace=${cwd:A} ;;
             *)
                 if [[ $requested != /* ]]; then requested="$cwd/$requested"; fi
                 workspace=$(cd -q -P -- "$requested" 2>/dev/null && pwd -P) ||
@@ -18,16 +19,44 @@ resolve_workspace() {
             fail "workspace name '$workspace_name' does not match directory '${workspace:t}'"
         fi
     else
-        workspace=$cwd
+        workspace=${cwd:A}
         while [[ ${workspace:t} != "$workspace_name" ]]; do
             [[ $workspace != / ]] || fail "workspace folder not found: $workspace_name" 1
             workspace=${workspace:h}
         done
     fi
     workspace_prefix="${workspace%/}/" # Exactly one separator, also for '/'.
+}
+
+resolve_workspace() {
+    resolve_workspace_root
+    case "$destination" in
+        '{wsp-dir}') destination=. ;;
+        '{wsp-dir}/'*) destination=${destination#'{wsp-dir}/'} ;;
+    esac
     [[ -n $destination && $destination != /* ]] || fail 'destination must be a nonempty relative path'
     case "/$destination/" in */../*) fail 'destination must not contain .. components' ;; esac
     output_dir="$workspace_prefix$destination"
+}
+
+# Expand only an explicit workspace prefix. Resolving the root separately
+# keeps -o's destination bypass intact when an input uses a workspace anchor.
+workspace_file_path() {
+    value=$1
+    [[ $value == *'{wsp-dir}'* ]] || return 0
+    local relative candidate
+    case "$value" in
+        '{wsp-dir}/'*) relative=${value#'{wsp-dir}/'} ;;
+        *) fail 'use {wsp-dir}/PATH at the beginning of a file path' ;;
+    esac
+    [[ -n $relative && $relative != /* && $relative != *'{wsp-dir}'* ]] || fail 'invalid workspace file path'
+    case "/$relative/" in */../*) fail 'workspace file path must not contain .. components' ;; esac
+    resolve_workspace_root
+    candidate="${workspace%/}/$relative"
+    case "${candidate:A}" in
+        "$workspace"|"$workspace_prefix"*) value=$candidate ;;
+        *) fail 'workspace file path escapes workspace through a symbolic link' ;;
+    esac
 }
 
 # Resolve physical existing directories with cd/pwd. Lexical ':a' reduction
@@ -133,13 +162,17 @@ select_source() {
         auto) fallback= ;;
     esac
     if (( ${#sources} == 1 )); then source_file=${sources[1]#./}; return; fi
-    if [[ -n $fallback && -f $fallback ]]; then source_file=$fallback; return; fi
+    if [[ -n $fallback ]]; then
+        workspace_file_path "$fallback"; fallback=$value
+        if [[ -f $fallback ]]; then source_file=$fallback; return; fi
+    fi
     (( ! ${#sources} )) || fail "cannot select $preferred source: provide FILE or create $fallback"
     # With no preferred-language source, accept a unique other-language source
     # or a unique conventional fallback. Never resolve ambiguity by glob order.
     sources=(./*.(cpp|cc|cxx|C|c|py)(N-.))
     if (( ${#sources} == 1 )); then source_file=${sources[1]#./}; return; fi
     for candidate in "$DEFAULT_SOURCE" "$C_SOURCE" "$PYTHON_SOURCE"; do
+        workspace_file_path "$candidate"; candidate=$value
         [[ ! -f $candidate ]] || fallbacks+=("$candidate")
     done
     if (( ${#fallbacks} == 1 )); then source_file=${fallbacks[1]}; return; fi

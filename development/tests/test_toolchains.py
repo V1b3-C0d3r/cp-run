@@ -193,7 +193,7 @@ class _ToolchainCase(unittest.TestCase):
     def check_profile(self, extra):
         self.source(LIBRARY_CHECKS)
         command = 'debug=extra' if extra else 'debug'
-        result = subprocess.run([str(SCRIPT), command, '--compiler=' + self.FAMILY,
+        result = subprocess.run([str(SCRIPT), command, 'run', '--compiler=' + self.FAMILY,
                                  '--show-command', '--', '-DWANT_EXTRA=' + str(int(extra))],
                                 cwd=self.cwd, env=self.env, capture_output=True,
                                 text=True, timeout=25)
@@ -259,7 +259,10 @@ class _ToolchainCase(unittest.TestCase):
     def check_undefined_sanitizer_stops(self):
         self.source('#include <cstdio>\nint main() { volatile int a = 2147483647; '
                     'int b = a + 1; std::printf("%d\\n", b); }\n')
-        result = self.invoke('debug')
+        prepared = self.invoke('debug')
+        self.assert_ok(prepared)
+        self.assertEqual(prepared.stdout, str((self.cwd / 'main.out').resolve()) + '\n')
+        result = self.invoke('debug', 'run')
         self.assertNotEqual(result.returncode, 0, result.stderr)
         self.assertIn('runtime error:', result.stderr)
         self.assertIn('signed integer overflow', result.stderr)

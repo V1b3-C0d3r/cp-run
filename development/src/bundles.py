@@ -109,6 +109,7 @@ def execute_bundle(config):
             stem = Path(config.get("source_anchor", "main.cpp")).stem
             key = "in_template" if stream == "in" else "ans_template"
             pattern = config.get(key, "./{n}." + stream)
+            source, pattern = case_location(config, source, pattern)
             found = discover_cases(source, pattern, stem)
             if not found:
                 raise CheckUsageError("no matching tests to pack")
@@ -141,6 +142,7 @@ def execute_bundle(config):
             stem = Path(config.get("source_anchor", "main.cpp")).stem
             key = "in_template" if stream == "in" else "ans_template"
             pattern = config.get(key, "./{n}." + stream)
+            target, pattern = case_location(config, target, pattern)
             entries = [
                 (case_template(pattern, stem, i), record) for i, record in enumerate(records, 1)
             ]

@@ -3,15 +3,44 @@
 import re
 
 
+WORKSPACE_PATH_PREFIX = "{wsp-dir}"
+
+
+def workspace_path_suffix(value):
+    """Validate the literal root prefix without needing a workspace at save time."""
+    if WORKSPACE_PATH_PREFIX not in value:
+        return None
+    prefix = WORKSPACE_PATH_PREFIX + "/"
+    if value == WORKSPACE_PATH_PREFIX:
+        return ""
+    if not value.startswith(prefix):
+        raise CheckUsageError("use {wsp-dir}/PATH at the beginning of a path")
+    relative = value[len(prefix):]
+    if not relative or WORKSPACE_PATH_PREFIX in relative or Path(relative).is_absolute() or ".." in Path(relative).parts:
+        raise CheckUsageError("workspace path must stay inside its workspace")
+    return relative
+
+
+def case_location(config, root, pattern):
+    """An explicit workspace anchor replaces the usual destination/subtree root."""
+    relative = workspace_path_suffix(pattern)
+    if relative is None:
+        return Path(root), pattern
+    return Path(config.get("workspace", ".")).resolve(), relative
+
+
 def case_template(pattern, stem, number=None):
     """Only literal text, one {n}, and source-stem aliases are supported."""
+    relative = workspace_path_suffix(pattern)
+    if relative is not None:
+        pattern = relative
     for alias in ("{filename-noExt}", "{file-name-no-ext}", "{filename-no-ext}"):
         pattern = pattern.replace(alias, "{stem}")
     if pattern.count("{n}") != 1:
         raise CheckUsageError("test template must contain exactly one {n}")
     rest = pattern.replace("{n}", "").replace("{stem}", "")
     if "{" in rest or "}" in rest:
-        raise CheckUsageError("unknown template placeholder; use {n} and {stem}")
+        raise CheckUsageError("unknown template placeholder; use {wsp-dir}, {n} and {stem}")
     if not stem or "/" in stem or stem in (".", ".."):
         raise CheckUsageError("invalid source stem for test template")
     value = pattern.replace("{stem}", stem)
@@ -26,6 +55,9 @@ def layout_root(config):
     """Artifact and data relative paths are independent, each appended once."""
     workspace = Path(config.get("workspace", ".")).resolve()
     relative = config.get("test_dir") or config.get("destination", ".")
+    anchored = workspace_path_suffix(relative)
+    if anchored is not None:
+        relative = anchored or "."
     if Path(relative).is_absolute() or ".." in Path(relative).parts:
         raise CheckUsageError("test directory must be workspace-relative without ..")
     root = workspace / relative
@@ -107,8 +139,10 @@ def discover_cases(root, pattern, stem):
 def mult_cases(config):
     root = layout_root(config)
     stem = Path(config.get("source_anchor") or config.get("executable", "main.cpp")).stem
-    left = discover_cases(root, config.get("in_template", "./{n}.in"), stem)
-    right = discover_cases(root, config.get("ans_template", "./{n}.ans"), stem)
+    input_root, input_pattern = case_location(config, root, config.get("in_template", "./{n}.in"))
+    answer_root, answer_pattern = case_location(config, root, config.get("ans_template", "./{n}.ans"))
+    left = discover_cases(input_root, input_pattern, stem)
+    right = discover_cases(answer_root, answer_pattern, stem)
     if not left or set(left) != set(right):
         raise CheckUsageError(
             "mult test ID mismatch: missing answers {}; missing inputs {}".format(

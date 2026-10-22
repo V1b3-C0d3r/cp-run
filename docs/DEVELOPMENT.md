@@ -33,7 +33,7 @@ Applies to 1.1 development. Progress and verification are recorded in the implem
 - Use argv lists and explicit file objects. Large input/output/stderr and report data stream through files; do not accumulate arbitrary output in RAM or deadlock on unread pipes.
 - Preserve stdin, descriptor isolation, signals and child ownership. Keep the early-exit/reaping fixes and never signal a reused PID/process group.
 - Store time as integer nanoseconds and memory as integer bytes. Rendering converts units; it does not alter limits. Measure child execution, not compilation, history callbacks, comparison or report rendering.
-- Each process execution has its own nominal limits and kill factors. Repetition aggregation must never hide a failure or overwrite the first measured stdout.
+- Each process execution has its own nominal limits and kill factors. Repetition aggregation must never hide a failure or replace the single visible stdout.
 - Scope cleanup to resources this invocation owns. Cancellation retains useful evidence and closes temporary descriptors/listeners.
 
 ## Files, settings and imports
