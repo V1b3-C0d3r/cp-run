@@ -13,7 +13,8 @@ cleanup() {
 }
 
 main() {
-    local language=c++ primary_language=c++ interpreter= interpreter_choice=$DEFAULT_INTERPRETER
+    local interpreter_info=
+    local language=c++ primary_language=c++ interpreter= interpreter_choice=$DEFAULT_INTERPRETER language_choice=$DEFAULT_LANGUAGE
     local action=ordinary source_file= compiler_choice=$DEFAULT_COMPILER family= compiler= compiler_banner= profile=none
     local workspace_dir=$DEFAULT_WORKSPACE workspace_name= destination=$DEFAULT_DESTINATION workspace= workspace_prefix=
     local output= output_dir= output_name= output_abs= planned_source= planned_output= resolved_binary= auto_standard=
@@ -30,12 +31,12 @@ main() {
     local bundle_format=legacy bundle_stream= data_input= data_output= text_separator=$MANUAL_SEPARATOR report_tests=$DEFAULT_REPORT_TESTS
     local minimize= validator=
     local prettier= companion_port=$COMPANION_PORT companion_wait=$COMPANION_WAIT
-    local -i doctor_requested=0 interpreter_given=0
+    local -i doctor_requested=0 interpreter_given=0 compiler_given=0
     local -i data_controls=0 layout_controls=0 companion_controls=0 source_given=0 report_controls=0 bundle_given=0
     local -i overwrite=0 text_conversion=0 stop_on_failure=0
     local -i positional_count=0 mult=0 save_test_relpath=0 relpath_given=0 test_relpath_given=0
     local -i timeout_given=0 memory_given=0 measurement_controls=0
-    local -a recalled_launch=() launch_args=() primary_launch=() original_compiler_args=() original_standards=()
+    local -a interpreter_args=() recalled_launch=() launch_args=() primary_launch=() original_compiler_args=() original_standards=()
     local -a compiler_args=() runtime_args=() cases=() sources=() artifacts=() protected_files=() build_indices=()
     local -A config=() compiler_paths=() compiler_banners=() standard_vocab=()
     local -a managed_standards=() supported_standards=()
@@ -50,7 +51,8 @@ main() {
         python_action doctor; return $?
     fi
     if [[ $prettier == only || $prettier == check || $prettier == auto && $action == ordinary && $positional_count == 0 ]]; then
-        (( ! binary_mode )) || fail 'formatting needs source files'
+        (( ! binary_mode && ! ${#compiler_args} && ! ${#runtime_args} && ! output_given )) || fail 'format-only action does not compile or run; provide a source file'
+        [[ $profile == none || -n ${MODE_KIND[$profile]-} ]] || fail "profile not found: $profile"
         [[ -n $source_file ]] || select_source
         protected_files=("${source_file:A}")
         config=(prettier "$prettier" native_formatter "$NATIVE_FORMATTER" python_formatter "$PYTHON_FORMATTER")
@@ -66,6 +68,17 @@ main() {
         embedded_python settings "$SCRIPT_PATH"; return $?
     fi
     case "${compiler_choice:l}" in gcc|g++) family=gcc ;; clang|clang++) family=clang ;; *) fail 'compiler must be GCC, gcc, g++, clang or clang++' ;; esac
+    if (( version_requested )) && { (( interpreter_given )) || [[ $source_file == *.py || -z $source_file && $language_choice == python && $compiler_given == 0 ]]; }; then
+        printf '%s %s\n' "$PROGRAM" "$VERSION"; resolve_interpreter; "$interpreter" --version; return $?
+    fi
+    if (( ! compiler_given )); then
+        value=$language_choice
+        if [[ -n $source_file ]]; then source_language "$source_file"; value=$language; fi
+        [[ $value == c ]] || value=c++
+        language=$value
+        compiler_choice=${LANGUAGE_COMPILERS[$value]-$DEFAULT_COMPILER}
+        case "${compiler_choice:l}" in gcc|g++) family=gcc ;; *) family=clang ;; esac
+    fi
     if (( version_requested )); then printf '%s %s\n' "$PROGRAM" "$VERSION"; resolve_compiler; "$compiler" --version; return $?; fi
 
     (( ! companion_controls )) || [[ $action == companion ]] || fail '--port/--wait require companion'
@@ -81,6 +94,7 @@ main() {
     fi
     # Cheap option conflicts precede file opens and all compiler discovery.
     [[ $profile == none || -n ${MODE_KIND[$profile]-} ]] || fail "profile not found: $profile; use --set-defaults"
+    if [[ $profile != none && ${MODE_KIND[$profile]} == debug ]] && (( no_warnings )); then fail 'debug profile conflicts with --no-w'; fi
     if [[ $action == debug && ${MODE_KIND[$profile]} != debug ]]; then
         fail "profile '$profile' is a flags set; select it with --profile=$profile"
     fi
@@ -96,6 +110,7 @@ main() {
     fi
     [[ -z $seed || $action == stress ]] || fail '--seed requires stress'
     [[ -z $minimize && -z $validator || $action == stress ]] || fail 'counterexample reduction requires stress'
+    [[ -z $validator || -n $minimize ]] || fail '--validator requires --minimize'
     if [[ $minimize == lines || $minimize == cases ]]; then [[ -n $validator ]] || fail 'this reduction strategy requires --validator'; fi
     if [[ -n $validator ]]; then validator=${validator:A}; [[ -f $validator && ( -x $validator || $validator == *.py ) ]] || fail 'validator must be executable or a Python script'; fi
     resolve_action_defaults
@@ -149,7 +164,11 @@ main() {
         python_action companion; return $?
     fi
     if [[ $action == pack || $action == unpack ]]; then
-        [[ -n $source_file ]] || select_source
+        if [[ -z $source_file ]]; then
+            local -a anchors=(./*.(cpp|cc|cxx|C|c|py)(N-.))
+            if (( ${#anchors} == 1 )); then source_file=${anchors[1]}
+            else source_file=$DEFAULT_SOURCE; fi
+        fi
         config=(operation "$action" workspace "$workspace" destination "$destination" test_dir "$test_dir"
                 save_test_relpath "$save_test_relpath" default_input "$input_file" default_answer "$answer_file"
                 bundle_stream "$bundle_stream" data_input "$data_input" data_output "$data_output"
@@ -202,7 +221,7 @@ main() {
     config=(operation "$action" auto "$auto" mult "$mult" workspace "${workspace:-$cwd}" destination "$destination"
             test_dir "$test_dir" save_test_relpath "$save_test_relpath" source_anchor "${source_file:A}"
             in_template "$in_template" ans_template "$ans_template" bundle_format "$bundle_format"
-            minimize "$minimize" validator "$validator" minimize_attempts "$MINIMIZE_ATTEMPTS" minimize_seconds "$MINIMIZE_SECONDS"
+            minimize "$minimize" validator "$validator" validator_interpreter "$interpreter_choice" minimize_attempts "$MINIMIZE_ATTEMPTS" minimize_seconds "$MINIMIZE_SECONDS"
             report_tests "$report_tests" stop_on_failure "$stop_on_failure" max_failures "$MAX_FAILURES" input "$input_file" answer "$answer_file" report "$report_file"
             actual "$cwd/real-out.txt" sep "$separator" cases "${(j:,:)cases}" num_test "$num_test"
             line_limit "$DEFAULT_LINE_LIMIT" cin "$console_in" cout "$console_out" executable "$output_abs"
@@ -222,10 +241,16 @@ main() {
         fi
         python_action preflight || return $?
     elif [[ $f_mode == auto || $f_mode == in || $f_mode == out ]]; then
-        for value in "${protected_files[@]}" "$input_file"; do
-            [[ ${result_file:A} != ${value:A} && ! $result_file -ef $value ]] || fail 'redirected output would overwrite an input, source or binary' 1
-        done
-        for value in "${artifacts[@]}"; do [[ ${value:A} != ${input_file:A} && ! $value -ef $input_file ]] || fail 'binary output would overwrite runtime input' 1; done
+        if [[ $f_mode != in ]]; then
+            local -a redirect_protected=("${protected_files[@]}")
+            [[ $f_mode != auto ]] || redirect_protected+=("$input_file")
+            for value in "${redirect_protected[@]}"; do
+                [[ ${result_file:A} != ${value:A} && ! $result_file -ef $value ]] || fail 'redirected output would overwrite an input, source or binary' 1
+            done
+        fi
+        if [[ $f_mode != out ]]; then
+            for value in "${artifacts[@]}"; do [[ ${value:A} != ${input_file:A} && ! $value -ef $input_file ]] || fail 'binary output would overwrite runtime input' 1; done
+        fi
     fi
     if [[ -n $prettier ]]; then
         (( ! binary_mode )) || fail 'formatting needs source files'
@@ -247,6 +272,7 @@ main() {
                 launch_args=()
                 for (( value=1; value<=config[launch_${reused_role}_count]; ++value )); do launch_args+=("${config[launch_${reused_role}_${value}]}"); done
                 record_launch "$role"
+                config[tool_$role]=${config[tool_$reused_role]-}
                 continue
             fi
             profile=$base_profile; (( index == 1 )) || profile=none
@@ -260,7 +286,7 @@ main() {
                 fi
                 python_launch "${sources[index]}" "$profile" || return $?
                 if [[ $action == compile || $action == test || $action == stress ]]; then
-                    "$interpreter" -c 'import pathlib,sys; p=sys.argv[1]; compile(pathlib.Path(p).read_bytes(), p, "exec")' "${sources[index]}" || {
+                    compiler_banner=$("$interpreter" -c 'import pathlib,sys; p=sys.argv[1]; compile(pathlib.Path(p).read_bytes(), p, "exec"); print(sys.implementation.name, sys.version)' "${sources[index]}") || {
                         local build_status=$?
                         if [[ $action == test || $action == stress ]]; then config[build_status]=$build_status; config[failed_role]=$role; python_action ce; fi
                         return $build_status
@@ -279,6 +305,10 @@ main() {
                 done
                 local DEFAULT_STANDARD=$native_standard
                 [[ $language != c ]] || DEFAULT_STANDARD=$C_STANDARD
+                # Each native role chooses its own family; an explicit CLI
+                # compiler applies to all roles and wins over saved preferences.
+                if (( ! compiler_given )); then compiler_choice=${LANGUAGE_COMPILERS[$language]-$DEFAULT_COMPILER}; fi
+                case "${compiler_choice:l}" in gcc|g++) family=gcc ;; *) family=clang ;; esac
                 if [[ -n ${compiler_paths[$language]-} ]]; then
                     compiler=${compiler_paths[$language]}; compiler_banner=${compiler_banners[$language]}
                     supported_standards=("${(@s: :)standard_vocab[$language]}")
@@ -319,6 +349,10 @@ main() {
             else launch_args=("${artifacts[index]}"); fi
             case $index in 1) role=main; primary_launch=("${launch_args[@]}") ;; 2) role=brute ;; 3) role=generator ;; esac
             record_launch "$role"
+            if [[ $language == python && ( $action == test || $action == stress ) ]]; then
+                if [[ -z $interpreter_info ]]; then interpreter_info=$("${launch_args[1]}" --version) || return $?; fi
+                config[tool_$role]=$interpreter_info
+            fi
         done
     fi
     if [[ $action == compile ]]; then printf '%s\n' "$output_abs"; return; fi

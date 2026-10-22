@@ -603,14 +603,14 @@ def edit_settings(script_path):
 
 
 def _settings_languages(editor):
-    with editor.scope(['DEFAULT_INTERPRETER', 'C_SOURCE', 'PYTHON_SOURCE', 'C_STANDARD', 'NATIVE_FORMATTER', 'PYTHON_FORMATTER', 'PYTHON_FLAGS']):
+    with editor.scope(['DEFAULT_LANGUAGE', 'LANGUAGE_COMPILERS', 'DEFAULT_INTERPRETER', 'C_SOURCE', 'PYTHON_SOURCE', 'C_STANDARD', 'NATIVE_FORMATTER', 'PYTHON_FORMATTER', 'PYTHON_FLAGS']):
         _settings_languages_menu(editor)
 
 
 def _settings_languages_menu(editor):
     """Language options stay separate from native optimization/warning lists."""
     while True:
-        print('\nLanguages & tools: 1. Interpreter/source/standard/tools  2. Python flags  back')
+        print('\nLanguages & tools: 1. Interpreter/source/standard/tools  2. Python flags  3. Language/compiler defaults  back')
         choice = editor.ask('languages> ')
         if choice in ('', 'back'): return
         if choice == '1':
@@ -623,6 +623,30 @@ def _settings_languages_menu(editor):
                 ('PYTHON_FORMATTER', 'Python formatter (ruff or black)', None),
             ])
         elif choice == '2': _settings_flags(editor, 'PYTHON_FLAGS')
+        elif choice == '3': _settings_language_defaults(editor)
+
+
+def _settings_language_defaults(editor):
+    """Edit language preferences with ordinary names; no map syntax required."""
+    while True:
+        print('\nLanguage defaults\n  1. Preferred source language: ' + editor.data['DEFAULT_LANGUAGE'])
+        for number, language in ((2, 'c'), (3, 'c++')):
+            print('  {}. {} compiler: {}'.format(number, language, editor.data['LANGUAGE_COMPILERS'].get(language, 'inherit (' + editor.data['DEFAULT_COMPILER'] + ')')))
+        print('  4. Python interpreter: ' + editor.data['DEFAULT_INTERPRETER'])
+        choice = editor.ask('language defaults> ')
+        if choice in ('', 'back'): return
+        if choice == '1':
+            _settings_scalar(editor, 'DEFAULT_LANGUAGE', 'Language [c++ / c / python / auto]', _settings_choice('c++', 'c', 'python', 'auto'))
+        elif choice in ('2', '3'):
+            language = 'c' if choice == '2' else 'c++'
+            value = editor.ask(language + ' compiler [GCC / clang / inherit; Enter keeps it]: ')
+            if value:
+                updated = dict(editor.data['LANGUAGE_COMPILERS'])
+                if value == 'inherit': updated.pop(language, None)
+                else: updated[language] = _settings_compiler(value)
+                editor.set('LANGUAGE_COMPILERS', updated)
+        elif choice == '4':
+            _settings_scalar(editor, 'DEFAULT_INTERPRETER', 'Interpreter [pypy3 / python3 / absolute path]')
 
 
 def _settings_routing(editor):

@@ -1,5 +1,9 @@
 # Testing, imports and counterexamples
 
+[Quick start](../README.md) · [CLI options](CLI.md) · [Runnable examples](../examples/README.md)
+
+**Start with ordinary `test`.** Use `test=mult` for separate sample files; use `test=auto` only when you want several tests inside a bundle. Every independent test is a separate program launch. Python examples use the saved interpreter (factory **PyPy 3**); add `--interpreter=python3` to use CPython.
+
 ## One complete input: `test`
 
 Create `main.py`:
@@ -10,7 +14,19 @@ numbers = list(map(int, sys.stdin.read().split()))
 print(sum(numbers))
 ```
 
-`input.txt` contains `2 3` followed by a newline. `ans.txt` contains `5` followed by a newline.
+Save these two files beside `main.py` (each ends with a newline):
+
+**`input.txt`** — bytes sent to the program's stdin:
+
+```text
+2 3
+```
+
+**`ans.txt`** — the stdout you expect:
+
+```text
+5
+```
 
 ```sh
 cp-run test --cout
@@ -30,6 +46,8 @@ Test 1: AC
   TIME: ...    MEMORY: ...
 FINAL VERDICT: AC
 ```
+
+**Reading the report:** `input:1` means input line 1; `real-out.txt:1` means the first actual output line; `ans:1` means answer line 1. The `|` separates the line number from quoted content; the quotes are report notation, not bytes added to the files. `AC` means the output matches. Actual time and memory replace `...`.
 
 Each section has its own line numbering. `!` marks differing output/answer lines. An inserted/deleted line has an explicit missing counterpart; empty files and a missing final newline are labeled. Comparisons preserve spaces and blank rows, normalize CRLF, and tolerate one optional final newline. Input is displayed, not compared to the answer.
 
@@ -62,7 +80,7 @@ cp-run test=mult main.py --test-iters=1     # Only first selected test
 
 The directory defaults to `tests`; set `--dest-dir=DIR` or a separate `--test-dir=DIR`. IDs are positive integers, sorted numerically unless selected explicitly. Gaps are accepted: 1 and 3 do not require 2. `1.in` plus `01.in` is ambiguous and rejected. Missing inputs/answers fail before compilation/execution.
 
-Templates are literal paths with `{n}` (test ID) and `{stem}` (source basename without extension):
+Templates are literal paths with **`{n}` = test ID** and **`{stem}` = source basename without extension**:
 
 ```sh
 cp-run test=mult sum.cpp --dest-dir=tests \
@@ -150,16 +168,26 @@ EOF
 
 Each full block shows input/output/answer, then verdict, elapsed time and peak RSS. `--report-tests=failed` hides AC payload bodies while retaining all verdict/metric rows. Compiler warnings/errors always remain live on console; runtime stderr is included completely in the checking report, with terminal controls escaped safely.
 
-Public verdicts: **AC, WA, TLE, MLE, RE, CE**. The final summary lists every affected test ID. Its deterministic headline uses CE > MLE > TLE > RE > WA > AC. A compiler failure marks tests NOT RUN; partial crash output cannot turn RE/TLE/MLE into WA. Checker limits, broken generator/oracle and cancellation are separately identified as unfinished/infrastructure states, never AC.
+Public verdicts:
+
+| Verdict | Meaning |
+| --- | --- |
+| **AC** | Accepted: execution succeeded and the complete output matches. |
+| **WA** | Wrong answer: execution succeeded, but output differs. |
+| **TLE** | Time limit exceeded by this execution. |
+| **MLE** | Memory limit exceeded by this execution. |
+| **RE** | Runtime error: nonzero exit or signal, with diagnostics in the report. |
+| **CE** | Compilation/preparation error; affected tests do not run. |
+ The final summary lists every affected test ID. Its deterministic headline uses CE > MLE > TLE > RE > WA > AC. A compiler failure marks tests NOT RUN; partial crash output cannot turn RE/TLE/MLE into WA. Checker limits, broken generator/oracle and cancellation are separately identified as unfinished/infrastructure states, never AC.
 
 ```sh
 cp-run test=mult main.py -tm --average=3 --warm-up=1 --cout
 cp-run test=mult main.py --TLE=1500 --MLE=256
 ```
 
-Every independent test gets its own warm-up and measured series. Only the first measured stdout is canonical; time is the median, RSS the maximum, and a later failed repeat is reported separately. Generator/reference run once per stress iteration. Limits apply independently to every launch, not to the median or the sum of tests.
+Every independent test gets its own warm-up and measured series. Only the first measured stdout is canonical; time is the median, RSS the maximum, and a later failed repeat is reported separately, with raw evidence retained in `test-repeat-failure*` (or the stress bundle). On failure, the offending run's duration is shown. Generator/reference run once per stress iteration. Limits apply independently to every launch, not to the median or the sum of tests.
 
-Ordinary test remains one process/measurement/verdict. If it internally processes 10 cases, `--test-iters=10` multiplies the whole-process time allowance by 10; it does not identify internal boundaries or multiply memory. Native cutoff is the saved multiplier (default x2), but exceeding the nominal allowance already means TLE/MLE. Reported durations include Python startup/imports; compilation and diff work are excluded.
+Ordinary test remains one process/measurement/verdict. If it internally processes 10 cases, `--test-iters=10` multiplies the whole-process time allowance by 10; it does not identify internal boundaries or multiply memory. Process cutoff is the saved multiplier (default x2), but exceeding the nominal allowance already means TLE/MLE. Reported durations include Python startup/imports; compilation and diff work are excluded.
 
 Comparison defaults: 10000 aligned rows, 1 MiB per row, 64 MiB total checked bytes per case. Diagnostic payload display has separate limits. An unfinished comparison is INCOMPLETE, not AC/WA. Full raw first stdout remains available; report truncation is explicit. Checking limits do not constitute a disk quota on arbitrary user-program output.
 

@@ -32,15 +32,16 @@ PROFILE_DEFAULTS = {'MODE_KIND': 'flags', 'MODE_CPU': 'default'}
 # reset cannot quietly diverge from a freshly downloaded script.
 FACTORY_SETTINGS = {
     'DEFAULT_COMPILER': 'GCC', 'DEFAULT_STANDARD': 'auto',
+    'DEFAULT_LANGUAGE': 'c++', 'LANGUAGE_COMPILERS': {},
     'DEFAULT_SOURCE': 'main.cpp', 'DEFAULT_TIMEOUT': 'inf',
     'DEFAULT_MEMORY_LIMIT': 'inf', 'DEFAULT_INPUT': 'input.txt',
     'DEFAULT_OUTPUT': 'output.txt', 'DEFAULT_ANSWER': 'ans.txt',
     'DEFAULT_REPORT': 'test_out', 'DEFAULT_SEPARATOR': r'\n\x1e\n',
-    'MANUAL_SEPARATOR': r'\n###\n', 'DEFAULT_INTERPRETER': 'python3',
+    'MANUAL_SEPARATOR': r'\n###\n', 'DEFAULT_INTERPRETER': 'pypy3',
     'C_STANDARD': 'auto', 'C_SOURCE': 'main.c', 'PYTHON_SOURCE': 'main.py',
     'PYTHON_FLAGS': [], 'MODE_CPYTHON': {'debug': '-X dev -W default', 'extra': '-X dev -W error'},
     'MODE_PYPY': {'debug': '-W default -X track-resources', 'extra': '-W error -X track-resources'},
-    'ACTION_DEST_DIR': {'test-mult': 'tests', 'companion': 'tests'}, 'ACTION_SAVE_RELPATH': {},
+    'ACTION_DEST_DIR': {'test-mult': 'tests'}, 'ACTION_SAVE_RELPATH': {},
     'ACTION_SAVE_TEST_RELPATH': {}, 'MODE_DEST_DIR': {},
     'MODE_SAVE_RELPATH': {}, 'MODE_SAVE_TEST_RELPATH': {},
     'DEFAULT_INPUT_TEMPLATE': './{n}.in', 'DEFAULT_ANSWER_TEMPLATE': './{n}.ans',

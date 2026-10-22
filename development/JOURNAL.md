@@ -28,3 +28,22 @@
 - README/CLI/testing documentation and runnable examples cover the new interface and source build commands. HTTP imports are lazy so unrelated measurements avoid their startup cost.
 - GitHub's initial baseline workflow passed: https://github.com/V1b3-C0d3r/cp-run/actions/runs/39766583319 . GitHub CLI API calls intermittently hit TLS timeouts; bounded curl requests can read public Actions status without credentials.
 - Owner additionally authorized publishing release 1.1 after validation. Still required: final platform CI on changed code, remaining edge-case audit, extracted-archive verification, release checklist and publication.
+
+## Platform audit and hardening (in progress)
+
+- Changed-code CI: 39771093697. Linux ARM exercised PyPy successfully. Found a portable-test wording issue (GCC says "ignoring #pragma") and a macOS Companion startup delay caused by HTTPServer reverse DNS.
+- Replaced receiver binding with numeric-loopback binding without reverse DNS; added a deterministic no-DNS regression and a header-read timeout.
+- Added import rollback coverage for interruption after replacement, independent redirection protection, exact Python replay/history options, guarded Python short-option clusters, and retained hidden-repeat evidence.
+- Added checked service/manual defaults, a source-free pack path, operation/profile routing tests, old-schema migration checks and reduction interruption handling. Latest targeted results before final checkpoint: 12 language, 30 feature, 27 pragma tests passed (optional tools skipped where unavailable).
+- Ruff 0.17.1 installed only in /tmp/cp-run-v11-tools for formatter integration checks; no user/system installation changed.
+- Remaining gates: final local/extracted suite, examples/packaging/benchmark, fixed-code platform workflow, checklist review, merge and authorized release publication.
+
+### Defaults and documentation review
+
+- Made PyPy the factory Python interpreter; added omitted-source language preference and independent C/C++ compiler defaults with explicit CLI precedence and legacy import inheritance.
+- Added language/compiler menu coverage, real PyPy default coverage and abbreviated Python-warning guard regressions. Native/Python diagnostics remain separate; ordinary Python startup gains no version-probe process.
+- Rewrote README around runnable workflows; expanded formatter edit/check/build contracts, installation links, test-file examples and report notation. Fixed a malformed native-tool discovery diagnostic found during review.
+- Fixed the stale debug + --no-w test to enforce the agreed diagnostic-profile conflict; full source regression and four-platform CI remain release gates.
+
+- Full local source checkpoint: **414 tests passed**, one unavailable native-formatter skip; 163.851 s. The last two added language regressions and final warning-abbreviation guard are checked separately before pushing.
+- Verified every local Markdown file/heading link. Confirmed old CI failed only on GCC warning wording and Companion reverse-DNS startup; both fixes are included.

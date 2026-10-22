@@ -57,6 +57,9 @@ jobs:
           printf 'CP_RUN_GCC=%s\n' "$gcc_executable" >> "$GITHUB_ENV"
           printf 'CP_RUN_CLANG=%s\n' "$clang_executable" >> "$GITHUB_ENV"
 
+      - name: Install optional Python formatter for integration tests
+        run: python3 -m pip install ruff
+
       - name: Build and check generated script
         run: |
           python3 development/build.py

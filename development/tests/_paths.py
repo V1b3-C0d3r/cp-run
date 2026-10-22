@@ -13,7 +13,8 @@ os.environ['XDG_STATE_HOME'] = _state.name
 atexit.register(_state.cleanup)
 
 ROOT = Path(__file__).resolve().parents[1]
-RELEASE = ROOT.parent.parent / 'Versions/1.0' if ROOT.parent.name == 'Work' else ROOT.parent
+sys.path.insert(0, str(ROOT))
+from build import RELEASE
 
 
 def load_engine(name):

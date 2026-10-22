@@ -22,7 +22,10 @@ build_artifact() {
         sidecar_protected+=("$cwd/real-out.txt")
         (( console_out )) || sidecar_protected+=("$report_file")
         if [[ $action == test ]] && (( ! console_in )); then sidecar_protected+=("$input_file" "$answer_file"); fi
-    elif [[ $f_mode == auto ]]; then sidecar_protected+=("$input_file" "$result_file"); fi
+    elif [[ $f_mode == auto || $f_mode == in || $f_mode == out ]]; then
+        [[ $f_mode == out ]] || sidecar_protected+=("$input_file")
+        [[ $f_mode == in ]] || sidecar_protected+=("$result_file")
+    fi
     [[ $profile == none || ${MODE_KIND[$profile]-} != debug ]] || debug_mode=1
     build_flags || return $?
     mkdir -p -- "${final:h}" || fail "cannot create binary directory: ${final:h}" 1

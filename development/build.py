@@ -8,7 +8,8 @@ import importlib.util
 import re
 
 ROOT = Path(__file__).resolve().parent
-RELEASE = ROOT.parent.parent / 'Versions/1.0' if ROOT.parent.name == 'Work' else ROOT.parent
+VERSION = re.search(r'\bVERSION=([0-9.]+)', (ROOT / 'src/bootstrap.zsh').read_text())[1]
+RELEASE = ROOT.parent.parent / 'Versions' / VERSION if ROOT.parent.name == 'Work' else ROOT.parent
 
 # Ordering is explicit: source modules share one namespace in the installed
 # file, so deployment adds neither runtime imports nor companion files.

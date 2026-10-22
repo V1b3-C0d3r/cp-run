@@ -124,17 +124,24 @@ resolve_binary() {
 # helpers use zsh's dynamic local scope; their arrays never leak between roles.
 # Omitted source selection is nonrecursive and uses regular files only.
 select_source() {
-    local -a sources=(./*.cpp(N-.))
-    if (( ! ${#sources} )) && [[ ! -f $DEFAULT_SOURCE ]]; then
-        sources=(./*.(cc|cxx|C|c|py)(N-.))
-        if (( ${#sources} != 1 )); then
-            local -a fallback=() candidate
-            for candidate in "$C_SOURCE" "$PYTHON_SOURCE"; do [[ ! -f $candidate ]] || fallback+=("$candidate"); done
-            if (( ${#fallback} == 1 )); then source_file=${fallback[1]}; return; fi
-        fi
-    fi
-    if (( ${#sources} == 1 )); then source_file=${sources[1]#./}
-    elif [[ -f $DEFAULT_SOURCE ]]; then source_file=$DEFAULT_SOURCE
-    else fail "cannot select a source: found ${#sources} .cpp files and no $DEFAULT_SOURCE"; fi
+    local preferred=$language_choice fallback candidate
+    local -a sources=() fallbacks=()
+    case "$preferred" in
+        c++) sources=(./*.(cpp|cc|cxx|C)(N-.)); fallback=$DEFAULT_SOURCE ;;
+        c) sources=(./*.c(N-.)); fallback=$C_SOURCE ;;
+        python) sources=(./*.py(N-.)); fallback=$PYTHON_SOURCE ;;
+        auto) fallback= ;;
+    esac
+    if (( ${#sources} == 1 )); then source_file=${sources[1]#./}; return; fi
+    if [[ -n $fallback && -f $fallback ]]; then source_file=$fallback; return; fi
+    (( ! ${#sources} )) || fail "cannot select $preferred source: provide FILE or create $fallback"
+    # With no preferred-language source, accept a unique other-language source
+    # or a unique conventional fallback. Never resolve ambiguity by glob order.
+    sources=(./*.(cpp|cc|cxx|C|c|py)(N-.))
+    if (( ${#sources} == 1 )); then source_file=${sources[1]#./}; return; fi
+    for candidate in "$DEFAULT_SOURCE" "$C_SOURCE" "$PYTHON_SOURCE"; do
+        [[ ! -f $candidate ]] || fallbacks+=("$candidate")
+    done
+    if (( ${#fallbacks} == 1 )); then source_file=${fallbacks[1]}; return; fi
+    fail "cannot select a source: provide FILE (found ${#sources} supported files)"
 }
-

@@ -10,6 +10,46 @@ import zipfile
 from build import ROOT, RELEASE, build
 
 
+EXAMPLE_FILES = (
+    'README.md',
+    'companion/sample.json',
+    'file-io/ans.txt',
+    'file-io/input.txt',
+    'file-io/main.cpp',
+    'languages/main.c',
+    'mult/main.py',
+    'mult/tests/1.ans',
+    'mult/tests/1.in',
+    'mult/tests/2.ans',
+    'mult/tests/2.in',
+    'optimization/gcc-pragmas.hpp',
+    'optimization/main.cpp',
+    'optimization/nan.cpp',
+    'reduction/README.md',
+    'reduction/brute.py',
+    'reduction/gen.py',
+    'reduction/main.py',
+    'reduction/validate.py',
+    'runtime/checks.cpp',
+    'runtime/main.cpp',
+    'stress/brute.cpp',
+    'stress/buggy.cpp',
+    'stress/gen.cpp',
+    'stress/main.cpp',
+    'testing/ans.txt',
+    'testing/auto.ans',
+    'testing/auto.in',
+    'testing/console-auto.txt',
+    'testing/console-literal.txt',
+    'testing/console.txt',
+    'testing/custom.ans',
+    'testing/custom.in',
+    'testing/input.txt',
+    'testing/sum.cpp',
+    'testing/wrong.ans',
+)
+
+
 def release_files():
     """Map the organized workspace and a GitHub checkout to one archive layout."""
     workspace = ROOT.parent.name == 'Work'
@@ -30,9 +70,8 @@ def release_files():
             if path.is_file() and path.suffix in ('.py', '.zsh') and '__pycache__' not in path.parts:
                 files[path] = 'development/' + path.relative_to(ROOT).as_posix()
     examples = RELEASE / ('Examples' if workspace else 'examples')
-    for path in examples.rglob('*'):
-        if path.is_file() and path.name != '.DS_Store':
-            files[path] = 'examples/' + path.relative_to(examples).as_posix()
+    for relative in EXAMPLE_FILES:
+        files[examples / relative] = 'examples/' + relative
     for name in ('.gitignore', '.gitattributes'):
         files[(ROOT if workspace else RELEASE) / name] = name
     files[ROOT / 'ci.yml' if workspace else RELEASE / '.github/workflows/ci.yml'] = '.github/workflows/ci.yml'

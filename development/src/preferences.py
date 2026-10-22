@@ -18,6 +18,10 @@ def validate_preferences(values):
             raise ValueError('invalid text in ' + key + '; use visible \\n escapes')
     data['DEFAULT_COMPILER'] = _settings_compiler(data['DEFAULT_COMPILER'])
     _settings_standard(data['DEFAULT_STANDARD'])
+    _settings_choice('c++', 'c', 'python', 'auto')(data['DEFAULT_LANGUAGE'])
+    if set(data['LANGUAGE_COMPILERS']) - {'c', 'c++'}:
+        raise ValueError('compiler overrides support c and c++ only; use DEFAULT_INTERPRETER for Python')
+    data['LANGUAGE_COMPILERS'] = {key: _settings_compiler(value) for key, value in data['LANGUAGE_COMPILERS'].items()}
     if data['C_STANDARD'] != 'auto' and not re.fullmatch(r'(?:[0-9]+|(?:gnu|c)[0-9][A-Za-z0-9]*|iso9899:[0-9]+)', data['C_STANDARD']): raise ValueError('invalid C standard')
     for key in ('DEFAULT_INPUT_TEMPLATE', 'DEFAULT_ANSWER_TEMPLATE'): case_template(data[key], 'main', 1)
     _settings_filename(data['DEFAULT_SOURCE'])

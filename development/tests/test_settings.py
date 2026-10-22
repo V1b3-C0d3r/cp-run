@@ -315,9 +315,21 @@ class SettingsTest(unittest.TestCase):
         first = self.invoke('compile', self.source, '--profile=pragma')
         self.assertEqual(first.returncode, 0, first.stderr)
         self.assertEqual(Path(first.stdout.strip()), (self.cwd / 'profile-bin/main.out').resolve())
-        second = self.invoke('compile', self.source, '--dest-dir=explicit', '--profile=pragma', '--save-relpath=0')
+        nested = self.cwd / 'src/main.cpp'; nested.parent.mkdir(); nested.write_bytes(self.source.read_bytes())
+        inherited = self.invoke('compile', nested, '--profile=pragma')
+        self.assertEqual(Path(inherited.stdout.strip()), (self.cwd / 'profile-bin/src/main.out').resolve())
+        second = self.invoke('compile', nested, '--dest-dir=explicit', '--profile=pragma', '--save-relpath=0')
         self.assertEqual(second.returncode, 0, second.stderr)
         self.assertEqual(Path(second.stdout.strip()), (self.cwd / 'explicit/main.out').resolve())
+
+    def test_per_language_defaults_menu_and_validation(self):
+        self.configure('8\n3\n1\npython\n2\nclang\n3\nGCC\n4\n' + sys.executable + '\nback\nback\nsave\ny\n')
+        values = self.data()
+        self.assertEqual(values['DEFAULT_LANGUAGE'], 'python')
+        self.assertEqual(values['LANGUAGE_COMPILERS'], {'c': 'clang++', 'c++': 'GCC'})
+        self.assertEqual(values['DEFAULT_INTERPRETER'], sys.executable)
+        broken = dict(values, LANGUAGE_COMPILERS={'python': 'GCC'})
+        with self.assertRaises(ValueError): settings.validate_preferences(broken)
 
     def test_language_and_test_layout_menus(self):
         self.configure('8\n1\n1\n' + sys.executable + '\nback\nback\n9\n1\n{stem}/{n}.in\n2\n{stem}/{n}.ans\nback\nsave\ny\n')

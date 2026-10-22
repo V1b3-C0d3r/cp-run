@@ -1,5 +1,9 @@
 # CLI reference
 
+[Quick start](../README.md) · [Testing and sample files](TESTING.md) · [Runnable examples](../examples/README.md)
+
+**FILE and positional operands come before options.** Put the operation (`test`, `run`, etc.) first. Values accept either `--option=value` or `--option value`; program arguments belong after the runtime boundary.
+
 ## Commands and argument boundaries
 
 ```text
@@ -22,9 +26,21 @@ cp-run run ./main.out -- --input data.txt
 cp-run test main.cpp -- -DTESTING -- --verbose
 ```
 
-Unknown options before a boundary go to the backend. After the runtime boundary, everything is program data. Managed numeric `-std` shorthand is translated only before the backend boundary; `-- -std=20` remains literally `-std=20` for the compiler to accept/reject. Display quoting is never executed.
+Unknown options before a boundary go to the backend. After the runtime boundary, everything is program data. Managed numeric `-std` shorthand is translated only before the backend boundary; `-- -std=20` remains literally `-std=20` for the compiler to accept/reject. Use `--show-command` to inspect the actual escaped build/launch argv on stderr. Display quoting is never executed. Before the backend boundary, legacy GNU aliases (`--ansi`, `--no-warnings`, `--optimize`, `--debug`) have their equivalent Clang spelling when Clang is selected; the raw tail is never translated.
 
-FILE is selected from the sole local `.cpp` or saved fallback. With no C++ selection, supported C/Python sources and unique conventional fallbacks are considered; ambiguity needs an explicit FILE. Stress discovers conventional `brute` and `gen`, preferring the main language. Explicit roles may mix languages.
+## Source discovery and language defaults
+
+An explicit FILE always selects its language: `.c` is C, `.py` is Python, and `.cpp`, `.cc`, `.cxx`, `.C` are C++. Paths may contain spaces when quoted. Source discovery is local, not recursive.
+
+With FILE omitted:
+
+1. Look for the preferred language (factory **C++**, editable in defaults or with `--language=c++|c|python|auto`).
+2. Use its sole source; with several, use its saved fallback (`main.cpp`, `main.c` or `main.py`). If several remain without that fallback, ask for FILE.
+3. If the preferred language is absent, use a sole supported source, or a unique saved fallback across languages. Otherwise report ambiguity. `auto` starts at this step.
+
+Stress discovers conventional `brute` and `gen`, preferring the main language. Explicit roles may mix languages. Native roles can use separate saved C/C++ compiler families; `--compiler` explicitly selects the family for every native role. `CC` and `CXX` select the driver executable and must match that family.
+
+In **`--set-defaults` → Languages & tools → Language/compiler defaults**, choose the preferred language, C compiler, C++ compiler and Python interpreter. Native `inherit` uses the Build menu's compiler. Python's factory interpreter is **`pypy3`**; a missing requested interpreter is an error, with no silent switch to CPython.
 
 FILE `-` recalls the workspace's last source or launched target; `./-` is literal. `tr` means `test run -`; `sr BRUTE GEN` means `stress run - BRUTE GEN`. Failed compilation does not replace source history. Python target history retains interpreter options; a newly explicit interpreter overrides them.
 
@@ -32,8 +48,10 @@ FILE `-` recalls the workspace's last source or launched target; `./-` is litera
 
 | Option | Contract |
 | --- | --- |
-| `--compiler=NAME` | GCC/gcc/g++ or clang/clang++; any position. C uses a C driver; C++ a C++ driver. `CC`/`CXX` override discovery and must match the requested family. |
-| `--interpreter=NAME_OR_PATH` | Python executable, default `python3`; supports PyPy via `pypy3`. Does not select cp-run's internal service Python. |
+| `--language=NAME` | Preferred omitted-source language: `c++` (factory), `c`, `python` or `auto`. Explicit FILE wins. |
+| `--compiler=NAME` | GCC/gcc/g++ or clang/clang++; any option position. C uses a C driver; C++ a C++ driver. `CC`/`CXX` override discovery and must match the requested family. |
+| `--interpreter-arg=ARG` | Repeatable explicit Python option, including exact failure replay options; also accepts a separate operand. |
+| `--interpreter=NAME_OR_PATH` | Python executable, default **`pypy3`**; use `python3` or an executable path for CPython. Does not select cp-run's internal service Python. |
 | `-std=VALUE`, `-std VALUE` | Numeric shorthand or native C/C++ dialect. Default: newest advertised ISO mode, which may be a draft. Invalid managed choices fail before compiling. |
 | `--profile=NAME` | Saved diagnostic or plain-flags profile. `debug=NAME` accepts diagnostic profiles only. |
 | `--no-w` | Removes baseline generated native warnings; profile-specific diagnostics remain. |
@@ -43,7 +61,7 @@ FILE `-` recalls the workspace's last source or launched target; `./-` is litera
 
 Native `debug` combines sanitizers, frame pointers and assertions for actual libstdc++/libc++ headers. `extra` strengthens warnings, bounds/library checks and debug information. C omits C++ library flags. Diagnostic profiles reject known weakening options in both managed and backend arguments; unsupported required diagnostics fail clearly. For example, `debug -- -O0` is allowed, but `debug -- -O3`, disabling sanitizers, response files and warning suppression are rejected.
 
-Python `debug`/`extra` use implementation-specific runtime diagnostics, not native sanitizers or an automatic debugger. Assertion-removing optimization and conflicting warning filters are rejected, including `PYTHONOPTIMIZE`. Native `-O` is unrelated to Python's `-O`/`-OO` assertion removal.
+Python `debug`/`extra` use implementation-specific runtime diagnostics, not native sanitizers or an automatic debugger. Assertion-removing optimization and conflicting warning filters are rejected, including `PYTHONOPTIMIZE`. The requested interpreter reports its implementation/version; CPython development diagnostics require 3.7+. Ordinary Python execution has no extra version-probe process. Native `-O` is unrelated to Python's `-O`/`-OO` assertion removal.
 
 Plain `pragma`, `pragma-fast`, `pragma-native` are native driver flag sets, not source injections. All add `-Wunknown-pragmas`; fast variants enable fast-math, and native adds capability-checked host tuning. Fast-math changes NaN/infinity/rounding behavior. Native artifacts are not guaranteed portable to other CPUs. Explicit native overrides retain compiler precedence.
 
@@ -117,14 +135,43 @@ A nominal violation produces TLE/MLE. The program is killed at the saved multipl
 
 Value options accept `=` or a separate operand, including `-f auto`. Required values cannot be absent/empty; dash-leading wrapper values use `=VALUE`. Optional booleans consume only 0/1. Native warning options are forwarded separately from wrapper `--no-w`.
 
-## Preferences, formatting and diagnostics
+## Preferences
 
 `--set-defaults` edits pending changes with preview, undo/reset, explicit save/cancel. Groups cover build, files, warnings, profiles, limits, measurements, language tools, test layouts and operation/profile routing. Flags toggle: same removes, a changed value replaces, new adds. Use `add FLAGS`/`remove FLAGS` for explicit edits.
 
 `--export-settings=FILE` / `--import-settings=FILE` transfer validated data-only JSON. Schema 1 imports are accepted with legacy values retained and new defaults filled in; exports use schema 2. No auto-loaded config or shell evaluation. Installed-script updates should export/import personal settings.
 
-`--make-prettier`: format before a source operation. Standalone with no FILE/command formats discovered source only. `=only` formats/exits; `=check` checks/exits; `=before` explicitly requests pre-build formatting with implicit FILE. Source stress formats each selected source once. Binary-only operations cannot format. Formatters are optional, respect project style and do not enable lint fixes; include sorting is disabled for native formatting.
+## Formatting
 
-`--doctor` lists required/optional tools without installing them. `--help` needs no compiler; `--version` shows script and selected compiler versions. Compilation diagnostics stay on console. Test runtime stderr is captured fully in its protocol; ordinary stderr stays direct.
+**`--make-prettier` edits formatting with an external formatter.** It does not optimize code, insert pragmas or fix algorithmic errors. A requested missing formatter stops the operation with an installation hint.
+
+| Command | Edits source? | Compiles/runs? |
+| --- | --- | --- |
+| `cp-run main.cpp --make-prettier=only` | Yes | No |
+| `cp-run main.py --make-prettier=check` | No; nonzero exit if changes are needed | No |
+| `cp-run main.cpp --make-prettier` | Yes | Yes, after successful formatting |
+| `cp-run --make-prettier` | Yes, discovered source | No |
+| `cp-run --make-prettier=before` | Yes, discovered source | Yes |
+| `cp-run test main.cpp --make-prettier` | Yes | Compile and check tests |
+
+Install only the needed tool:
+
+- **C/C++:** [clang-format](https://clang.llvm.org/docs/ClangFormat.html); e.g. `sudo apt install clang-format` on Debian/Ubuntu. cp-run uses `.clang-format` when present, otherwise LLVM style, and forces include sorting off.
+- **Python:** [Ruff installation](https://docs.astral.sh/ruff/installation/), then `ruff format` is used. Project Ruff settings apply. To use [Black](https://black.readthedocs.io/en/stable/getting_started.html#installation), select `black` in **`--set-defaults` → Languages & tools → Interpreter/source/standard/tools → Python formatter**.
+
+For example, `print( 1+2 )` becomes `print(1 + 2)` with Ruff's default style:
+
+```sh
+cp-run main.py --make-prettier=only
+cp-run main.py --make-prettier=check    # Exit 0 when no changes are needed
+```
+
+Only selected physical source files are formatted, once each; stress includes MAIN, BRUTE and GEN. No recursive project sweep occurs. All formatter executables are resolved before the first edit. A formatter failure stops the build; edits already made by an earlier formatter remain. Binary-only `run` operations cannot format.
+
+Formatter output goes to stderr, leaving stdout for program output or the compiled path. **Formatting is separate from linting**: `ruff check`, import sorting and `clang-tidy` are not invoked. Formatting follows external-tool style rules; review source changes as usual.
+
+## Diagnostics and exit status
+
+`--doctor` lists required/optional tools without installing them. `--help` needs no compiler; `--version` shows script and selected compiler versions; an explicit interpreter selects its version instead. Compilation diagnostics stay on console. Test runtime stderr is captured fully in its protocol; ordinary stderr stays direct.
 
 Exit 0 means success; wrapper usage errors use 2, WA 3, unfinished comparison 4, TLE 124, MLE 125, interruption 130/143. Native compiler/runtime errors retain meaningful nonzero statuses. Do not infer verdicts from exit number alone; a program's own exit 3 is RE, not WA.

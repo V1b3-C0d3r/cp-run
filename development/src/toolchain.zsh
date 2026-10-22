@@ -34,7 +34,7 @@ resolve_compiler() {
                 fi
             done
         done
-        [[ -n $best_path ]] || fail 'GNU g++ not found; set CXX or select --compiler=clang++; [[ $language != c ]] || compiler=clang' 127
+        [[ -n $best_path ]] || fail "GNU $driver not found; set CC/CXX or select --compiler=clang" 127
         compiler=$best_path; return
     fi
     candidate=$(whence -p -- "$compiler" 2>/dev/null) || fail "compiler not found: $compiler" 127

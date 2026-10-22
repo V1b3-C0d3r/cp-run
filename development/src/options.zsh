@@ -27,7 +27,9 @@ Commands:
 
 Language and build:
   --compiler=NAME         GCC/gcc/g++ (default), clang/clang++; any position
-  --interpreter=NAME      User Python executable; default python3, also pypy3
+  --interpreter-arg=ARG   Repeatable Python option (also preserves exact replay)
+  --interpreter=NAME      User Python executable; default pypy3
+  --language=NAME         Omitted-source preference: c++, c, python or auto
   -std=VALUE              Numeric/native C or C++ alias; newest advertised by default
   --profile=NAME          Saved debug/flags profile; pragma[-fast|-native] are native
   --no-w                  Omit generated baseline warnings
@@ -99,7 +101,7 @@ take_value() {
         # Wrapper values starting with '-' must be attached. Native compiler
         # operands keep their literal spelling, even when they resemble flags.
         case "$arg" in
-            --output|--std|--stdlib) ;;
+            --output|--std|--stdlib|--interpreter-arg) ;;
             --*) [[ $1 != -* ]] || fail "missing value for $arg; use ${arg}=VALUE for a value starting with '-'" ;;
         esac
         value=$1; consumed=1
@@ -208,7 +210,7 @@ parse_cli() {
             --compiler|--compiler=*|--dest-dir|--dest-dir=*|--wsp-dir|--wsp-dir=*|--wsp-name|--wsp-name=*|--find|--find=*|--TLE|--TLE=*|--MLE|--MLE=*|--sep|--sep=*|--test-iters|--test-iters=*|--seed|--seed=*)
                 take_value "$@"; (( ! consumed )) || shift
                 case "$arg" in
-                    --compiler*) compiler_choice=$value ;;
+                    --compiler*) compiler_choice=$value; compiler_given=1 ;;
                     --dest-dir*) destination=$value; destination_given=1 ;;
                     --wsp-dir*) workspace_dir=$value; dir_given=1 ;;
                     --wsp-name*) workspace_name=$value; name_given=1 ;;
@@ -256,6 +258,10 @@ parse_cli() {
                     --source*) source_file=$value; source_given=1 ;;
                     --report-tests*) [[ $value == all || $value == failed ]] || fail '--report-tests accepts all or failed'; report_tests=$value; report_controls=1 ;;
                 esac ;;
+            --interpreter-arg|--interpreter-arg=*) take_value "$@"; (( ! consumed )) || shift; interpreter_args+=("$value") ;;
+            --language|--language=*)
+                take_value "$@"; (( ! consumed )) || shift
+                case "$value" in c++|c|python|auto) language_choice=$value ;; *) fail '--language accepts c++, c, python or auto' ;; esac ;;
             --interpreter|--interpreter=*) take_value "$@"; (( ! consumed )) || shift; interpreter_choice=$value; interpreter_given=1 ;;
 
             --cph-ng|--cph-ng=*|--save-relpth|--save-relpth=*) fail 'use --save-relpath' ;;

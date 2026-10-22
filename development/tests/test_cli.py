@@ -437,10 +437,10 @@ class CliTest(unittest.TestCase):
     def test_different_profile_selections_conflict(self):
         self.rejected("debug", self.source.name, "--profile=extra")
 
-    def test_managed_no_w_keeps_profile_checks(self):
-        _, args = self.build("--profile=extra", "--no-w")
-        self.assertFalse(any(arg.startswith("-W") for arg in args))
-        self.assertIn("-fsanitize=address,undefined", args)
+    def test_managed_no_w_conflicts_with_debug_profile(self):
+        result = self.invoke(self.source.name, "--profile=extra", "--no-w")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('--no-w', result.stderr)
 
     def test_profile_compiler_operand_does_not_weaken_level(self):
         _, args = self.build("--profile=extra", "--", "-I", "-O3")

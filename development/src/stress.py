@@ -27,6 +27,11 @@ def _bundle(config, report, directory, seed, iteration, verdict, results):
             target = destination / filename
             shutil.copyfile(source, target)
             files[filename] = _file_digest(target)
+    failed_repeat = config.get('_failed_output')
+    if failed_repeat and Path(failed_repeat).exists():
+        shutil.copyfile(failed_repeat, destination / 'failed-repeat.txt')
+    for index, (_, path) in enumerate(config.get('_stderr_paths', [])):
+        if Path(path).exists(): shutil.copyfile(path, destination / ('stderr-{}.txt'.format(index)))
     report.copy_to(destination / "test_out")
     destination = destination.resolve()
     if verdict in ("GENERATOR_ERROR", "ORACLE_ERROR") or "candidate" not in results:
@@ -39,12 +44,18 @@ def _bundle(config, report, directory, seed, iteration, verdict, results):
                   str(destination / "input.txt"), str(destination / "ans.txt"), str(destination / "replay-report.txt"),
                   "--TLE=" + str(config.get("timeout_ms", "inf")),
                   "--MLE=" + str(config.get("memory_mib", "inf")), "--", *config.get("runtime_args", [])]
+    # A saved candidate failure replays against the saved answer, so only its
+    # exact interpreter options are needed; no source/profile is regenerated.
+    chosen = config.get('main_argv', [])
+    if config.get('executable', '').endswith('.py') and chosen:
+        boundary = replay.index('--')
+        replay[boundary:boundary] = ['--interpreter=' + chosen[0], *['--interpreter-arg=' + arg for arg in chosen[1:-1]]]
     if config.get('show_time') or config.get('show_memory'):
         boundary = replay.index('--')
         replay[boundary:boundary] = [flag for enabled, flag in (
             (config.get('show_time'), '-t'), (config.get('show_memory'), '-m')) if enabled] + [
             '--average=' + str(config.get('average', 1)), '--warm-up=' + str(int(bool(config.get('warmup'))))]
-    manifest = {"seed": seed, "iteration": iteration, "verdict": verdict,
+    manifest = {"format": "cp-run-failure", "schema": 2, "cwd": str(Path.cwd()), "seed": seed, "iteration": iteration, "verdict": verdict,
                 "commands": {"main": [*config.get("main_argv", [config["executable"]]), *config.get("runtime_args", [])],
                              "brute": config.get("brute_argv", [config["brute"]]), "generator": [*config.get("generator_argv", [config["generator"]]), str(seed)]},
                 "limits": {"timeout_ms": config.get("timeout_ms", "inf"), "memory_mib": config.get("memory_mib", "inf")},
@@ -83,11 +94,13 @@ def execute_stress(config):
         directory, report = Path(temporary), Protocol(config)
         incoming, answer, actual = (directory / name for name in ('input.txt', 'ans.txt', 'real-out.txt'))
         seed, iteration, results = start, 0, {}
+        current_bundle = None
         try:
             report.emit('cp-run stress: start seed {}; maximum {} iterations'.format(start, count))
             for iteration in range(1, count + 1):
                 seed = (start + iteration - 1) % 2**64
                 results, verdict, comparison = {}, None, None
+                current_bundle = None
                 for target in (incoming, answer, actual): target.write_bytes(b'')
                 role_stderr = []
                 # A failing generator/oracle leaves this seed unresolved. Its
@@ -116,8 +129,12 @@ def execute_stress(config):
                     report.emit('Iteration {}: {} (seed {})'.format(iteration, verdict, seed))
                 verdicts.append((verdict, result.status))
                 groups.setdefault(verdict, []).append(iteration)
+                if verdict in ('TLE', 'MLE'):
+                    for violation in config.get('_resource_violations', []):
+                        if violation != verdict: groups.setdefault(violation, []).append(iteration)
                 if verdict != 'AC' and saved < maximum:
                     bundle = _bundle(config, report, directory, seed, iteration, verdict, results)
+                    current_bundle = bundle
                     saved += 1
                     if config.get('minimize') and verdict == 'WA':
                         minimize_failure(config, directory, bundle)
@@ -131,7 +148,7 @@ def execute_stress(config):
             return status
         except KeyboardInterrupt:
             report.emit('INTERRUPTED at iteration {} (seed {})'.format(iteration, seed))
-            if incoming.exists(): _bundle(config, report, directory, seed, iteration, 'INTERRUPTED', results)
+            if incoming.exists() and current_bundle is None: _bundle(config, report, directory, seed, iteration, 'INTERRUPTED', results)
             report.finish(); return 130
         except BaseException:
             report.abort(); raise

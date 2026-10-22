@@ -84,6 +84,9 @@ def _quoted(value):
 
 def _section(report, title, path, different=None, display_limit=10000):
     report.emit(title + ":")
+    if not report.detail_remaining:
+        report.emit("  ... display omitted after diagnostic limit; raw data retained")
+        return
     found = False
     with open(path, "rb") as stream:
         try:

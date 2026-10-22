@@ -75,8 +75,11 @@ def execute_test(config):
                     result, comparison = run_candidate(runner, config, argv, incoming, actual, answer, 'test {}'.format(number))
                     if position and (config.get('auto') or config.get('mult')): all_output.write(plan.separator)
                     with open(actual, 'rb') as stream: shutil.copyfileobj(stream, all_output)
+                    retain_failed_repeat(config, number)
                     verdict = case_protocol(report, config, number, incoming, actual, answer, result, comparison)
                     groups.setdefault(verdict, []).append(number)
+                    for violation in config.get('_resource_violations', []):
+                        if violation != verdict: groups.setdefault(violation, []).append(number)
                     verdicts.append((verdict, result.status))
                     if verdict == 'INTERRUPTED': break
             status = _aggregate(verdicts)

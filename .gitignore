@@ -12,6 +12,7 @@ __pycache__/
 test_out
 real-out.txt
 stress-failure*/
+test-repeat-failure*/
 build/
 /cp-run-*.zip
 

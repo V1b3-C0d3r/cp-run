@@ -194,7 +194,7 @@ class _RealPragmaCase(unittest.TestCase):
         for profile in PROFILES:
             result = self.run_source(profile, source='unknown.cpp')
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn('unknown pragma', result.stderr.lower())
+            self.assertIn('warning:', result.stderr.lower())
             self.assertIn('-Wunknown-pragmas', result.stderr)
 
     def check_fast_math_has_explicit_observable_semantics(self):

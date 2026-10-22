@@ -15,6 +15,8 @@ typeset -r SCRIPT_PATH=${0:A} # Settings follow the real script when invoked thr
 # Managed by --set-defaults; ordinary launches read these native values directly.
 typeset -g DEFAULT_COMPILER=GCC
 typeset -g DEFAULT_STANDARD=auto
+typeset -g DEFAULT_LANGUAGE=c++
+typeset -gA LANGUAGE_COMPILERS=()
 typeset -g DEFAULT_SOURCE=main.cpp
 typeset -g DEFAULT_TIMEOUT=inf
 typeset -g DEFAULT_MEMORY_LIMIT=inf
@@ -24,14 +26,14 @@ typeset -g DEFAULT_ANSWER=ans.txt
 typeset -g DEFAULT_REPORT=test_out
 typeset -g DEFAULT_SEPARATOR='\n\x1e\n'
 typeset -g MANUAL_SEPARATOR='\n###\n'
-typeset -g DEFAULT_INTERPRETER=python3
+typeset -g DEFAULT_INTERPRETER=pypy3
 typeset -g C_STANDARD=auto
 typeset -g C_SOURCE=main.c
 typeset -g PYTHON_SOURCE=main.py
 typeset -ga PYTHON_FLAGS=()
 typeset -gA MODE_CPYTHON=(debug '-X dev -W default' extra '-X dev -W error')
 typeset -gA MODE_PYPY=(debug '-W default -X track-resources' extra '-W error -X track-resources')
-typeset -gA ACTION_DEST_DIR=(test-mult tests companion tests)
+typeset -gA ACTION_DEST_DIR=(test-mult tests)
 typeset -gA ACTION_SAVE_RELPATH=()
 typeset -gA ACTION_SAVE_TEST_RELPATH=()
 typeset -gA MODE_DEST_DIR=()
@@ -127,7 +129,9 @@ Commands:
 
 Language and build:
   --compiler=NAME         GCC/gcc/g++ (default), clang/clang++; any position
-  --interpreter=NAME      User Python executable; default python3, also pypy3
+  --interpreter-arg=ARG   Repeatable Python option (also preserves exact replay)
+  --interpreter=NAME      User Python executable; default pypy3
+  --language=NAME         Omitted-source preference: c++, c, python or auto
   -std=VALUE              Numeric/native C or C++ alias; newest advertised by default
   --profile=NAME          Saved debug/flags profile; pragma[-fast|-native] are native
   --no-w                  Omit generated baseline warnings
@@ -199,7 +203,7 @@ take_value() {
         # Wrapper values starting with '-' must be attached. Native compiler
         # operands keep their literal spelling, even when they resemble flags.
         case "$arg" in
-            --output|--std|--stdlib) ;;
+            --output|--std|--stdlib|--interpreter-arg) ;;
             --*) [[ $1 != -* ]] || fail "missing value for $arg; use ${arg}=VALUE for a value starting with '-'" ;;
         esac
         value=$1; consumed=1
@@ -308,7 +312,7 @@ parse_cli() {
             --compiler|--compiler=*|--dest-dir|--dest-dir=*|--wsp-dir|--wsp-dir=*|--wsp-name|--wsp-name=*|--find|--find=*|--TLE|--TLE=*|--MLE|--MLE=*|--sep|--sep=*|--test-iters|--test-iters=*|--seed|--seed=*)
                 take_value "$@"; (( ! consumed )) || shift
                 case "$arg" in
-                    --compiler*) compiler_choice=$value ;;
+                    --compiler*) compiler_choice=$value; compiler_given=1 ;;
                     --dest-dir*) destination=$value; destination_given=1 ;;
                     --wsp-dir*) workspace_dir=$value; dir_given=1 ;;
                     --wsp-name*) workspace_name=$value; name_given=1 ;;
@@ -356,6 +360,10 @@ parse_cli() {
                     --source*) source_file=$value; source_given=1 ;;
                     --report-tests*) [[ $value == all || $value == failed ]] || fail '--report-tests accepts all or failed'; report_tests=$value; report_controls=1 ;;
                 esac ;;
+            --interpreter-arg|--interpreter-arg=*) take_value "$@"; (( ! consumed )) || shift; interpreter_args+=("$value") ;;
+            --language|--language=*)
+                take_value "$@"; (( ! consumed )) || shift
+                case "$value" in c++|c|python|auto) language_choice=$value ;; *) fail '--language accepts c++, c, python or auto' ;; esac ;;
             --interpreter|--interpreter=*) take_value "$@"; (( ! consumed )) || shift; interpreter_choice=$value; interpreter_given=1 ;;
 
             --cph-ng|--cph-ng=*|--save-relpth|--save-relpth=*) fail 'use --save-relpath' ;;
@@ -542,20 +550,27 @@ resolve_binary() {
 # helpers use zsh's dynamic local scope; their arrays never leak between roles.
 # Omitted source selection is nonrecursive and uses regular files only.
 select_source() {
-    local -a sources=(./*.cpp(N-.))
-    if (( ! ${#sources} )) && [[ ! -f $DEFAULT_SOURCE ]]; then
-        sources=(./*.(cc|cxx|C|c|py)(N-.))
-        if (( ${#sources} != 1 )); then
-            local -a fallback=() candidate
-            for candidate in "$C_SOURCE" "$PYTHON_SOURCE"; do [[ ! -f $candidate ]] || fallback+=("$candidate"); done
-            if (( ${#fallback} == 1 )); then source_file=${fallback[1]}; return; fi
-        fi
-    fi
-    if (( ${#sources} == 1 )); then source_file=${sources[1]#./}
-    elif [[ -f $DEFAULT_SOURCE ]]; then source_file=$DEFAULT_SOURCE
-    else fail "cannot select a source: found ${#sources} .cpp files and no $DEFAULT_SOURCE"; fi
+    local preferred=$language_choice fallback candidate
+    local -a sources=() fallbacks=()
+    case "$preferred" in
+        c++) sources=(./*.(cpp|cc|cxx|C)(N-.)); fallback=$DEFAULT_SOURCE ;;
+        c) sources=(./*.c(N-.)); fallback=$C_SOURCE ;;
+        python) sources=(./*.py(N-.)); fallback=$PYTHON_SOURCE ;;
+        auto) fallback= ;;
+    esac
+    if (( ${#sources} == 1 )); then source_file=${sources[1]#./}; return; fi
+    if [[ -n $fallback && -f $fallback ]]; then source_file=$fallback; return; fi
+    (( ! ${#sources} )) || fail "cannot select $preferred source: provide FILE or create $fallback"
+    # With no preferred-language source, accept a unique other-language source
+    # or a unique conventional fallback. Never resolve ambiguity by glob order.
+    sources=(./*.(cpp|cc|cxx|C|c|py)(N-.))
+    if (( ${#sources} == 1 )); then source_file=${sources[1]#./}; return; fi
+    for candidate in "$DEFAULT_SOURCE" "$C_SOURCE" "$PYTHON_SOURCE"; do
+        [[ ! -f $candidate ]] || fallbacks+=("$candidate")
+    done
+    if (( ${#fallbacks} == 1 )); then source_file=${fallbacks[1]}; return; fi
+    fail "cannot select a source: provide FILE (found ${#sources} supported files)"
 }
-
 
 # Source: languages.zsh
 # Languages produce argv, not command strings. The internal service Python is
@@ -574,47 +589,88 @@ resolve_interpreter() {
     interpreter=${interpreter:A}
 }
 
+# Audit only source ownership and diagnostic promises. Other options remain
+# literal backend argv. Python short clusters must not hide -O or -Wignore.
+audit_python_options() {
+    local guarded=$1 floor=$2 word letters letter parameter action index=1
+    shift 2
+    local -a words=("$@")
+    while (( index <= ${#words} )); do
+        word=${words[index]}; (( ++index ))
+        case "$word" in
+            -|--|--help|--version|--info) fail "interpreter option replaces source execution: $word" ;;
+            --jit|--check-hash-based-pycs)
+                (( index <= ${#words} )) || fail "missing Python operand for $word"
+                (( ++index )); continue ;;
+            --*) continue ;; # Unknown long switches remain the interpreter's decision.
+            -?*) letters=${word#-} ;;
+            *) fail "interpreter operand replaces FILE: $word; put program arguments after the runtime boundary" ;;
+        esac
+        while [[ -n $letters ]]; do
+            letter=${letters[1]}; letters=${letters[2,-1]}
+            case "$letter" in
+                c|m|h|V|i|'?') fail "interpreter option replaces source execution: $word" ;;
+                O) (( ! guarded )) || fail "debug profile conflicts with $word" ;;
+                W|X)
+                    parameter=$letters; letters=
+                    if [[ -z $parameter ]]; then
+                        (( index <= ${#words} )) || fail "missing Python operand for $word"
+                        parameter=${words[index]}; (( ++index ))
+                    fi
+                    if [[ $letter == W ]] && (( guarded )); then
+                        action=${parameter%%:*}; action=${action//[[:space:]]/}
+                        # Python accepts abbreviated actions (-Wi, -We). Keep
+                        # only filters at least as visible as the profile floor.
+                        case "$action" in
+                            e|er|err|erro|error) ;;
+                            ''|d|de|def|defa|defau|defaul|default|a|al|all|alw|alwa|alway|always)
+                                [[ $floor != error ]] || fail "debug profile conflicts with Python warning filter: $parameter" ;;
+                            *) fail "debug profile conflicts with Python warning filter: $parameter" ;;
+                        esac
+                    fi ;;
+                b|B|d|E|I|P|q|R|s|S|u|U|v) ;;
+                *) break ;; # An invalid switch is diagnosed by Python, unchanged.
+            esac
+        done
+    done
+}
+
 python_launch() {
-    local selected=$1 selected_profile=$2 word
-    local -a extra=()
+    local selected=$1 selected_profile=$2 text= implementation= python_version= floor=default word index
+    local -a extra=("${interpreter_args[@]}") profile_options=()
     resolve_interpreter
     launch_args=("$interpreter" "${PYTHON_FLAGS[@]}")
-    # Primary backend tails apply only to roles of the same backend class.
-    if [[ $primary_language == python ]]; then extra=("${compiler_args[@]}"); fi
+    # A native primary's compiler tail never reaches an interpreted role.
+    if [[ $primary_language == python ]]; then extra+=("${compiler_args[@]}"); fi
     if [[ $selected_profile != none ]]; then
-        local implementation
-        implementation=$("$interpreter" -c 'import platform; print(platform.python_implementation())') || return $?
-        local text=
+        # Query only requested profiles. The running interpreter reports its
+        # implementation and version; executable names are not reliable evidence.
+        value=$("$interpreter" -c 'import platform,sys; print(platform.python_implementation()); print("%d.%d" % sys.version_info[:2])') || return $?
+        implementation=${value%%$'\n'*}; python_version=${value#*$'\n'}
         case "$implementation" in
             CPython) text=${MODE_CPYTHON[$selected_profile]-} ;;
             PyPy) text=${MODE_PYPY[$selected_profile]-} ;;
         esac
         [[ -n $text ]] || fail "profile '$selected_profile' has no $implementation configuration"
-        launch_args+=("${(@Q)${(z)text}}")
+        # CPython development mode was introduced in 3.7. Built-in PyPy
+        # profiles use Python 3 diagnostics, not CPython-only -X dev.
+        case "$implementation:$python_version" in
+            CPython:3.[0-6]|CPython:2.*|PyPy:2.*)
+                fail "profile '$selected_profile' requires Python 3.7+ diagnostics; selected $implementation $python_version" ;;
+        esac
+        profile_options=("${(@Q)${(z)text}}")
+        launch_args+=("${profile_options[@]}")
         if [[ ${MODE_KIND[$selected_profile]} == debug ]]; then
             (( ! no_warnings )) || fail 'debug profile conflicts with --no-w'
             [[ ${PYTHONOPTIMIZE:-0} == 0 ]] || fail 'debug profile conflicts with PYTHONOPTIMIZE'
-            for word in "${PYTHON_FLAGS[@]}" "${extra[@]}"; do
-                case "$word" in -O|-OO|-Wignore|-Wignore:*|-Wdefault|-Wdefault:*) fail "debug profile conflicts with $word" ;; esac
+            for (( index=1; index<=${#profile_options}; ++index )); do
+                word=${profile_options[index]}
+                if [[ $word == -Werror* || $word == -W && ${profile_options[index+1]-} == error* ]]; then floor=error; fi
             done
+            audit_python_options 1 "$floor" "${PYTHON_FLAGS[@]}" "${extra[@]}"
         fi
     fi
-    if [[ $selected_profile != none && ${MODE_KIND[$selected_profile]} == debug ]]; then
-        local -a audited=("${PYTHON_FLAGS[@]}" "${extra[@]}")
-        local index filter
-        for (( index=1; index<=${#audited}; ++index )); do
-            word=${audited[index]}
-            if [[ $word == -W ]]; then (( ++index )); filter=${audited[index]-}
-            elif [[ $word == -W?* ]]; then filter=${word#-W}
-            else continue; fi
-            if [[ $filter == ignore* || $selected_profile == extra && $filter != error* ]]; then
-                fail "debug profile conflicts with Python warning filter: $filter"
-            fi
-        done
-    fi
-    for word in "${launch_args[@]:1}" "${extra[@]}"; do
-        case "$word" in -c|-m|--|--help|--version|-V|-i) fail "interpreter option replaces source execution: $word" ;; esac
-    done
+    audit_python_options 0 default "${launch_args[@]:1}" "${extra[@]}"
     launch_args+=("${extra[@]}" "$selected")
 }
 
@@ -631,17 +687,18 @@ record_launch() {
 # Route each setting independently. Unset map entries inherit; '0' disables a
 # saved boolean. Test submodes inherit the named test command before globals.
 resolve_action_defaults() {
-    local key=$action
+    local key=$action base=$action parent=$action
+    if [[ $action == pack || $action == unpack || $action == companion ]]; then base=test-mult; parent=test; fi
     if [[ $action == test ]]; then
         (( ! auto )) || key=test-auto
         (( ! mult )) || key=test-mult
     fi
     if (( ! destination_given )); then
-        destination=${MODE_DEST_DIR[$profile]-${ACTION_DEST_DIR[$key]-${ACTION_DEST_DIR[$action]-$DEFAULT_DESTINATION}}}
+        destination=${MODE_DEST_DIR[$profile]-${ACTION_DEST_DIR[$key]-${ACTION_DEST_DIR[$base]-${ACTION_DEST_DIR[$parent]-$DEFAULT_DESTINATION}}}}
     fi
-    if (( ! relpath_given )); then save_relpath=${MODE_SAVE_RELPATH[$profile]-${ACTION_SAVE_RELPATH[$key]-${ACTION_SAVE_RELPATH[$action]-0}}}; fi
-    if (( ! test_relpath_given )); then save_test_relpath=${MODE_SAVE_TEST_RELPATH[$profile]-${ACTION_SAVE_TEST_RELPATH[$key]-${ACTION_SAVE_TEST_RELPATH[$action]-0}}}; fi
-    if (( save_relpath && ! destination_given )) && [[ -z ${MODE_DEST_DIR[$profile]-}${ACTION_DEST_DIR[$key]-}${ACTION_DEST_DIR[$action]-} ]]; then
+    if (( ! relpath_given )); then save_relpath=${MODE_SAVE_RELPATH[$profile]-${ACTION_SAVE_RELPATH[$key]-${ACTION_SAVE_RELPATH[$base]-${ACTION_SAVE_RELPATH[$parent]-0}}}}; fi
+    if (( ! test_relpath_given )); then save_test_relpath=${MODE_SAVE_TEST_RELPATH[$profile]-${ACTION_SAVE_TEST_RELPATH[$key]-${ACTION_SAVE_TEST_RELPATH[$base]-${ACTION_SAVE_TEST_RELPATH[$parent]-0}}}}; fi
+    if (( save_relpath && ! destination_given )) && [[ -z ${MODE_DEST_DIR[$profile]-}${ACTION_DEST_DIR[$key]-}${ACTION_DEST_DIR[$base]-}${ACTION_DEST_DIR[$parent]-} ]]; then
         destination=$DEFAULT_RELPATH_DESTINATION
     fi
 }
@@ -696,7 +753,7 @@ resolve_compiler() {
                 fi
             done
         done
-        [[ -n $best_path ]] || fail 'GNU g++ not found; set CXX or select --compiler=clang++; [[ $language != c ]] || compiler=clang' 127
+        [[ -n $best_path ]] || fail "GNU $driver not found; set CC/CXX or select --compiler=clang" 127
         compiler=$best_path; return
     fi
     candidate=$(whence -p -- "$compiler" 2>/dev/null) || fail "compiler not found: $compiler" 127
@@ -1021,7 +1078,10 @@ build_artifact() {
         sidecar_protected+=("$cwd/real-out.txt")
         (( console_out )) || sidecar_protected+=("$report_file")
         if [[ $action == test ]] && (( ! console_in )); then sidecar_protected+=("$input_file" "$answer_file"); fi
-    elif [[ $f_mode == auto ]]; then sidecar_protected+=("$input_file" "$result_file"); fi
+    elif [[ $f_mode == auto || $f_mode == in || $f_mode == out ]]; then
+        [[ $f_mode == out ]] || sidecar_protected+=("$input_file")
+        [[ $f_mode == in ]] || sidecar_protected+=("$result_file")
+    fi
     [[ $profile == none || ${MODE_KIND[$profile]-} != debug ]] || debug_mode=1
     build_flags || return $?
     mkdir -p -- "${final:h}" || fail "cannot create binary directory: ${final:h}" 1
@@ -1145,7 +1205,8 @@ cleanup() {
 }
 
 main() {
-    local language=c++ primary_language=c++ interpreter= interpreter_choice=$DEFAULT_INTERPRETER
+    local interpreter_info=
+    local language=c++ primary_language=c++ interpreter= interpreter_choice=$DEFAULT_INTERPRETER language_choice=$DEFAULT_LANGUAGE
     local action=ordinary source_file= compiler_choice=$DEFAULT_COMPILER family= compiler= compiler_banner= profile=none
     local workspace_dir=$DEFAULT_WORKSPACE workspace_name= destination=$DEFAULT_DESTINATION workspace= workspace_prefix=
     local output= output_dir= output_name= output_abs= planned_source= planned_output= resolved_binary= auto_standard=
@@ -1162,12 +1223,12 @@ main() {
     local bundle_format=legacy bundle_stream= data_input= data_output= text_separator=$MANUAL_SEPARATOR report_tests=$DEFAULT_REPORT_TESTS
     local minimize= validator=
     local prettier= companion_port=$COMPANION_PORT companion_wait=$COMPANION_WAIT
-    local -i doctor_requested=0 interpreter_given=0
+    local -i doctor_requested=0 interpreter_given=0 compiler_given=0
     local -i data_controls=0 layout_controls=0 companion_controls=0 source_given=0 report_controls=0 bundle_given=0
     local -i overwrite=0 text_conversion=0 stop_on_failure=0
     local -i positional_count=0 mult=0 save_test_relpath=0 relpath_given=0 test_relpath_given=0
     local -i timeout_given=0 memory_given=0 measurement_controls=0
-    local -a recalled_launch=() launch_args=() primary_launch=() original_compiler_args=() original_standards=()
+    local -a interpreter_args=() recalled_launch=() launch_args=() primary_launch=() original_compiler_args=() original_standards=()
     local -a compiler_args=() runtime_args=() cases=() sources=() artifacts=() protected_files=() build_indices=()
     local -A config=() compiler_paths=() compiler_banners=() standard_vocab=()
     local -a managed_standards=() supported_standards=()
@@ -1182,7 +1243,8 @@ main() {
         python_action doctor; return $?
     fi
     if [[ $prettier == only || $prettier == check || $prettier == auto && $action == ordinary && $positional_count == 0 ]]; then
-        (( ! binary_mode )) || fail 'formatting needs source files'
+        (( ! binary_mode && ! ${#compiler_args} && ! ${#runtime_args} && ! output_given )) || fail 'format-only action does not compile or run; provide a source file'
+        [[ $profile == none || -n ${MODE_KIND[$profile]-} ]] || fail "profile not found: $profile"
         [[ -n $source_file ]] || select_source
         protected_files=("${source_file:A}")
         config=(prettier "$prettier" native_formatter "$NATIVE_FORMATTER" python_formatter "$PYTHON_FORMATTER")
@@ -1198,6 +1260,17 @@ main() {
         embedded_python settings "$SCRIPT_PATH"; return $?
     fi
     case "${compiler_choice:l}" in gcc|g++) family=gcc ;; clang|clang++) family=clang ;; *) fail 'compiler must be GCC, gcc, g++, clang or clang++' ;; esac
+    if (( version_requested )) && { (( interpreter_given )) || [[ $source_file == *.py || -z $source_file && $language_choice == python && $compiler_given == 0 ]]; }; then
+        printf '%s %s\n' "$PROGRAM" "$VERSION"; resolve_interpreter; "$interpreter" --version; return $?
+    fi
+    if (( ! compiler_given )); then
+        value=$language_choice
+        if [[ -n $source_file ]]; then source_language "$source_file"; value=$language; fi
+        [[ $value == c ]] || value=c++
+        language=$value
+        compiler_choice=${LANGUAGE_COMPILERS[$value]-$DEFAULT_COMPILER}
+        case "${compiler_choice:l}" in gcc|g++) family=gcc ;; *) family=clang ;; esac
+    fi
     if (( version_requested )); then printf '%s %s\n' "$PROGRAM" "$VERSION"; resolve_compiler; "$compiler" --version; return $?; fi
 
     (( ! companion_controls )) || [[ $action == companion ]] || fail '--port/--wait require companion'
@@ -1213,6 +1286,7 @@ main() {
     fi
     # Cheap option conflicts precede file opens and all compiler discovery.
     [[ $profile == none || -n ${MODE_KIND[$profile]-} ]] || fail "profile not found: $profile; use --set-defaults"
+    if [[ $profile != none && ${MODE_KIND[$profile]} == debug ]] && (( no_warnings )); then fail 'debug profile conflicts with --no-w'; fi
     if [[ $action == debug && ${MODE_KIND[$profile]} != debug ]]; then
         fail "profile '$profile' is a flags set; select it with --profile=$profile"
     fi
@@ -1228,6 +1302,7 @@ main() {
     fi
     [[ -z $seed || $action == stress ]] || fail '--seed requires stress'
     [[ -z $minimize && -z $validator || $action == stress ]] || fail 'counterexample reduction requires stress'
+    [[ -z $validator || -n $minimize ]] || fail '--validator requires --minimize'
     if [[ $minimize == lines || $minimize == cases ]]; then [[ -n $validator ]] || fail 'this reduction strategy requires --validator'; fi
     if [[ -n $validator ]]; then validator=${validator:A}; [[ -f $validator && ( -x $validator || $validator == *.py ) ]] || fail 'validator must be executable or a Python script'; fi
     resolve_action_defaults
@@ -1281,7 +1356,11 @@ main() {
         python_action companion; return $?
     fi
     if [[ $action == pack || $action == unpack ]]; then
-        [[ -n $source_file ]] || select_source
+        if [[ -z $source_file ]]; then
+            local -a anchors=(./*.(cpp|cc|cxx|C|c|py)(N-.))
+            if (( ${#anchors} == 1 )); then source_file=${anchors[1]}
+            else source_file=$DEFAULT_SOURCE; fi
+        fi
         config=(operation "$action" workspace "$workspace" destination "$destination" test_dir "$test_dir"
                 save_test_relpath "$save_test_relpath" default_input "$input_file" default_answer "$answer_file"
                 bundle_stream "$bundle_stream" data_input "$data_input" data_output "$data_output"
@@ -1334,7 +1413,7 @@ main() {
     config=(operation "$action" auto "$auto" mult "$mult" workspace "${workspace:-$cwd}" destination "$destination"
             test_dir "$test_dir" save_test_relpath "$save_test_relpath" source_anchor "${source_file:A}"
             in_template "$in_template" ans_template "$ans_template" bundle_format "$bundle_format"
-            minimize "$minimize" validator "$validator" minimize_attempts "$MINIMIZE_ATTEMPTS" minimize_seconds "$MINIMIZE_SECONDS"
+            minimize "$minimize" validator "$validator" validator_interpreter "$interpreter_choice" minimize_attempts "$MINIMIZE_ATTEMPTS" minimize_seconds "$MINIMIZE_SECONDS"
             report_tests "$report_tests" stop_on_failure "$stop_on_failure" max_failures "$MAX_FAILURES" input "$input_file" answer "$answer_file" report "$report_file"
             actual "$cwd/real-out.txt" sep "$separator" cases "${(j:,:)cases}" num_test "$num_test"
             line_limit "$DEFAULT_LINE_LIMIT" cin "$console_in" cout "$console_out" executable "$output_abs"
@@ -1354,10 +1433,16 @@ main() {
         fi
         python_action preflight || return $?
     elif [[ $f_mode == auto || $f_mode == in || $f_mode == out ]]; then
-        for value in "${protected_files[@]}" "$input_file"; do
-            [[ ${result_file:A} != ${value:A} && ! $result_file -ef $value ]] || fail 'redirected output would overwrite an input, source or binary' 1
-        done
-        for value in "${artifacts[@]}"; do [[ ${value:A} != ${input_file:A} && ! $value -ef $input_file ]] || fail 'binary output would overwrite runtime input' 1; done
+        if [[ $f_mode != in ]]; then
+            local -a redirect_protected=("${protected_files[@]}")
+            [[ $f_mode != auto ]] || redirect_protected+=("$input_file")
+            for value in "${redirect_protected[@]}"; do
+                [[ ${result_file:A} != ${value:A} && ! $result_file -ef $value ]] || fail 'redirected output would overwrite an input, source or binary' 1
+            done
+        fi
+        if [[ $f_mode != out ]]; then
+            for value in "${artifacts[@]}"; do [[ ${value:A} != ${input_file:A} && ! $value -ef $input_file ]] || fail 'binary output would overwrite runtime input' 1; done
+        fi
     fi
     if [[ -n $prettier ]]; then
         (( ! binary_mode )) || fail 'formatting needs source files'
@@ -1379,6 +1464,7 @@ main() {
                 launch_args=()
                 for (( value=1; value<=config[launch_${reused_role}_count]; ++value )); do launch_args+=("${config[launch_${reused_role}_${value}]}"); done
                 record_launch "$role"
+                config[tool_$role]=${config[tool_$reused_role]-}
                 continue
             fi
             profile=$base_profile; (( index == 1 )) || profile=none
@@ -1392,7 +1478,7 @@ main() {
                 fi
                 python_launch "${sources[index]}" "$profile" || return $?
                 if [[ $action == compile || $action == test || $action == stress ]]; then
-                    "$interpreter" -c 'import pathlib,sys; p=sys.argv[1]; compile(pathlib.Path(p).read_bytes(), p, "exec")' "${sources[index]}" || {
+                    compiler_banner=$("$interpreter" -c 'import pathlib,sys; p=sys.argv[1]; compile(pathlib.Path(p).read_bytes(), p, "exec"); print(sys.implementation.name, sys.version)' "${sources[index]}") || {
                         local build_status=$?
                         if [[ $action == test || $action == stress ]]; then config[build_status]=$build_status; config[failed_role]=$role; python_action ce; fi
                         return $build_status
@@ -1411,6 +1497,10 @@ main() {
                 done
                 local DEFAULT_STANDARD=$native_standard
                 [[ $language != c ]] || DEFAULT_STANDARD=$C_STANDARD
+                # Each native role chooses its own family; an explicit CLI
+                # compiler applies to all roles and wins over saved preferences.
+                if (( ! compiler_given )); then compiler_choice=${LANGUAGE_COMPILERS[$language]-$DEFAULT_COMPILER}; fi
+                case "${compiler_choice:l}" in gcc|g++) family=gcc ;; *) family=clang ;; esac
                 if [[ -n ${compiler_paths[$language]-} ]]; then
                     compiler=${compiler_paths[$language]}; compiler_banner=${compiler_banners[$language]}
                     supported_standards=("${(@s: :)standard_vocab[$language]}")
@@ -1451,6 +1541,10 @@ main() {
             else launch_args=("${artifacts[index]}"); fi
             case $index in 1) role=main; primary_launch=("${launch_args[@]}") ;; 2) role=brute ;; 3) role=generator ;; esac
             record_launch "$role"
+            if [[ $language == python && ( $action == test || $action == stress ) ]]; then
+                if [[ -z $interpreter_info ]]; then interpreter_info=$("${launch_args[1]}" --version) || return $?; fi
+                config[tool_$role]=$interpreter_info
+            fi
         done
     fi
     if [[ $action == compile ]]; then printf '%s\n' "$output_abs"; return; fi
@@ -2336,59 +2430,76 @@ def check_lock():
 
 # Source: test_layout.py
 """Restricted numbered templates and a shared, contained test-data writer."""
+
 import re
 
 
 def case_template(pattern, stem, number=None):
     """Only literal text, one {n}, and source-stem aliases are supported."""
-    for alias in ('{filename-noExt}', '{file-name-no-ext}', '{filename-no-ext}'):
-        pattern = pattern.replace(alias, '{stem}')
-    if pattern.count('{n}') != 1:
-        raise CheckUsageError('test template must contain exactly one {n}')
-    rest = pattern.replace('{n}', '').replace('{stem}', '')
-    if '{' in rest or '}' in rest:
-        raise CheckUsageError('unknown template placeholder; use {n} and {stem}')
-    if not stem or '/' in stem or stem in ('.', '..'):
-        raise CheckUsageError('invalid source stem for test template')
-    value = pattern.replace('{stem}', stem)
-    if number is not None: value = value.replace('{n}', str(number))
-    if '\x00' in value or Path(value).is_absolute() or '..' in Path(value).parts:
-        raise CheckUsageError('test template must stay inside its test directory')
+    for alias in ("{filename-noExt}", "{file-name-no-ext}", "{filename-no-ext}"):
+        pattern = pattern.replace(alias, "{stem}")
+    if pattern.count("{n}") != 1:
+        raise CheckUsageError("test template must contain exactly one {n}")
+    rest = pattern.replace("{n}", "").replace("{stem}", "")
+    if "{" in rest or "}" in rest:
+        raise CheckUsageError("unknown template placeholder; use {n} and {stem}")
+    if not stem or "/" in stem or stem in (".", ".."):
+        raise CheckUsageError("invalid source stem for test template")
+    value = pattern.replace("{stem}", stem)
+    if number is not None:
+        value = value.replace("{n}", str(number))
+    if "\x00" in value or Path(value).is_absolute() or ".." in Path(value).parts:
+        raise CheckUsageError("test template must stay inside its test directory")
     return value
 
 
 def layout_root(config):
     """Artifact and data relative paths are independent, each appended once."""
-    workspace = Path(config.get('workspace', '.')).resolve()
-    relative = config.get('test_dir') or config.get('destination', '.')
-    if Path(relative).is_absolute() or '..' in Path(relative).parts:
-        raise CheckUsageError('test directory must be workspace-relative without ..')
+    workspace = Path(config.get("workspace", ".")).resolve()
+    relative = config.get("test_dir") or config.get("destination", ".")
+    if Path(relative).is_absolute() or ".." in Path(relative).parts:
+        raise CheckUsageError("test directory must be workspace-relative without ..")
     root = workspace / relative
-    if config.get('save_test_relpath'):
-        anchor = Path(config.get('source_anchor') or config.get('executable') or '.').absolute()
-        parent = Path(config['anchor_dir']) if config.get('anchor_dir') else anchor.parent if anchor.is_file() or anchor.suffix else anchor
-        try: subtree = parent.resolve().relative_to(workspace)
-        except ValueError: raise CheckUsageError('test source must be inside the workspace') from None
+    if config.get("save_test_relpath"):
+        anchor = Path(config.get("source_anchor") or config.get("executable") or ".").absolute()
+        parent = (
+            Path(config["anchor_dir"])
+            if config.get("anchor_dir")
+            else anchor.parent
+            if anchor.is_file() or anchor.suffix
+            else anchor
+        )
+        try:
+            subtree = parent.resolve().relative_to(workspace)
+        except ValueError:
+            raise CheckUsageError("test source must be inside the workspace") from None
         root = root / subtree
-    try: root.resolve().relative_to(workspace)
-    except ValueError: raise CheckUsageError('test directory escapes workspace') from None
+    try:
+        root.resolve().relative_to(workspace)
+    except ValueError:
+        raise CheckUsageError("test directory escapes workspace") from None
     return root
 
 
 def contained_target(root, relative):
     """Reject symlink parents before writes, including links back inside root."""
     root = Path(root).absolute()
-    if root.is_symlink(): raise CheckUsageError('test root must not be a symbolic link')
+    if root.is_symlink():
+        raise CheckUsageError("test root must not be a symbolic link")
     root = root.resolve()
     relative = Path(relative)
-    if relative.is_absolute() or '..' in relative.parts:
-        raise CheckUsageError('test path escapes its root')
+    if relative.is_absolute() or ".." in relative.parts:
+        raise CheckUsageError("test path escapes its root")
     candidate = root / relative
     for item in (candidate, *candidate.parents):
-        if item == root: break
-        if item.is_symlink(): raise CheckUsageError('test path contains a symbolic link: ' + str(item))
-    try: candidate.resolve().relative_to(root.resolve())
-    except ValueError: raise CheckUsageError('test path escapes its root') from None
+        if item == root:
+            break
+        if item.is_symlink():
+            raise CheckUsageError("test path contains a symbolic link: " + str(item))
+    try:
+        candidate.resolve().relative_to(root.resolve())
+    except ValueError:
+        raise CheckUsageError("test path escapes its root") from None
     return candidate
 
 
@@ -2396,34 +2507,45 @@ def discover_cases(root, pattern, stem):
     """Discover sparse numerical IDs; never stop at the first missing file."""
     root = Path(root)
     template = case_template(pattern, stem)
-    expression = re.compile('^' + re.escape(Path(template).as_posix()).replace(r'\{n\}', r'([0-9]+)') + '$')
-    prefix = template.split('{n}', 1)[0]
-    base = root / (Path(prefix) if prefix.endswith('/') else Path(prefix).parent)
-    if not base.is_dir(): raise CheckSetupError('test directory not found: ' + str(base))
+    expression = re.compile(
+        "^" + re.escape(Path(template).as_posix()).replace(r"\{n\}", r"([0-9]+)") + "$"
+    )
+    prefix = template.split("{n}", 1)[0]
+    base = root / (Path(prefix) if prefix.endswith("/") else Path(prefix).parent)
+    if not base.is_dir():
+        raise CheckSetupError("test directory not found: " + str(base))
     result = {}
-    candidates = base.rglob('*') if '/' in template[len(prefix):] else base.iterdir()
+    candidates = base.rglob("*") if "/" in template[len(prefix) :] else base.iterdir()
     for path in candidates:
         match = expression.fullmatch(path.relative_to(root).as_posix())
-        if not match: continue
+        if not match:
+            continue
         digits = match[1]
-        if len(digits) > 12 or int(digits) < 1: raise CheckUsageError('test IDs must be positive integers')
+        if len(digits) > 12 or int(digits) < 1:
+            raise CheckUsageError("test IDs must be positive integers")
         number = int(digits)
-        if number in result: raise CheckUsageError('duplicate numerical test ID: ' + digits)
-        if len(result) >= 100000: raise CheckSetupError('test directory exceeds 100000 cases')
+        if number in result:
+            raise CheckUsageError("duplicate numerical test ID: " + digits)
+        if len(result) >= 100000:
+            raise CheckSetupError("test directory exceeds 100000 cases")
         target = contained_target(root, path.relative_to(root))
-        if not target.is_file(): raise CheckSetupError('test is not a regular file: ' + str(target))
+        if not target.is_file():
+            raise CheckSetupError("test is not a regular file: " + str(target))
         result[number] = target
     return result
 
 
 def mult_cases(config):
     root = layout_root(config)
-    stem = Path(config.get('source_anchor') or config.get('executable', 'main.cpp')).stem
-    left = discover_cases(root, config.get('in_template', './{n}.in'), stem)
-    right = discover_cases(root, config.get('ans_template', './{n}.ans'), stem)
+    stem = Path(config.get("source_anchor") or config.get("executable", "main.cpp")).stem
+    left = discover_cases(root, config.get("in_template", "./{n}.in"), stem)
+    right = discover_cases(root, config.get("ans_template", "./{n}.ans"), stem)
     if not left or set(left) != set(right):
-        raise CheckUsageError('mult test ID mismatch: missing answers {}; missing inputs {}'.format(
-            sorted(set(left) - set(right)), sorted(set(right) - set(left))))
+        raise CheckUsageError(
+            "mult test ID mismatch: missing answers {}; missing inputs {}".format(
+                sorted(set(left) - set(right)), sorted(set(right) - set(left))
+            )
+        )
     ids = sorted(left)
     return ids, [index_cases(left[n])[0] for n in ids], [index_cases(right[n])[0] for n in ids]
 
@@ -2435,52 +2557,79 @@ def write_test_files(root, entries, overwrite=False, protected=()):
     not advertised as crash-atomic. The directory lock coordinates our writers.
     """
     root = Path(root).absolute()
-    if root.is_symlink(): raise CheckUsageError('test root must not be a symbolic link')
+    if root.is_symlink():
+        raise CheckUsageError("test root must not be a symbolic link")
     root = root.resolve()
     planned, names, identities = [], set(), set()
     for relative, content in entries:
         target = contained_target(root, relative)
         identity = (target.stat().st_dev, target.stat().st_ino) if target.exists() else None
-        if target in names or (identity is not None and identity in identities) or any(_same_path(target, p) for p in protected):
-            raise CheckUsageError('test output aliases another protected role: ' + str(target))
+        if (
+            target in names
+            or (identity is not None and identity in identities)
+            or any(_same_path(target, p) for p in protected)
+        ):
+            raise CheckUsageError("test output aliases another protected role: " + str(target))
         names.add(target)
-        if identity is not None: identities.add(identity)
+        if identity is not None:
+            identities.add(identity)
         if target.exists():
-            if not target.is_file(): raise CheckUsageError('test output is not a regular file: ' + str(target))
-            if target.stat().st_size == len(content) and target.read_bytes() == content: continue
-            if not overwrite: raise CheckUsageError('test file exists; use --overwrite: ' + str(target))
+            if not target.is_file():
+                raise CheckUsageError("test output is not a regular file: " + str(target))
+            if target.stat().st_size == len(content) and target.read_bytes() == content:
+                continue
+            if not overwrite:
+                raise CheckUsageError("test file exists; use --overwrite: " + str(target))
         planned.append((target, content))
     root.mkdir(parents=True, exist_ok=True)
     descriptor = os.open(root, os.O_RDONLY)
     staged, previous, installed = [], {}, []
     try:
-        try: fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError: raise CheckSetupError('another import is writing this test directory') from None
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise CheckSetupError("another import is writing this test directory") from None
         for target, content in planned:
             # Recheck after the lock; another process may have committed meanwhile.
             contained_target(root, target.relative_to(root))
-            if target.exists() and not overwrite and (target.stat().st_size != len(content) or target.read_bytes() != content):
-                raise CheckUsageError('test file appeared during import: ' + str(target))
+            if (
+                target.exists()
+                and not overwrite
+                and (target.stat().st_size != len(content) or target.read_bytes() != content)
+            ):
+                raise CheckUsageError("test file appeared during import: " + str(target))
             target.parent.mkdir(parents=True, exist_ok=True)
-            with tempfile.NamedTemporaryFile(dir=target.parent, prefix='.cp-run-import-', delete=False) as stream:
-                stream.write(content); stream.flush(); os.fsync(stream.fileno())
+            with tempfile.NamedTemporaryFile(
+                dir=target.parent, prefix=".cp-run-import-", delete=False
+            ) as stream:
                 staged.append((Path(stream.name), target))
+                stream.write(content)
+                stream.flush()
+                os.fsync(stream.fileno())
             if target.exists():
-                with tempfile.NamedTemporaryFile(dir=target.parent, prefix='.cp-run-backup-', delete=False) as backup:
+                with tempfile.NamedTemporaryFile(
+                    dir=target.parent, prefix=".cp-run-backup-", delete=False
+                ) as backup:
                     previous[target] = Path(backup.name)
                 shutil.copy2(target, previous[target])
                 os.chmod(staged[-1][0], stat.S_IMODE(target.stat().st_mode))
         for source, target in staged:
-            os.replace(source, target); installed.append(target)
+            installed.append(
+                target
+            )  # Register before replace: interruption between bytecodes is recoverable.
+            os.replace(source, target)
     except BaseException:
         for target in reversed(installed):
             if target in previous:
                 os.replace(previous[target], target)
-            else: target.unlink(missing_ok=True)
+            else:
+                target.unlink(missing_ok=True)
         raise
     finally:
-        for source, _ in staged: source.unlink(missing_ok=True)
-        for backup in previous.values(): backup.unlink(missing_ok=True)
+        for source, _ in staged:
+            source.unlink(missing_ok=True)
+        for backup in previous.values():
+            backup.unlink(missing_ok=True)
         os.close(descriptor)
 
 
@@ -2489,117 +2638,152 @@ def write_test_files(root, entries, overwrite=False, protected=()):
 
 
 def counted_cases(filename, separator):
-    with open(filename, 'rb') as source:
+    with open(filename, "rb") as source:
         header = source.readline(16)
-        if not header.endswith(b'\n') or not header[:-1].isdigit() or len(header) > 7:
-            raise CheckUsageError('bundle needs a decimal case count on its first line')
+        if not header.endswith(b"\n") or not header[:-1].isdigit() or len(header) > 7:
+            raise CheckUsageError("bundle needs a decimal case count on its first line")
         count = int(header[:-1])
-        if count > 100000: raise CheckUsageError('bundle exceeds 100000 cases')
+        if count > 100000:
+            raise CheckUsageError("bundle exceeds 100000 cases")
         offset = source.tell()
     if not count:
-        if Path(filename).stat().st_size != offset: raise CheckUsageError('zero-case bundle contains data')
+        if Path(filename).stat().st_size != offset:
+            raise CheckUsageError("zero-case bundle contains data")
         return []
     cases = index_cases(filename, separator, start_offset=offset, keep_terminal=True)
     if len(cases) != count:
-        raise CheckUsageError('bundle count mismatch: header {}; found {}'.format(count, len(cases)))
+        raise CheckUsageError(
+            "bundle count mismatch: header {}; found {}".format(count, len(cases))
+        )
     return cases
 
 
 def slice_bytes(case, maximum=268435456):
-    if case.length > maximum: raise CheckSetupError('case exceeds conversion byte limit')
-    with open(case.path, 'rb') as source:
+    if case.length > maximum:
+        raise CheckSetupError("case exceeds conversion byte limit")
+    with open(case.path, "rb") as source:
         source.seek(case.start)
         data = source.read(case.length)
-    if len(data) != case.length: raise CheckSetupError('test data changed during conversion')
+    if len(data) != case.length:
+        raise CheckSetupError("test data changed during conversion")
     return data
 
 
 def encode_bundle(records, separator, maximum=268435456):
     """Verify framing before any write, including partial-marker overlaps."""
     total = sum(map(len, records)) + max(0, len(records) - 1) * len(separator)
-    if total > maximum: raise CheckSetupError('bundle exceeds conversion byte limit')
-    if separator == b'\n\x1e\n' and any(b'\x1e' in case for case in records):
-        raise CheckUsageError('test contains reserved RS byte; choose another --sep')
+    if total > maximum:
+        raise CheckSetupError("bundle exceeds conversion byte limit")
+    if separator == b"\n\x1e\n" and any(b"\x1e" in case for case in records):
+        raise CheckUsageError("test contains reserved RS byte; choose another --sep")
     payload = separator.join(records)
     decoded = payload.split(separator) if records else []
     if decoded != records:
-        raise CheckUsageError('separator collides with test data or its boundary; choose another separator')
-    return str(len(records)).encode('ascii') + b'\n' + payload
+        raise CheckUsageError(
+            "separator collides with test data or its boundary; choose another separator"
+        )
+    return str(len(records)).encode("ascii") + b"\n" + payload
 
 
 def atomic_data_file(filename, payload, overwrite=False, protected=()):
     target = Path(filename).absolute()
     if target.is_symlink() or any(_same_path(target, p) for p in protected):
-        raise CheckUsageError('bundle output aliases a protected file')
+        raise CheckUsageError("bundle output aliases a protected file")
     write_test_files(target.parent, [(target.name, payload)], overwrite, protected)
 
 
 def execute_bundle(config):
     """Both streams share the same codec; answers are never special-cased."""
-    stream = config.get('bundle_stream')
-    if stream not in ('in', 'ans'): raise CheckUsageError('--pack/--unpack accepts in or ans')
-    source, target = config.get('data_input'), config.get('data_output')
-    default_file = config.get('default_input', 'input.txt') if stream == 'in' else config.get('default_answer', 'ans.txt')
-    bundle_file = str(Path(default_file).with_suffix('.bundle'))
-    manual = bool(config.get('text_conversion'))
+    stream = config.get("bundle_stream")
+    if stream not in ("in", "ans"):
+        raise CheckUsageError("--pack/--unpack accepts in or ans")
+    source, target = config.get("data_input"), config.get("data_output")
+    default_file = (
+        config.get("default_input", "input.txt")
+        if stream == "in"
+        else config.get("default_answer", "ans.txt")
+    )
+    bundle_file = str(Path(default_file).with_suffix(".bundle"))
+    manual = bool(config.get("text_conversion"))
+
     def directory(explicit):
-        if not explicit: return layout_root(config)
+        if not explicit:
+            return layout_root(config)
         root = Path(explicit).absolute()
-        if config.get('save_test_relpath'):
-            workspace = Path(config.get('workspace', '.')).resolve()
-            parent = Path(config.get('source_anchor', 'main.cpp')).absolute().parent.resolve()
-            try: root = root / parent.relative_to(workspace)
-            except ValueError: raise CheckUsageError('test source must be inside workspace') from None
+        if config.get("save_test_relpath"):
+            workspace = Path(config.get("workspace", ".")).resolve()
+            parent = Path(config.get("source_anchor", "main.cpp")).absolute().parent.resolve()
+            try:
+                root = root / parent.relative_to(workspace)
+            except ValueError:
+                raise CheckUsageError("test source must be inside workspace") from None
         return root
-    if config['operation'] == 'pack':
+
+    if config["operation"] == "pack":
         source = (source or default_file) if manual else directory(source)
         target = target or bundle_file
     else:
         source = source or bundle_file
         target = (target or default_file) if manual else directory(target)
-    separator = decode_separator(config.get('sep', r'\n\x1e\n'))
-    text_separator = decode_separator(config.get('text_sep', r'\n###\n'))
-    manual = bool(config.get('text_conversion'))
-    maximum = positive_setting(config.get('max_spool', 268435456), 'conversion byte limit')
-    overwrite = bool(config.get('overwrite'))
-    protected = [*config.get('protected', []), source] if Path(source).is_file() else config.get('protected', [])
-    if config['operation'] == 'pack':
+    separator = decode_separator(config.get("sep", r"\n\x1e\n"))
+    text_separator = decode_separator(config.get("text_sep", r"\n###\n"))
+    manual = bool(config.get("text_conversion"))
+    maximum = positive_setting(config.get("max_spool", 268435456), "conversion byte limit")
+    overwrite = bool(config.get("overwrite"))
+    protected = (
+        [*config.get("protected", []), source]
+        if Path(source).is_file()
+        else config.get("protected", [])
+    )
+    if config["operation"] == "pack":
         if manual:
             cases = counted_cases(source, text_separator)
-            if sum(case.length for case in cases) > maximum: raise CheckSetupError('bundle exceeds conversion byte limit')
+            if sum(case.length for case in cases) > maximum:
+                raise CheckSetupError("bundle exceeds conversion byte limit")
             records = [slice_bytes(case, maximum) for case in cases]
         else:
-            stem = Path(config.get('source_anchor', 'main.cpp')).stem
-            key = 'in_template' if stream == 'in' else 'ans_template'
-            pattern = config.get(key, './{n}.' + stream)
+            stem = Path(config.get("source_anchor", "main.cpp")).stem
+            key = "in_template" if stream == "in" else "ans_template"
+            pattern = config.get(key, "./{n}." + stream)
             found = discover_cases(source, pattern, stem)
-            if not found: raise CheckUsageError('no matching tests to pack')
+            if not found:
+                raise CheckUsageError("no matching tests to pack")
             ordered = sorted(found)
             records = []
             total = 0
             for number in ordered:
                 case = index_cases(found[number])[0]
                 total += case.length
-                if total > maximum: raise CheckSetupError('bundle exceeds conversion byte limit')
+                if total > maximum:
+                    raise CheckSetupError("bundle exceeds conversion byte limit")
                 records.append(slice_bytes(case, maximum))
             protected = [*protected, *found.values()]
             if ordered != list(range(1, len(ordered) + 1)):
-                print('cp-run: packed IDs {} as 1..{}'.format(ordered, len(ordered)), file=sys.stderr)
+                print(
+                    "cp-run: packed IDs {} as 1..{}".format(ordered, len(ordered)), file=sys.stderr
+                )
         payload = encode_bundle(records, separator, maximum)
         atomic_data_file(target, payload, overwrite, protected)
     else:
         cases = counted_cases(source, separator)
-        if sum(case.length for case in cases) > maximum: raise CheckSetupError('bundle exceeds conversion byte limit')
+        if sum(case.length for case in cases) > maximum:
+            raise CheckSetupError("bundle exceeds conversion byte limit")
         records = [slice_bytes(case, maximum) for case in cases]
         if manual:
-            atomic_data_file(target, encode_bundle(records, text_separator, maximum), overwrite, protected)
+            atomic_data_file(
+                target, encode_bundle(records, text_separator, maximum), overwrite, protected
+            )
         else:
-            stem = Path(config.get('source_anchor', 'main.cpp')).stem
-            key = 'in_template' if stream == 'in' else 'ans_template'
-            pattern = config.get(key, './{n}.' + stream)
-            entries = [(case_template(pattern, stem, i), record) for i, record in enumerate(records, 1)]
+            stem = Path(config.get("source_anchor", "main.cpp")).stem
+            key = "in_template" if stream == "in" else "ans_template"
+            pattern = config.get(key, "./{n}." + stream)
+            entries = [
+                (case_template(pattern, stem, i), record) for i, record in enumerate(records, 1)
+            ]
             write_test_files(target, entries, overwrite, protected)
-    print('cp-run: {} {}: {} cases'.format(config['operation'], stream, len(records)), file=sys.stderr)
+    print(
+        "cp-run: {} {}: {} cases".format(config["operation"], stream, len(records)), file=sys.stderr
+    )
     return 0
 
 
@@ -2690,6 +2874,9 @@ def _quoted(value):
 
 def _section(report, title, path, different=None, display_limit=10000):
     report.emit(title + ":")
+    if not report.detail_remaining:
+        report.emit("  ... display omitted after diagnostic limit; raw data retained")
+        return
     found = False
     with open(path, "rb") as stream:
         try:
@@ -2742,19 +2929,21 @@ def compare_case(actual, answer, config):
 # Source: reporting.py
 """Readable checking protocols; file and console share the same renderer."""
 
+
 class Protocol:
     """Keep report commits atomic and preserve a copy for stress failure bundles."""
 
     def __init__(self, config):
-        self.max_line = positive_setting(config.get('max_line', 1048576), 'row byte limit')
-        self.max_details = positive_setting(config.get('max_report', 262144), 'report byte limit')
-        self.display_lines = positive_setting(config.get('report_lines', 10000), 'report row limit')
+        self.max_line = positive_setting(config.get("max_line", 1048576), "row byte limit")
+        self.max_details = positive_setting(config.get("max_report", 262144), "report byte limit")
+        self.display_lines = positive_setting(config.get("report_lines", 10000), "report row limit")
         self.detail_remaining = self.max_details
         self.console = bool(config.get("cout"))
         self.destination = Path(config.get("report", "test_out"))
         directory = self.destination.parent if not self.console else Path.cwd()
-        handle = tempfile.NamedTemporaryFile(mode="w+", encoding="utf-8", dir=directory,
-                                             prefix=".cp-run-report-", delete=False)
+        handle = tempfile.NamedTemporaryFile(
+            mode="w+", encoding="utf-8", dir=directory, prefix=".cp-run-report-", delete=False
+        )
         self.stream, self.path = handle, Path(handle.name)
 
     def emit(self, text=""):
@@ -2764,10 +2953,10 @@ class Protocol:
 
     def detail(self, text):
         """Count encoded diagnostics, not source bytes that can expand on escaping."""
-        size = len((text + '\n').encode('utf-8'))
+        size = len((text + "\n").encode("utf-8"))
         if size > self.detail_remaining:
             if self.detail_remaining:
-                self.emit('  ... diagnostic byte limit reached; raw data retained')
+                self.emit("  ... diagnostic byte limit reached; raw data retained")
             self.detail_remaining = 0
             return
         self.detail_remaining -= size
@@ -2790,61 +2979,99 @@ class Protocol:
         self.path.unlink(missing_ok=True)
 
 
-
-
-def public_verdict(result, comparison=None):
+def public_verdict(result, comparison=None, config=None):
     """Execution errors take precedence over any partial/unfinished output."""
     if result.status:
-        return {'RTE': 'RE', 'OK': 'RE'}.get(result.verdict, result.verdict)
+        if config is not None:
+            memory = str(config.get("memory_mib", "inf"))
+            timeout = str(config.get("timeout_ms", "inf"))
+            if memory != "inf" and result.peak_bytes > int(memory) * MIB:
+                return "MLE"
+            if timeout != "inf" and result.elapsed_ns > int(timeout) * 1000000:
+                return "TLE"
+        return {"RTE": "RE", "OK": "RE"}.get(result.verdict, result.verdict)
     if comparison is not None:
-        if comparison.incomplete: return 'INCOMPLETE'
-        return 'AC' if comparison.equal else 'WA'
-    return 'AC'
+        if comparison.incomplete:
+            return "INCOMPLETE"
+        return "AC" if comparison.equal else "WA"
+    return "AC"
 
 
 def case_protocol(report, config, number, incoming, actual, answer, result, comparison, seed=None):
     """Payloads first, then verdict and metrics; never color saved reports."""
-    verdict = public_verdict(result, comparison)
-    if config.get('_failed_output') and result.verdict == 'WA': verdict = 'WA'
-    report.emit('\n' + '=' * 64)
-    report.emit('TEST {}{}'.format(number, ' (seed {})'.format(seed) if seed is not None else ''))
-    if config.get('report_tests', 'all') == 'all' or verdict != 'AC':
+    verdict = public_verdict(result, comparison, config)
+    if config.get("_failed_output") and result.verdict == "WA":
+        verdict = "WA"
+    config["_resource_violations"] = []
+    for name, field, used, scale in (
+        ("MLE", "memory_mib", result.peak_bytes, MIB),
+        ("TLE", "timeout_ms", result.elapsed_ns, 1000000),
+    ):
+        budget = str(config.get(field, "inf"))
+        if budget != "inf" and used > int(budget) * scale:
+            config["_resource_violations"].append(name)
+    report.emit("\n" + "=" * 64)
+    report.emit("TEST {}{}".format(number, " (seed {})".format(seed) if seed is not None else ""))
+    if config.get("report_tests", "all") == "all" or verdict != "AC":
         comparison = comparison or Comparison(False, False, 0, set(), set(), [])
         _failure_details(report, incoming, actual, answer, comparison, report.display_lines)
     # A hidden failing repeat is evidence, never a replacement for the first stdout.
-    failed = config.get('_failed_output')
+    failed = config.get("_failed_output")
     if failed and Path(failed).exists():
-        report.emit('FAILED REPEAT {}:'.format(config.get('_failed_repeat')))
-        _section(report, 'repeat-output', failed, display_limit=report.display_lines)
-    stderr_paths = config.get('_stderr_paths', [])
+        report.emit("FAILED REPEAT {} (raw: {}):".format(config.get("_failed_repeat"), failed))
+        _section(report, "repeat-output", failed, display_limit=report.display_lines)
+    stderr_paths = config.get("_stderr_paths", [])
     for label, path in stderr_paths:
-        if not Path(path).exists() or not Path(path).stat().st_size: continue
-        report.emit('STDERR ({}):'.format(label))
+        if not Path(path).exists() or not Path(path).stat().st_size:
+            continue
+        report.emit("STDERR ({}):".format(label))
         # Full stderr is exempt from diff caps, but escaping still happens in
         # bounded chunks so one enormous row cannot exhaust checker memory.
-        with open(path, 'rb') as source:
+        with open(path, "rb") as source:
             while True:
                 chunk = source.readline(65536)
-                if not chunk: break
-                report.emit('  ' + _quoted(chunk.rstrip(b'\n')))
-    report.emit('Test {}: {}{}'.format(number, verdict, ' (status {})'.format(result.status) if result.status else ''))
-    report.emit('  TIME: {}    MEMORY: {}{}'.format(
-        format_usage(result.elapsed_ns, config.get('time_unit', 'ms')),
-        format_usage(result.peak_bytes, config.get('memory_unit', 'KiB'), True),
-        '    RUNS: {}'.format(config.get('_series_runs', 1))))
-    if verdict in ('TLE', 'MLE'):
-        report.emit('  LIMITS: {} ms / {} MiB; kill factors {} / {}'.format(config.get('timeout_ms', 'inf'), config.get('memory_mib', 'inf'), config.get('time_factor', '2'), config.get('memory_factor', '2')))
+                if not chunk:
+                    break
+                report.emit("  " + _quoted(chunk.rstrip(b"\n")))
+    report.emit(
+        "Test {}: {}{}".format(
+            number, verdict, " (status {})".format(result.status) if result.status else ""
+        )
+    )
+    report.emit(
+        "  TIME: {}    MEMORY: {}{}".format(
+            format_usage(result.elapsed_ns, config.get("time_unit", "ms")),
+            format_usage(result.peak_bytes, config.get("memory_unit", "KiB"), True),
+            "    RUNS: {}".format(config.get("_series_runs", 1)),
+        )
+    )
+    if verdict in ("TLE", "MLE"):
+        report.emit(
+            "  LIMITS: {} ms / {} MiB; kill factors {} / {}".format(
+                config.get("timeout_ms", "inf"),
+                config.get("memory_mib", "inf"),
+                config.get("time_factor", "2"),
+                config.get("memory_factor", "2"),
+            )
+        )
     return verdict
 
 
 def final_protocol(report, groups, unfinished=False):
     """One deterministic headline, with every affected ID retained below it."""
-    order = ('CE', 'MLE', 'TLE', 'RE', 'WA', 'AC')
-    verdict = 'INTERRUPTED' if groups.get('INTERRUPTED') else 'INCOMPLETE' if unfinished else next((name for name in order if groups.get(name)), 'AC')
-    report.emit('\n' + '=' * 64)
-    report.emit('FINAL VERDICT: ' + verdict)
-    for name in (*order, 'INCOMPLETE', 'GENERATOR_ERROR', 'ORACLE_ERROR', 'INTERRUPTED'):
-        if groups.get(name): report.emit('  {}: {}'.format(name, ', '.join(map(str, groups[name]))))
+    order = ("CE", "MLE", "TLE", "RE", "WA", "AC")
+    verdict = (
+        "INTERRUPTED"
+        if groups.get("INTERRUPTED")
+        else "INCOMPLETE"
+        if unfinished
+        else next((name for name in order if groups.get(name)), "AC")
+    )
+    report.emit("\n" + "=" * 64)
+    report.emit("FINAL VERDICT: " + verdict)
+    for name in (*order, "INCOMPLETE", "GENERATOR_ERROR", "ORACLE_ERROR", "INTERRUPTED"):
+        if groups.get(name):
+            report.emit("  {}: {}".format(name, ", ".join(map(str, groups[name]))))
     return verdict
 
 
@@ -2853,13 +3080,39 @@ def compilation_report(config):
     plan = _load_plan(config)
     report = Protocol(config)
     try:
-        report.emit('PREPARATION: CE ({})'.format(config.get('failed_role', 'main')))
-        report.emit('NOT RUN: ' + ', '.join(map(str, plan.selected)))
-        final_protocol(report, {'CE': plan.selected or ['preparation']})
+        report.emit("PREPARATION: CE ({})".format(config.get("failed_role", "main")))
+        report.emit("NOT RUN: " + ", ".join(map(str, plan.selected)))
+        final_protocol(report, {"CE": plan.selected or ["preparation"]})
         report.finish()
     except BaseException:
-        report.abort(); raise
-    return int(config.get('build_status', 1))
+        report.abort()
+        raise
+    return int(config.get("build_status", 1))
+
+
+def retain_failed_repeat(config, number):
+    """Keep hidden-repeat bytes after the checking temporary directory closes."""
+    source = config.get("_failed_output")
+    if not source or not Path(source).exists():
+        return
+    for suffix in range(1000000):
+        target = Path("test-repeat-failure" + ("-{}".format(suffix) if suffix else ""))
+        try:
+            target.mkdir()
+            break
+        except FileExistsError:
+            continue
+    else:
+        raise CheckSetupError("cannot choose a free repeat-evidence directory")
+    destination = target / "stdout.txt"
+    shutil.copyfile(source, destination)
+    for index, (label, path) in enumerate(config.get("_stderr_paths", [])):
+        if Path(path).exists():
+            shutil.copyfile(path, target / ("stderr-{}.txt".format(index)))
+    config["_failed_output"] = str(destination)
+    (target / "case.txt").write_text(
+        "test {}; failed repeat {}\n".format(number, config.get("_failed_repeat"))
+    )
 
 
 # Source: checking.py
@@ -2940,8 +3193,11 @@ def execute_test(config):
                     result, comparison = run_candidate(runner, config, argv, incoming, actual, answer, 'test {}'.format(number))
                     if position and (config.get('auto') or config.get('mult')): all_output.write(plan.separator)
                     with open(actual, 'rb') as stream: shutil.copyfileobj(stream, all_output)
+                    retain_failed_repeat(config, number)
                     verdict = case_protocol(report, config, number, incoming, actual, answer, result, comparison)
                     groups.setdefault(verdict, []).append(number)
+                    for violation in config.get('_resource_violations', []):
+                        if violation != verdict: groups.setdefault(violation, []).append(number)
                     verdicts.append((verdict, result.status))
                     if verdict == 'INTERRUPTED': break
             status = _aggregate(verdicts)
@@ -2988,6 +3244,11 @@ def _bundle(config, report, directory, seed, iteration, verdict, results):
             target = destination / filename
             shutil.copyfile(source, target)
             files[filename] = _file_digest(target)
+    failed_repeat = config.get('_failed_output')
+    if failed_repeat and Path(failed_repeat).exists():
+        shutil.copyfile(failed_repeat, destination / 'failed-repeat.txt')
+    for index, (_, path) in enumerate(config.get('_stderr_paths', [])):
+        if Path(path).exists(): shutil.copyfile(path, destination / ('stderr-{}.txt'.format(index)))
     report.copy_to(destination / "test_out")
     destination = destination.resolve()
     if verdict in ("GENERATOR_ERROR", "ORACLE_ERROR") or "candidate" not in results:
@@ -3000,12 +3261,18 @@ def _bundle(config, report, directory, seed, iteration, verdict, results):
                   str(destination / "input.txt"), str(destination / "ans.txt"), str(destination / "replay-report.txt"),
                   "--TLE=" + str(config.get("timeout_ms", "inf")),
                   "--MLE=" + str(config.get("memory_mib", "inf")), "--", *config.get("runtime_args", [])]
+    # A saved candidate failure replays against the saved answer, so only its
+    # exact interpreter options are needed; no source/profile is regenerated.
+    chosen = config.get('main_argv', [])
+    if config.get('executable', '').endswith('.py') and chosen:
+        boundary = replay.index('--')
+        replay[boundary:boundary] = ['--interpreter=' + chosen[0], *['--interpreter-arg=' + arg for arg in chosen[1:-1]]]
     if config.get('show_time') or config.get('show_memory'):
         boundary = replay.index('--')
         replay[boundary:boundary] = [flag for enabled, flag in (
             (config.get('show_time'), '-t'), (config.get('show_memory'), '-m')) if enabled] + [
             '--average=' + str(config.get('average', 1)), '--warm-up=' + str(int(bool(config.get('warmup'))))]
-    manifest = {"seed": seed, "iteration": iteration, "verdict": verdict,
+    manifest = {"format": "cp-run-failure", "schema": 2, "cwd": str(Path.cwd()), "seed": seed, "iteration": iteration, "verdict": verdict,
                 "commands": {"main": [*config.get("main_argv", [config["executable"]]), *config.get("runtime_args", [])],
                              "brute": config.get("brute_argv", [config["brute"]]), "generator": [*config.get("generator_argv", [config["generator"]]), str(seed)]},
                 "limits": {"timeout_ms": config.get("timeout_ms", "inf"), "memory_mib": config.get("memory_mib", "inf")},
@@ -3044,11 +3311,13 @@ def execute_stress(config):
         directory, report = Path(temporary), Protocol(config)
         incoming, answer, actual = (directory / name for name in ('input.txt', 'ans.txt', 'real-out.txt'))
         seed, iteration, results = start, 0, {}
+        current_bundle = None
         try:
             report.emit('cp-run stress: start seed {}; maximum {} iterations'.format(start, count))
             for iteration in range(1, count + 1):
                 seed = (start + iteration - 1) % 2**64
                 results, verdict, comparison = {}, None, None
+                current_bundle = None
                 for target in (incoming, answer, actual): target.write_bytes(b'')
                 role_stderr = []
                 # A failing generator/oracle leaves this seed unresolved. Its
@@ -3077,8 +3346,12 @@ def execute_stress(config):
                     report.emit('Iteration {}: {} (seed {})'.format(iteration, verdict, seed))
                 verdicts.append((verdict, result.status))
                 groups.setdefault(verdict, []).append(iteration)
+                if verdict in ('TLE', 'MLE'):
+                    for violation in config.get('_resource_violations', []):
+                        if violation != verdict: groups.setdefault(violation, []).append(iteration)
                 if verdict != 'AC' and saved < maximum:
                     bundle = _bundle(config, report, directory, seed, iteration, verdict, results)
+                    current_bundle = bundle
                     saved += 1
                     if config.get('minimize') and verdict == 'WA':
                         minimize_failure(config, directory, bundle)
@@ -3092,7 +3365,7 @@ def execute_stress(config):
             return status
         except KeyboardInterrupt:
             report.emit('INTERRUPTED at iteration {} (seed {})'.format(iteration, seed))
-            if incoming.exists(): _bundle(config, report, directory, seed, iteration, 'INTERRUPTED', results)
+            if incoming.exists() and current_bundle is None: _bundle(config, report, directory, seed, iteration, 'INTERRUPTED', results)
             report.finish(); return 130
         except BaseException:
             report.abort(); raise
@@ -3110,41 +3383,53 @@ class ReductionBudget(Exception):
     pass
 
 
+class ReductionInterrupted(KeyboardInterrupt):
+    def __init__(self, best, attempts):
+        self.best, self.attempts = best, attempts
+
+
 class SequenceGrammar:
     """N followed by exactly N integer tokens; no inferred graph/tree grammar."""
+
     def decode(self, payload):
         words = payload.split()
-        if not words or len(words[0]) > 12 or not words[0].isdigit(): raise CheckUsageError('sequence needs an initial N')
+        if not words or len(words[0]) > 12 or not words[0].isdigit():
+            raise CheckUsageError("sequence needs an initial N")
         count = int(words[0])
-        if count != len(words) - 1 or count > 100000: raise CheckUsageError('sequence needs exactly N values (at most 100000)')
-        if any(not re.fullmatch(rb'-?[0-9]{1,64}', word) for word in words[1:]):
-            raise CheckUsageError('sequence values must be integers of at most 64 digits')
+        if count != len(words) - 1 or count > 100000:
+            raise CheckUsageError("sequence needs exactly N values (at most 100000)")
+        if any(not re.fullmatch(rb"-?[0-9]{1,64}", word) for word in words[1:]):
+            raise CheckUsageError("sequence values must be integers of at most 64 digits")
         return [int(word) for word in words[1:]]
 
     def encode(self, items):
-        return (str(len(items)) + '\n' + ' '.join(map(str, items)) + '\n').encode('ascii')
+        return (str(len(items)) + "\n" + " ".join(map(str, items)) + "\n").encode("ascii")
 
 
 class CaseLineGrammar:
     """T followed by T independent, single-line testcase records."""
+
     def decode(self, payload):
         rows = payload.splitlines(keepends=True)
-        if not rows or not rows[0].strip().isdigit(): raise CheckUsageError('cases need an initial T')
-        if int(rows[0]) != len(rows) - 1 or len(rows) > 100001: raise CheckUsageError('cases need exactly T single-line records')
+        if not rows or not rows[0].strip().isdigit():
+            raise CheckUsageError("cases need an initial T")
+        if int(rows[0]) != len(rows) - 1 or len(rows) > 100001:
+            raise CheckUsageError("cases need exactly T single-line records")
         return rows[1:]
 
     def encode(self, items):
-        return str(len(items)).encode() + b'\n' + b''.join(items)
+        return str(len(items)).encode() + b"\n" + b"".join(items)
 
 
 class LineGrammar:
     def decode(self, payload):
         rows = payload.splitlines(keepends=True)
-        if len(rows) > 100000: raise CheckUsageError('reduction exceeds 100000 records')
+        if len(rows) > 100000:
+            raise CheckUsageError("reduction exceeds 100000 records")
         return rows
 
     def encode(self, items):
-        return b''.join(items)
+        return b"".join(items)
 
 
 def reduce_items(payload, grammar, predicate, attempts=200, seconds=30):
@@ -3155,107 +3440,198 @@ def reduce_items(payload, grammar, predicate, attempts=200, seconds=30):
 
     def accepts(proposal):
         nonlocal count, best
-        if count >= attempts or time.monotonic() >= deadline: raise ReductionBudget
+        if count >= attempts or time.monotonic() >= deadline:
+            raise ReductionBudget
         digest = hashlib.sha256(proposal).digest()
         if digest not in cache:
             count += 1
             cache[digest] = predicate(proposal, deadline)
-        if cache[digest]: best = proposal
+        if cache[digest]:
+            best = proposal
         return cache[digest]
 
-    reason = 'no smaller confirmed input'
+    reason = "no smaller confirmed input"
     try:
         # Canonicalizing a grammar is itself a proposal, never assumed safe.
         initial = grammar.encode(items)
-        if not accepts(initial): return payload, count, 'failure was not reproducible under the declared grammar'
+        if not accepts(initial):
+            return payload, count, "failure was not reproducible under the declared grammar"
         granularity = 2
         while items:
             width = (len(items) + granularity - 1) // granularity
             changed = False
             for offset in range(0, len(items), width):
-                candidate = items[:offset] + items[offset + width:]
+                candidate = items[:offset] + items[offset + width :]
                 if accepts(grammar.encode(candidate)):
-                    items = candidate; granularity = max(2, granularity - 1); changed = True; break
-            if changed: continue
-            if granularity >= len(items): break
+                    items = candidate
+                    granularity = max(2, granularity - 1)
+                    changed = True
+                    break
+            if changed:
+                continue
+            if granularity >= len(items):
+                break
             granularity = min(len(items), granularity * 2)
         if isinstance(grammar, SequenceGrammar):
             for index in range(len(items)):
                 old = items[index]
                 for value in dict.fromkeys((0, 1 if old > 0 else -1, old // 2)):
-                    if abs(value) >= abs(old): continue
-                    candidate = list(items); candidate[index] = value
-                    if accepts(grammar.encode(candidate)): items = candidate; old = value
-        reason = 'completed available reduction steps'
+                    if abs(value) >= abs(old):
+                        continue
+                    candidate = list(items)
+                    candidate[index] = value
+                    if accepts(grammar.encode(candidate)):
+                        items = candidate
+                        old = value
+        reason = "completed available reduction steps"
     except ReductionBudget:
-        reason = 'reduction budget exhausted; best confirmed input retained'
+        reason = "reduction budget exhausted; best confirmed input retained"
+    except KeyboardInterrupt:
+        raise ReductionInterrupted(best, count) from None
     return best, count, reason
 
 
 def minimize_failure(config, directory, bundle):
     """Save reduced files beside untouched original evidence, never over it."""
-    original = Path(directory) / 'input.txt'
+    original = Path(directory) / "input.txt"
     if original.stat().st_size > 4 * 1024 * 1024:
-        print('cp-run: reduction skipped: input exceeds 4 MiB', file=sys.stderr); return
-    mode = config.get('minimize', 'sequence')
-    validator = config.get('validator')
-    if mode in ('lines', 'cases') and not validator:
-        raise CheckUsageError('lines/cases reduction requires --validator=PROGRAM')
-    grammar = {'sequence': SequenceGrammar, 'cases': CaseLineGrammar, 'lines': LineGrammar}[mode]()
-    main = [*config.get('main_argv', [config['executable']]), *config.get('runtime_args', [])]
-    oracle = config.get('brute_argv', [config['brute']])
+        print("cp-run: reduction skipped: input exceeds 4 MiB", file=sys.stderr)
+        return
+    mode = config.get("minimize", "sequence")
+    validator = config.get("validator")
+    if mode in ("lines", "cases") and not validator:
+        raise CheckUsageError("lines/cases reduction requires --validator=PROGRAM")
+    grammar = {"sequence": SequenceGrammar, "cases": CaseLineGrammar, "lines": LineGrammar}[mode]()
+    main = [*config.get("main_argv", [config["executable"]]), *config.get("runtime_args", [])]
+    oracle = config.get("brute_argv", [config["brute"]])
     payload = original.read_bytes()
-    with tempfile.TemporaryDirectory(prefix='.cp-run-reduce-', dir='.') as temporary:
+    with tempfile.TemporaryDirectory(prefix=".cp-run-reduce-", dir=".") as temporary:
         root = Path(temporary)
-        incoming, answer, actual, error = [root / name for name in ('input', 'answer', 'actual', 'stderr')]
+        incoming, answer, actual, error = [
+            root / name for name in ("input", "answer", "actual", "stderr")
+        ]
+
         def predicate(proposal, deadline):
             incoming.write_bytes(proposal)
             # Two confirmations reject simple stateful/flaky failures. Every
             # launch is bounded by both its original allowance and job deadline.
             for _ in range(2):
                 remaining = int((deadline - time.monotonic()) * 1000)
-                if remaining < 1: raise ReductionBudget
-                native = str(config.get('timeout_ms', 'inf'))
-                budget = remaining if native == 'inf' else min(remaining, int(native))
-                runner = Runner(timeout_ms=str(budget), memory_mib=str(config.get('memory_mib', 'inf')), time_factor='1', memory_factor='1')
+                if remaining < 1:
+                    raise ReductionBudget
+                native = str(config.get("timeout_ms", "inf"))
+                budget = remaining if native == "inf" else min(remaining, int(native))
+                runner = Runner(
+                    timeout_ms=str(budget),
+                    memory_mib=str(config.get("memory_mib", "inf")),
+                    time_factor="1",
+                    memory_factor="1",
+                )
                 if validator:
                     command = [str(validator)]
-                    if str(validator).endswith('.py'): command.insert(0, config.get('validator_interpreter', sys.executable))
-                    with open(incoming, 'rb') as stdin, open(os.devnull, 'wb') as sink, open(error, 'wb') as stderr:
-                        if runner.run(command, stdin=stdin, stdout=sink, stderr=stderr, report=False).status: return False
+                    if str(validator).endswith(".py"):
+                        command.insert(0, config.get("validator_interpreter", sys.executable))
+                    with (
+                        open(incoming, "rb") as stdin,
+                        open(os.devnull, "wb") as sink,
+                        open(error, "wb") as stderr,
+                    ):
+                        checked = runner.run(
+                            command, stdin=stdin, stdout=sink, stderr=stderr, report=False
+                        )
+                        if checked.verdict == "INTERRUPTED":
+                            raise KeyboardInterrupt
+                        if checked.status:
+                            return False
                 for command, target in ((oracle, answer), (main, actual)):
                     remaining = int((deadline - time.monotonic()) * 1000)
-                    if remaining < 1: raise ReductionBudget
+                    if remaining < 1:
+                        raise ReductionBudget
                     runner.timeout_ns = min(runner.timeout_ns, remaining * 1000000)
                     runner.kill_time_ns = runner.timeout_ns
-                    with open(error, 'wb') as stderr:
-                        outcome = _run_files(runner, {}, command, incoming, target, 'reduction', stderr)
-                    if outcome.status: return False
+                    with open(error, "wb") as stderr:
+                        outcome = _run_files(
+                            runner, {}, command, incoming, target, "reduction", stderr
+                        )
+                    if outcome.verdict == "INTERRUPTED":
+                        raise KeyboardInterrupt
+                    if outcome.status:
+                        return False
                 difference = compare_case(actual, answer, config)
-                if difference.equal or difference.incomplete: return False
+                if difference.equal or difference.incomplete:
+                    return False
             return True
+
+        best, attempts = payload, 0
         try:
-            best, attempts, reason = reduce_items(payload, grammar, predicate,
-                positive_setting(config.get('minimize_attempts', 200), 'reduction attempts'),
-                positive_setting(config.get('minimize_seconds', 30), 'reduction seconds'))
+            best, attempts, reason = reduce_items(
+                payload,
+                grammar,
+                predicate,
+                positive_setting(config.get("minimize_attempts", 200), "reduction attempts"),
+                positive_setting(config.get("minimize_seconds", 30), "reduction seconds"),
+            )
             # Recheck using the original repetition/limits; changed verdicts
             # never publish an alleged reduction.
             incoming.write_bytes(best)
-            with open(error, 'wb') as stderr:
-                reference = _run_files(_runner(config), {}, oracle, incoming, answer, 'reference', stderr)
-            trial = dict(config, operation='test')
-            result, comparison = run_candidate(_runner(trial), trial, main, incoming, actual, answer, 'reduced')
-            confirmed = not reference.status and result.verdict == 'WA' and comparison and not comparison.equal and not comparison.incomplete
+            with open(error, "wb") as stderr:
+                reference = _run_files(
+                    _runner(config), {}, oracle, incoming, answer, "reference", stderr
+                )
+            if reference.verdict == "INTERRUPTED":
+                raise KeyboardInterrupt
+            trial = dict(config, operation="test")
+            result, comparison = run_candidate(
+                _runner(trial), trial, main, incoming, actual, answer, "reduced"
+            )
+            if result.verdict == "INTERRUPTED":
+                raise KeyboardInterrupt
+            confirmed = (
+                not reference.status
+                and result.verdict == "WA"
+                and comparison
+                and not comparison.equal
+                and not comparison.incomplete
+            )
             if confirmed:
-                shutil.copyfile(incoming, Path(bundle) / 'reduced-input.txt')
-                shutil.copyfile(answer, Path(bundle) / 'reduced-ans.txt')
-                shutil.copyfile(actual, Path(bundle) / 'reduced-out.txt')
-            note = {'strategy': mode, 'attempts': attempts, 'reason': reason, 'confirmed': bool(confirmed),
-                    'original_bytes': len(payload), 'reduced_bytes': len(best)}
-            (Path(bundle) / 'reduction.json').write_text(json.dumps(note, indent=2) + '\n')
-            print('cp-run: reduction: {} -> {} bytes; {}'.format(len(payload), len(best), reason), file=sys.stderr)
+                shutil.copyfile(incoming, Path(bundle) / "reduced-input.txt")
+                shutil.copyfile(answer, Path(bundle) / "reduced-ans.txt")
+                shutil.copyfile(actual, Path(bundle) / "reduced-out.txt")
+            note = {
+                "strategy": mode,
+                "attempts": attempts,
+                "reason": reason,
+                "confirmed": bool(confirmed),
+                "original_bytes": len(payload),
+                "reduced_bytes": len(best),
+            }
+            (Path(bundle) / "reduction.json").write_text(json.dumps(note, indent=2) + "\n")
+            print(
+                "cp-run: reduction: {} -> {} bytes; {}{}".format(
+                    len(payload),
+                    len(best),
+                    reason,
+                    "" if confirmed else "; not confirmed, original retained",
+                ),
+                file=sys.stderr,
+            )
+        except KeyboardInterrupt as stop:
+            partial = stop.best if isinstance(stop, ReductionInterrupted) else best
+            (Path(bundle) / "partial-reduced-input.txt").write_bytes(partial)
+            (Path(bundle) / "reduction.json").write_text(
+                json.dumps(
+                    {
+                        "confirmed": False,
+                        "interrupted": True,
+                        "original_bytes": len(payload),
+                        "partial_bytes": len(partial),
+                    }
+                )
+                + "\n"
+            )
+            raise
         except (CheckUsageError, CheckSetupError, ReductionBudget) as error:
-            print('cp-run: reduction skipped: ' + str(error), file=sys.stderr)
+            print("cp-run: reduction skipped: " + str(error), file=sys.stderr)
 
 
 # Source: companion.py
@@ -3264,102 +3640,159 @@ def minimize_failure(config, directory, bundle):
 
 def companion_samples(payload):
     """Validate protocol data without trusting remote names, paths or limits."""
+
     def unique(pairs):
         record = {}
         for key, value in pairs:
-            if key in record: raise CheckUsageError('duplicate Companion JSON key: ' + key)
+            if key in record:
+                raise CheckUsageError("duplicate Companion JSON key: " + key)
             record[key] = value
         return record
-    try: data = json.loads(payload, object_pairs_hook=unique)
+
+    try:
+        data = json.loads(payload, object_pairs_hook=unique)
     except (ValueError, UnicodeError, RecursionError) as error:
-        raise CheckUsageError('invalid Companion JSON: ' + str(error)) from None
-    if not isinstance(data, dict): raise CheckUsageError('Companion request must be an object')
-    batch = data.get('batch', {})
-    if not isinstance(batch, dict) or type(batch.get('size', 1)) is not int or batch.get('size', 1) != 1:
-        raise CheckUsageError('this listener accepts one problem; import a single problem page')
-    tests = data.get('tests')
+        raise CheckUsageError("invalid Companion JSON: " + str(error)) from None
+    if not isinstance(data, dict):
+        raise CheckUsageError("Companion request must be an object")
+    batch = data.get("batch", {})
+    if (
+        not isinstance(batch, dict)
+        or type(batch.get("size", 1)) is not int
+        or batch.get("size", 1) != 1
+    ):
+        raise CheckUsageError("this listener accepts one problem; import a single problem page")
+    tests = data.get("tests")
     if not isinstance(tests, list) or not 1 <= len(tests) <= 100000:
-        raise CheckUsageError('Companion request needs 1..100000 samples')
+        raise CheckUsageError("Companion request needs 1..100000 samples")
     result = []
     for number, test in enumerate(tests, 1):
-        if not isinstance(test, dict) or not all(isinstance(test.get(k), str) for k in ('input', 'output')):
-            raise CheckUsageError('sample {} needs string input/output'.format(number))
-        try: result.append((test['input'].encode('utf-8'), test['output'].encode('utf-8')))
-        except UnicodeError: raise CheckUsageError('sample contains invalid Unicode') from None
+        if not isinstance(test, dict) or not all(
+            isinstance(test.get(k), str) for k in ("input", "output")
+        ):
+            raise CheckUsageError("sample {} needs string input/output".format(number))
+        try:
+            result.append((test["input"].encode("utf-8"), test["output"].encode("utf-8")))
+        except UnicodeError:
+            raise CheckUsageError("sample contains invalid Unicode") from None
     return result
 
 
 def import_companion(config, payload):
     samples = companion_samples(payload)
-    stem = Path(config.get('source_anchor', 'main.cpp')).stem
+    stem = Path(config.get("source_anchor", "main.cpp")).stem
     entries = []
     for number, (incoming, answer) in enumerate(samples, 1):
-        entries.extend(((case_template(config.get('in_template', './{n}.in'), stem, number), incoming),
-                        (case_template(config.get('ans_template', './{n}.ans'), stem, number), answer)))
+        entries.extend(
+            (
+                (case_template(config.get("in_template", "./{n}.in"), stem, number), incoming),
+                (case_template(config.get("ans_template", "./{n}.ans"), stem, number), answer),
+            )
+        )
     root = layout_root(config)
     # Detect stale samples: never leave a previous problem's extra tests behind
     # and accidentally run them as part of a new import.
-    for key, suffix in (('in_template', 'in'), ('ans_template', 'ans')):
-        pattern = config.get(key, './{n}.' + suffix)
+    for key, suffix in (("in_template", "in"), ("ans_template", "ans")):
+        pattern = config.get(key, "./{n}." + suffix)
         if root.is_dir():
-            try: old = discover_cases(root, pattern, stem)
-            except CheckSetupError: old = {}
+            try:
+                old = discover_cases(root, pattern, stem)
+            except CheckSetupError:
+                old = {}
             if set(old) - set(range(1, len(samples) + 1)):
-                raise CheckUsageError('existing extra samples would remain; choose a clean test directory')
-    write_test_files(root, entries, bool(config.get('overwrite')), config.get('protected', []))
+                raise CheckUsageError(
+                    "existing extra samples would remain; choose a clean test directory"
+                )
+    write_test_files(root, entries, bool(config.get("overwrite")), config.get("protected", []))
     return len(samples), root
+
+
+def companion_server(address, handler):
+    """Bind numeric loopback without HTTPServer's slow reverse-DNS lookup."""
+    from http.server import HTTPServer
+    from socketserver import TCPServer
+
+    class LocalServer(HTTPServer):
+        def server_bind(self):
+            TCPServer.server_bind(self)
+            self.server_name = "localhost"
+            self.server_port = self.server_address[1]
+
+    return LocalServer(address, handler)
 
 
 def execute_companion(config):
     # HTTP imports are optional; ordinary measurements never pay their startup cost.
-    from http.server import BaseHTTPRequestHandler, HTTPServer
-    port = positive_setting(config.get('port', 27122), '--port')
-    if port > 65535: raise CheckUsageError('--port must be 1..65535')
-    wait = positive_setting(config.get('wait', 120), '--wait')
-    maximum = min(4 * 1024 * 1024, positive_setting(config.get('max_spool', 268435456), 'request limit'))
+    from http.server import BaseHTTPRequestHandler
+
+    port = positive_setting(config.get("port", 27122), "--port")
+    if port > 65535:
+        raise CheckUsageError("--port must be 1..65535")
+    wait = positive_setting(config.get("wait", 120), "--wait")
+    maximum = min(
+        4 * 1024 * 1024, positive_setting(config.get("max_spool", 268435456), "request limit")
+    )
     accepted = []
 
     class Handler(BaseHTTPRequestHandler):
-        def log_message(self, *args): pass
+        timeout = 3  # Includes reading headers, before do_POST is entered.
+
+        def log_message(self, *args):
+            pass
 
         def do_POST(self):
             try:
                 self.connection.settimeout(3)
-                if self.path != '/': raise CheckUsageError('Companion endpoint is POST /')
-                origin = self.headers.get('Origin', '')
-                if origin and not origin.startswith(('chrome-extension://', 'moz-extension://')):
-                    raise CheckUsageError('browser page origins are not accepted')
-                if self.headers.get_content_type() != 'application/json':
-                    raise CheckUsageError('Content-Type must be application/json')
-                length = self.headers.get('Content-Length', '')
-                if not length.isascii() or not length.isdecimal() or len(length) > 10 or not 0 < int(length) <= maximum:
-                    raise CheckUsageError('invalid or oversized Content-Length')
+                if self.path != "/":
+                    raise CheckUsageError("Companion endpoint is POST /")
+                origin = self.headers.get("Origin", "")
+                if origin and not origin.startswith(("chrome-extension://", "moz-extension://")):
+                    raise CheckUsageError("browser page origins are not accepted")
+                if self.headers.get_content_type() != "application/json":
+                    raise CheckUsageError("Content-Type must be application/json")
+                length = self.headers.get("Content-Length", "")
+                if (
+                    not length.isascii()
+                    or not length.isdecimal()
+                    or len(length) > 10
+                    or not 0 < int(length) <= maximum
+                ):
+                    raise CheckUsageError("invalid or oversized Content-Length")
                 payload = self.rfile.read(int(length))
-                if len(payload) != int(length): raise CheckUsageError('truncated Companion request')
+                if len(payload) != int(length):
+                    raise CheckUsageError("truncated Companion request")
                 count, root = import_companion(config, payload)
                 accepted.append(count)
-                message = 'Saved {} samples in {}'.format(count, root)
+                message = "Saved {} samples in {}".format(count, root)
                 self.send_response(200)
-                print('cp-run: ' + message, file=sys.stderr, flush=True)
+                print("cp-run: " + message, file=sys.stderr, flush=True)
             except (ValueError, OSError) as error:
                 message = str(error)
                 self.send_response(400)
-                print('cp-run: Companion: ' + message, file=sys.stderr, flush=True)
-            self.send_header('Content-Type', 'text/plain; charset=utf-8')
-            body = (message + '\n').encode('utf-8')
-            self.send_header('Content-Length', str(len(body)))
+                print("cp-run: Companion: " + message, file=sys.stderr, flush=True)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            body = (message + "\n").encode("utf-8")
+            self.send_header("Content-Length", str(len(body)))
             try:
                 self.end_headers()
                 self.wfile.write(body)
-            except (BrokenPipeError, ConnectionResetError): pass  # Receipt already committed.
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # Receipt already committed.
 
     deadline = time.monotonic() + wait
-    with HTTPServer(('127.0.0.1', port), Handler) as server:
-        print('cp-run: Companion listening on http://localhost:{}/; import one problem'.format(server.server_port), file=sys.stderr, flush=True)
+    with companion_server(("127.0.0.1", port), Handler) as server:
+        print(
+            "cp-run: Companion listening on http://localhost:{}/; import one problem".format(
+                server.server_port
+            ),
+            file=sys.stderr,
+            flush=True,
+        )
         while not accepted and time.monotonic() < deadline:
-            server.timeout = min(.25, max(0, deadline - time.monotonic()))
+            server.timeout = min(0.25, max(0, deadline - time.monotonic()))
             server.handle_request()
-    if not accepted: raise CheckSetupError('Companion wait expired without a successful import')
+    if not accepted:
+        raise CheckSetupError("Companion wait expired without a successful import")
     return 0
 
 
@@ -3368,55 +3801,100 @@ def execute_companion(config):
 
 
 def execute_format(config):
-    sources = config.get('protected', [])
-    if not sources: raise CheckUsageError('formatting needs a source file')
+    sources = config.get("protected", [])
+    if not sources:
+        raise CheckUsageError("formatting needs a source file")
     jobs = []
     seen = set()
     for source in sources:
         source = str(Path(source).resolve())
-        if source in seen: continue
+        if source in seen:
+            continue
         seen.add(source)
-        if not Path(source).is_file(): raise CheckSetupError('source not found: ' + source)
-        python_source = source.endswith('.py')
-        tool = config.get('python_formatter', 'ruff') if python_source else config.get('native_formatter', 'clang-format')
+        if not Path(source).is_file():
+            raise CheckSetupError("source not found: " + source)
+        python_source = source.endswith(".py")
+        tool = (
+            config.get("python_formatter", "ruff")
+            if python_source
+            else config.get("native_formatter", "clang-format")
+        )
         executable = shutil.which(tool)
-        if not executable: raise CheckSetupError('optional formatter not found: ' + tool + '; see README installation')
-        check = config.get('prettier') == 'check'
+        if not executable:
+            raise CheckSetupError(
+                "optional formatter not found: " + tool + "; see README installation"
+            )
+        check = config.get("prettier") == "check"
         if python_source:
-            argv = [executable, *([] if Path(tool).name.startswith('black') else ['format']), *(['--check'] if check else []), source]
+            argv = [
+                executable,
+                *([] if Path(tool).name.startswith("black") else ["format"]),
+                *(["--check"] if check else []),
+                source,
+            ]
         else:
-            argv = [executable, '--style=file', '--fallback-style=LLVM', '--sort-includes=false',
-                    *(['--dry-run', '--Werror'] if check else ['-i']), source]
+            argv = [
+                executable,
+                "--style=file",
+                "--fallback-style=LLVM",
+                "--sort-includes=false",
+                *(["--dry-run", "--Werror"] if check else ["-i"]),
+                source,
+            ]
         jobs.append(argv)
     # Resolve every dependency before the first edit; no recursive directory sweep.
     for argv in jobs:
         result = subprocess.run(argv, stdout=sys.stderr)
-        if result.returncode: return result.returncode
+        if result.returncode:
+            return result.returncode
     return 0
 
 
 def execute_doctor(config):
-    required = ('zsh', 'python3')
-    optional = ('gcc', 'g++', 'clang', 'clang++', config.get('interpreter', 'python3'),
-                'pypy3', config.get('native_formatter', 'clang-format'), config.get('python_formatter', 'ruff'), 'clang-tidy')
+    required = ("zsh", "python3")
+    optional = (
+        "gcc",
+        "g++",
+        "clang",
+        "clang++",
+        config.get("interpreter", "python3"),
+        "pypy3",
+        config.get("native_formatter", "clang-format"),
+        config.get("python_formatter", "ruff"),
+        "clang-tidy",
+    )
     missing = False
-    print('cp-run dependency check (optional tools are needed only for their features)')
+    print("cp-run dependency check (optional tools are needed only for their features)")
     for name in dict.fromkeys((*required, *optional)):
         executable = shutil.which(name)
-        version = ''
+        version = ""
         if executable:
             try:
-                probe = subprocess.run([executable, '--version'], stdout=subprocess.PIPE,
-                                       stderr=subprocess.STDOUT, timeout=5, text=True)
-                version = next(iter(probe.stdout.splitlines()), 'version unavailable')
-                if name == 'zsh':
-                    match = re.search(r'zsh ([0-9]+)\.([0-9]+)', version)
+                probe = subprocess.run(
+                    [executable, "--version"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    timeout=5,
+                    text=True,
+                )
+                version = next(iter(probe.stdout.splitlines()), "version unavailable")
+                if name == "zsh":
+                    match = re.search(r"zsh ([0-9]+)\.([0-9]+)", version)
                     if not match or tuple(map(int, match.groups())) < (5, 9):
-                        missing = True; version += ' [requires 5.9+]'
-            except (OSError, subprocess.TimeoutExpired): version = 'version probe failed'
-        print('  {}: {}{}{}'.format(name, executable or 'not installed',
-              ' [required]' if name in required else ' [optional]', ' — ' + version if version else ''))
-        if name in required and not executable: missing = True
+                        missing = True
+                        version += " [requires 5.9+]"
+            except (OSError, subprocess.TimeoutExpired):
+                version = "version probe failed"
+        print(
+            "  {}: {}{}{}".format(
+                name,
+                executable or "not installed",
+                " [required]" if name in required else " [optional]",
+                " — " + version if version else "",
+            )
+        )
+        if name in required and not executable:
+            missing = True
     return int(missing)
 
 
@@ -3455,15 +3933,16 @@ PROFILE_DEFAULTS = {'MODE_KIND': 'flags', 'MODE_CPU': 'default'}
 # reset cannot quietly diverge from a freshly downloaded script.
 FACTORY_SETTINGS = {
     'DEFAULT_COMPILER': 'GCC', 'DEFAULT_STANDARD': 'auto',
+    'DEFAULT_LANGUAGE': 'c++', 'LANGUAGE_COMPILERS': {},
     'DEFAULT_SOURCE': 'main.cpp', 'DEFAULT_TIMEOUT': 'inf',
     'DEFAULT_MEMORY_LIMIT': 'inf', 'DEFAULT_INPUT': 'input.txt',
     'DEFAULT_OUTPUT': 'output.txt', 'DEFAULT_ANSWER': 'ans.txt',
     'DEFAULT_REPORT': 'test_out', 'DEFAULT_SEPARATOR': r'\n\x1e\n',
-    'MANUAL_SEPARATOR': r'\n###\n', 'DEFAULT_INTERPRETER': 'python3',
+    'MANUAL_SEPARATOR': r'\n###\n', 'DEFAULT_INTERPRETER': 'pypy3',
     'C_STANDARD': 'auto', 'C_SOURCE': 'main.c', 'PYTHON_SOURCE': 'main.py',
     'PYTHON_FLAGS': [], 'MODE_CPYTHON': {'debug': '-X dev -W default', 'extra': '-X dev -W error'},
     'MODE_PYPY': {'debug': '-W default -X track-resources', 'extra': '-W error -X track-resources'},
-    'ACTION_DEST_DIR': {'test-mult': 'tests', 'companion': 'tests'}, 'ACTION_SAVE_RELPATH': {},
+    'ACTION_DEST_DIR': {'test-mult': 'tests'}, 'ACTION_SAVE_RELPATH': {},
     'ACTION_SAVE_TEST_RELPATH': {}, 'MODE_DEST_DIR': {},
     'MODE_SAVE_RELPATH': {}, 'MODE_SAVE_TEST_RELPATH': {},
     'DEFAULT_INPUT_TEMPLATE': './{n}.in', 'DEFAULT_ANSWER_TEMPLATE': './{n}.ans',
@@ -4188,14 +4667,14 @@ def edit_settings(script_path):
 
 
 def _settings_languages(editor):
-    with editor.scope(['DEFAULT_INTERPRETER', 'C_SOURCE', 'PYTHON_SOURCE', 'C_STANDARD', 'NATIVE_FORMATTER', 'PYTHON_FORMATTER', 'PYTHON_FLAGS']):
+    with editor.scope(['DEFAULT_LANGUAGE', 'LANGUAGE_COMPILERS', 'DEFAULT_INTERPRETER', 'C_SOURCE', 'PYTHON_SOURCE', 'C_STANDARD', 'NATIVE_FORMATTER', 'PYTHON_FORMATTER', 'PYTHON_FLAGS']):
         _settings_languages_menu(editor)
 
 
 def _settings_languages_menu(editor):
     """Language options stay separate from native optimization/warning lists."""
     while True:
-        print('\nLanguages & tools: 1. Interpreter/source/standard/tools  2. Python flags  back')
+        print('\nLanguages & tools: 1. Interpreter/source/standard/tools  2. Python flags  3. Language/compiler defaults  back')
         choice = editor.ask('languages> ')
         if choice in ('', 'back'): return
         if choice == '1':
@@ -4208,6 +4687,30 @@ def _settings_languages_menu(editor):
                 ('PYTHON_FORMATTER', 'Python formatter (ruff or black)', None),
             ])
         elif choice == '2': _settings_flags(editor, 'PYTHON_FLAGS')
+        elif choice == '3': _settings_language_defaults(editor)
+
+
+def _settings_language_defaults(editor):
+    """Edit language preferences with ordinary names; no map syntax required."""
+    while True:
+        print('\nLanguage defaults\n  1. Preferred source language: ' + editor.data['DEFAULT_LANGUAGE'])
+        for number, language in ((2, 'c'), (3, 'c++')):
+            print('  {}. {} compiler: {}'.format(number, language, editor.data['LANGUAGE_COMPILERS'].get(language, 'inherit (' + editor.data['DEFAULT_COMPILER'] + ')')))
+        print('  4. Python interpreter: ' + editor.data['DEFAULT_INTERPRETER'])
+        choice = editor.ask('language defaults> ')
+        if choice in ('', 'back'): return
+        if choice == '1':
+            _settings_scalar(editor, 'DEFAULT_LANGUAGE', 'Language [c++ / c / python / auto]', _settings_choice('c++', 'c', 'python', 'auto'))
+        elif choice in ('2', '3'):
+            language = 'c' if choice == '2' else 'c++'
+            value = editor.ask(language + ' compiler [GCC / clang / inherit; Enter keeps it]: ')
+            if value:
+                updated = dict(editor.data['LANGUAGE_COMPILERS'])
+                if value == 'inherit': updated.pop(language, None)
+                else: updated[language] = _settings_compiler(value)
+                editor.set('LANGUAGE_COMPILERS', updated)
+        elif choice == '4':
+            _settings_scalar(editor, 'DEFAULT_INTERPRETER', 'Interpreter [pypy3 / python3 / absolute path]')
 
 
 def _settings_routing(editor):
@@ -4273,6 +4776,10 @@ def validate_preferences(values):
             raise ValueError('invalid text in ' + key + '; use visible \\n escapes')
     data['DEFAULT_COMPILER'] = _settings_compiler(data['DEFAULT_COMPILER'])
     _settings_standard(data['DEFAULT_STANDARD'])
+    _settings_choice('c++', 'c', 'python', 'auto')(data['DEFAULT_LANGUAGE'])
+    if set(data['LANGUAGE_COMPILERS']) - {'c', 'c++'}:
+        raise ValueError('compiler overrides support c and c++ only; use DEFAULT_INTERPRETER for Python')
+    data['LANGUAGE_COMPILERS'] = {key: _settings_compiler(value) for key, value in data['LANGUAGE_COMPILERS'].items()}
     if data['C_STANDARD'] != 'auto' and not re.fullmatch(r'(?:[0-9]+|(?:gnu|c)[0-9][A-Za-z0-9]*|iso9899:[0-9]+)', data['C_STANDARD']): raise ValueError('invalid C standard')
     for key in ('DEFAULT_INPUT_TEMPLATE', 'DEFAULT_ANSWER_TEMPLATE'): case_template(data[key], 'main', 1)
     _settings_filename(data['DEFAULT_SOURCE'])
