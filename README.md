@@ -1,26 +1,30 @@
 # cp-run
 
-**Write a solution. Run it. Find the test that breaks it.**
+**Your terminal, ready for competitive programming.**
 
-One command for **C++, C and Python**: compile, diagnose, check samples, measure runtime, and reduce counterexamples. Install **one script**; keep your usual editor and source files.
+Compile **C++ or C**, run **Python with PyPy or CPython**, check samples, and turn stress-test failures into smaller counterexamples. One installable script for macOS and Linux, with the editor you already use.
 
-```sh
-cp-run main.cpp                       # Compile and run
-cp-run debug main.cpp                 # Run with sanitizers and library checks
-cp-run compile main.cpp               # Compile; print the executable's path
-```
+[![Tests](https://github.com/V1b3-C0d3r/cp-run/actions/workflows/ci.yml/badge.svg)](https://github.com/V1b3-C0d3r/cp-run/actions/workflows/ci.yml)
 
-Want to check answers instead of copying them between terminals?
+## Quick start
+
+Open a directory containing your solution — `main.cpp`, `main.c` or `main.py` — and use:
 
 ```sh
-cp-run test main.cpp --cout           # input.txt → your program; compare with ans.txt
-cp-run test=mult main.py --cout        # Check tests/1.in + 1.ans, 2.in + 2.ans, ...
-cp-run stress main.cpp brute.py gen.py --test-iters=100
+cp-run                         # Find the source, compile if needed, and run
+cp-run debug                   # Run with a diagnostic profile
+cp-run compile                 # Prepare the program without running it
+cp-run test --cout             # Check input.txt against ans.txt
+cp-run stress --test-iters=100  # Find main, brute and gen; compare 100 generated tests
 ```
 
-Each test gets its **own verdict, time and peak memory**. Wrong answers show numbered input, output and expected lines. Stress failures preserve the seed and a replay command; optional reduction finds a smaller valid counterexample.
+**No project setup is required.** C++ is preferred when several languages are present. A single supported source is discovered automatically; explicit filenames always work: `cp-run solution.cpp`.
 
-[Install](#install) · [Language defaults](#choose-your-language-and-tools) · [Formatting](#format-your-source) · [Full CLI](docs/CLI.md) · [Testing guide](docs/TESTING.md) · [Runnable examples](examples/README.md)
+- **See the failing lines.** Reports show numbered input, actual output and expected output, with differences marked.
+- **Reproduce the bug.** Stress saves the seed, exact files and a replay command.
+- **Measure each test.** Independent samples have their own time, memory and limits. Repeated measurements show stdout once.
+
+[Install](#install) · [Samples](#check-samples) · [Counterexamples](#find-a-smaller-counterexample) · [Formatting](#format-your-source) · [Full CLI](docs/CLI.md) · [Examples](examples/README.md)
 
 ## Install
 
@@ -29,17 +33,12 @@ Download **`cp-run.zsh`** from the [latest release](https://github.com/V1b3-C0d3
 ```sh
 mkdir -p ~/.local/bin
 install -m 755 cp-run.zsh ~/.local/bin/cp-run
-```
-
-If the command is not found, enable its directory for this terminal:
-
-```sh
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-Put that line in your shell's startup file (for example `~/.zshrc`) to keep it. To uninstall, remove `~/.local/bin/cp-run`.
+Keep the PATH line in your shell's startup file (for example `~/.zshrc`). To uninstall, remove `~/.local/bin/cp-run`.
 
-**Requirements:** zsh **5.9+**; GCC or Clang for native sources; **PyPy 3** for Python sources by default. CPython is also supported. Measurements, tests, settings and integrations use a separate **Python 3.9+** standard-library service. Optional tools are needed only when you request their features; `cp-run --doctor` lists what is installed.
+**Requirements:** zsh **5.9+**; GCC or Clang for C/C++; **PyPy 3** for Python by default, or a selected CPython interpreter. Measurements, tests, settings and integrations also use a separate **Python 3.9+** standard-library service. Run `cp-run --doctor` to check available tools; nothing is installed automatically.
 
 ### macOS
 
@@ -49,7 +48,7 @@ Install [Apple Command Line Tools](https://developer.apple.com/xcode/resources/)
 brew install zsh python gcc
 ```
 
-GNU GCC is the native default; use `--compiler=clang` for Apple Clang. Install [PyPy](https://pypy.org/download.html) and make `pypy3` available on `PATH`, or select `--interpreter=python3`. Package availability depends on macOS and CPU architecture; a downloaded interpreter can also be selected by its executable's absolute path.
+GNU GCC is the native default; select Apple Clang with `--compiler=clang`. Install [PyPy](https://pypy.org/download.html) and put `pypy3` on PATH, or use `--interpreter=python3`. Downloaded interpreter executables can be selected by absolute path. Package availability depends on macOS and CPU architecture.
 
 ### Debian / Ubuntu
 
@@ -58,24 +57,64 @@ sudo apt update
 sudo apt install zsh build-essential clang python3 pypy3
 ```
 
-Check `zsh --version`; use a distribution providing zsh 5.9 or newer.
+Check `zsh --version`; use a distribution with zsh 5.9 or newer.
 
 ### Windows
 
 Use [WSL2 with Ubuntu or Debian](https://learn.microsoft.com/en-us/windows/wsl/install), then follow the Linux instructions inside WSL. Native Windows is not supported. Browser-to-WSL Companion forwarding depends on your networking setup.
 
-## Choose your language and tools
+## Check samples
 
-The filename selects its language. With FILE omitted, cp-run prefers C++ and falls back to an unambiguous supported source; [discovery rules](docs/CLI.md#source-discovery-and-language-defaults) explain mixed directories.
+For one complete test, save the input in **`input.txt`** and the expected stdout in **`ans.txt`**. `cp-run test --cout` displays the report; omit `--cout` to save it as **`test_out`**.
+
+For independent samples, create numbered pairs:
+
+```text
+tests/
+  1.in    1.ans
+  2.in    2.ans
+```
+
+```sh
+cp-run test=mult --cout         # Run every sample
+cp-run test=mult 2 --cout       # Reproduce only sample 2
+```
+
+Each sample gets **AC, WA, TLE, MLE or RE**, its own time and peak memory. Preparation failures are **CE**. A failed sample does not skip the next one. Checking defaults to **1500 ms / 256 MiB per process**; ordinary runs are unlimited.
+
+**Import website samples:** install [Competitive Companion](https://github.com/jmerle/competitive-companion#installation), add custom port **27122**, run `cp-run companion main.cpp`, then click the extension on one problem. [Step-by-step setup](docs/TESTING.md#competitive-companion).
+
+The [testing guide](docs/TESTING.md) explains exact file contents, report symbols, bundles, console input and limits. Try the ready-made [sample projects](examples/README.md).
+
+## Find a smaller counterexample
+
+Name your candidate **`main`**, correct reference **`brute`**, and seeded generator **`gen`**, using supported source extensions. `cp-run stress --test-iters=100` discovers them; mixed-language roles work too.
+
+For counted integer sequences, enable reduction:
+
+```sh
+cp-run stress --minimize=sequence --stop-on-failure
+```
+
+The original failure stays intact. The reducer removes elements, repairs the count and simplifies values while preserving a confirmed wrong answer. Add a validator for problem-specific constraints. [Run the counterexample example](examples/reduction/README.md).
+
+## Choose your tools and checks
 
 ```sh
 cp-run main.c --compiler=clang
-cp-run main.py                        # PyPy 3, with its normal JIT enabled
+cp-run main.py                        # PyPy, with its normal JIT enabled
 cp-run main.py --interpreter=python3  # CPython instead
 cp-run main.py -- -- --input data.txt # Arguments for your program
+cp-run debug=extra main.cpp           # Stricter diagnostic profile
+cp-run main.cpp -tm --average=5       # One stdout; median time, maximum peak RSS
+cp-run main.cpp --profile=pragma-native
 ```
 
-Run **`cp-run --set-defaults` → Languages & tools → Language/compiler defaults** to choose the preferred language, a compiler for C, a compiler for C++, and the Python interpreter. Explicit filenames and tool options override saved defaults. Changes are saved inside the installed script. Before replacing an installation, export settings, install the new script, then import:
+C/C++ use **`-O2`** and the newest ISO standard advertised by the compiler, including draft modes. Native debug profiles use sanitizers and checks selected from the **actual C++ library**; Python profiles use interpreter diagnostics. The `pragma` profiles provide native optimization flag sets. Fast-math changes floating-point behavior, and host-tuned binaries may not run on another CPU. [Profile components and safeguards](docs/CLI.md#languages-and-profiles).
+
+**Make it yours:** `cp-run --set-defaults` → **Languages & tools → Language/compiler defaults** selects a preferred language, separate C/C++ compilers and the Python interpreter. Settings also cover profiles, warnings, paths and limits. Explicit command options override saved defaults. [Discovery and precedence](docs/CLI.md#source-discovery-and-language-defaults).
+
+Settings live inside the installed script. Before replacing it, export them, install the new version, then import:
 
 ```sh
 cp-run --export-settings cp-run-settings.json
@@ -83,67 +122,18 @@ cp-run --export-settings cp-run-settings.json
 cp-run --import-settings cp-run-settings.json
 ```
 
-C/C++ use **`-O2`** and the newest ISO standard advertised by the selected compiler, including draft modes. Python uses the selected interpreter's normal defaults; assertion-removing `-O` is never added automatically. [Backend options and boundaries](docs/CLI.md#commands-and-argument-boundaries).
-
-## Check samples and find counterexamples
-
-For a single test, put the complete input in **`input.txt`** and the expected stdout in **`ans.txt`**:
-
-```sh
-cp-run test main.cpp --cout
-```
-
-For independent tests, create **`tests/1.in`, `tests/1.ans`, `tests/2.in`, `tests/2.ans`**:
-
-```sh
-cp-run test=mult main.cpp --cout
-cp-run test=mult 2 main.cpp --cout     # Reproduce only test 2
-```
-
-Without `--cout`, the report is saved as **`test_out`**. Raw first-run output is **`real-out.txt`**. Checking defaults to **1500 ms / 256 MiB per process**; ordinary runs are unlimited. Each auto/mult test has independent limits.
-
-For stress testing, supply a candidate, a correct reference and a seeded generator:
-
-```sh
-cp-run stress main.cpp brute.py gen.py --test-iters=100
-cp-run stress main.cpp brute.py gen.py --minimize=sequence --stop-on-failure
-```
-
-The [testing guide](docs/TESTING.md) shows exact file contents, report symbols, every test format, replay and reduction. Try the ready-made [examples](examples/README.md).
-
-**Import website samples:** install [Competitive Companion](https://github.com/jmerle/competitive-companion#installation), add custom port **27122**, run `cp-run companion main.cpp`, then click the extension on one problem. [Step-by-step setup](docs/TESTING.md#competitive-companion).
-
-## Diagnose and measure
-
-```sh
-cp-run debug main.cpp
-cp-run debug=extra main.cpp
-cp-run main.cpp -tm --average=5       # One visible stdout; median time, peak RSS
-cp-run main.cpp --profile=pragma-native
-```
-
-| Profile | What it adds |
-| --- | --- |
-| `debug` | C/C++ sanitizers and frame pointers; C++ assertions selected from the **actual standard library**. Python uses interpreter diagnostics. |
-| `debug=extra` | Stronger warnings and native/library checks; Python warnings become errors. |
-| `--profile=pragma` | Native `-O3`, loop unrolling and unknown-pragma warnings. |
-| `--profile=pragma-fast` | More aggressive native optimization, including fast-math. |
-| `--profile=pragma-native` | Fast profile plus capability-checked host CPU tuning. |
-
-Diagnostic profiles reject known options that disable their checks. They cannot detect every bug. Fast-math changes floating-point behavior; host-tuned binaries may not run on another CPU. [Exact profile rules](docs/CLI.md#languages-and-profiles) and [measurement behavior](docs/CLI.md#measurements-and-limits).
-
 ## Format your source
 
-**This is optional source formatting**, using [clang-format](https://clang.llvm.org/docs/ClangFormat.html) for C/C++ and [Ruff](https://docs.astral.sh/ruff/installation/) for Python. Install the formatter you need first; cp-run does not install it.
+Use optional [clang-format](https://clang.llvm.org/docs/ClangFormat.html) for C/C++ or [Ruff](https://docs.astral.sh/ruff/installation/) for Python. Install the formatter first.
 
 ```sh
-cp-run main.cpp --make-prettier=only  # Rewrite this file's formatting; stop
-cp-run main.py --make-prettier=check  # Check formatting; do not edit or run
+cp-run main.cpp --make-prettier=only  # Format this file; stop
+cp-run main.py --make-prettier=check  # Check style; do not edit or run
 cp-run main.cpp --make-prettier       # Format, then compile and run
-cp-run --make-prettier                # Discover a source, format it, then stop
+cp-run --make-prettier                # Find a source, format it, then stop
 ```
 
-Formatters edit only the selected source files and use the project's style configuration when present. They do not run lint fixes. Black can replace Ruff in **`--set-defaults` → Languages & tools → Interpreter/source/standard/tools**. See [formatter behavior and setup](docs/CLI.md#formatting).
+Only selected source files are formatted, using project style settings where present. No lint fixes are applied. Black can replace Ruff in **`--set-defaults` → Languages & tools → Interpreter/source/standard/tools**. [Formatter behavior and setup](docs/CLI.md#formatting).
 
 ## Build from modules
 

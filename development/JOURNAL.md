@@ -59,3 +59,6 @@
 - Final behavior audit found that `run -` retained interpreter history but ignored newly supplied --interpreter-arg options. Fixed insertion before the recorded source and added an exact argv/runtime regression plus execution-replacement rejection.
 - The rebuilt archive passed **417 tests** (one unavailable local clang-format skip), 148.756 s; **27 isolated documented workflows** passed, including mixed-language stress, minimization/replay, real HTTP sample import, formatting and settings round trip. Build and package reproduce byte-for-byte after extraction.
 - Startup benchmark (15 samples, informational): native 1.0 median 8.330 ms, native 1.1 9.415 ms; direct native 2.038 ms. PyPy launch median 23.724 ms through cp-run versus 13.810 ms directly. Native unlimited execution still starts no service Python; no unsupported speedup claim.
+
+- A language-specific settings audit caught native operand rules being applied to Python's standalone -B/-I switches. The shared editor now receives the backend grammar explicitly; added menu, toggle and actual-interpreter regressions. No execution-path work was added.
+- Owner requested more visible beginner commands and a stronger README. The lead now demonstrates source discovery, sample checking, stress and reduction before installation/reference details.

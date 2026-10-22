@@ -68,7 +68,7 @@ def validate_preferences(values):
         _settings_positive(data[key])
     if int(data['COMPANION_PORT']) > 65535: raise ValueError('port must be 1..65535')
     if not data['DEFAULT_INTERPRETER']: raise ValueError('empty interpreter')
-    flag_units(data['PYTHON_FLAGS'])
+    flag_units(data['PYTHON_FLAGS'], python=True)
     names = data['MODE_NAMES']
     for key in PROFILE_KEYS:
         if key not in values: data[key] = {name: value for name, value in data[key].items() if name in names}

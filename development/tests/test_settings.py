@@ -322,6 +322,15 @@ class SettingsTest(unittest.TestCase):
         self.assertEqual(second.returncode, 0, second.stderr)
         self.assertEqual(Path(second.stdout.strip()), (self.cwd / 'explicit/main.out').resolve())
 
+    def test_python_flags_menu_uses_interpreter_operand_rules(self):
+        self.configure('8\n2\n-B -I\nback\nback\nsave\ny\n')
+        self.assertEqual(self.data()['PYTHON_FLAGS'], ['-B', '-I'])
+        self.assertEqual(settings._settings_change_flags(['-B'], '-B', python=True), [])
+        source = self.cwd / 'main.py'
+        source.write_text('import sys; print(bool(sys.flags.dont_write_bytecode), bool(sys.flags.isolated))\n')
+        result = self.invoke(source, '--interpreter=' + sys.executable)
+        self.assertEqual((result.returncode, result.stdout), (0, 'True True\n'), result.stderr)
+
     def test_per_language_defaults_menu_and_validation(self):
         self.configure('8\n3\n1\npython\n2\nclang\n3\nGCC\n4\n' + sys.executable + '\nback\nback\nsave\ny\n')
         values = self.data()

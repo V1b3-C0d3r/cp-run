@@ -18,11 +18,15 @@ def flag_key(flag):
     return key
 
 
-def flag_units(words):
+def flag_units(words, python=False):
     """Keep known option/operand pairs intact during toggle operations."""
     paired = {'-I', '-L', '-l', '-D', '-U', '-isystem', '-iquote', '-include',
               '-imacros', '-isysroot', '--sysroot', '-target', '--target',
               '-arch', '-B', '-X', '-W', '--jit', '-Xlinker', '-Xclang', '-Xpreprocessor', '-mllvm'}
+    if python:
+        # -B and -I are standalone Python switches, but native driver options
+        # with operands. Share the editor without sharing the wrong grammar.
+        paired = {'-X', '-W', '--jit', '--check-hash-based-pycs'}
     units, index = [], 0
     while index < len(words):
         word = words[index]
@@ -39,7 +43,9 @@ def flag_units(words):
     return units
 
 
-def _settings_unit_key(unit):
+def _settings_unit_key(unit, python=False):
+    if python and len(unit) == 1:
+        return flag_key(unit[0])
     if unit[0] in ('-X', '-W', '--jit'):
         return unit[0] + ':' + unit[1].split('=', 1)[0]
     if unit[0] in ('-D', '-U'):
@@ -55,18 +61,18 @@ def _settings_unit_key(unit):
     return flag_key(unit[0])
 
 
-def _settings_change_flags(current, command):
+def _settings_change_flags(current, command, python=False):
     """Return a new list; a malformed edit cannot partially change settings."""
     action = 'toggle'
     for prefix in ('add ', 'remove '):
         if command.startswith(prefix):
             action, command = prefix.strip(), command[len(prefix):]
             break
-    units = flag_units(current)
-    for unit in flag_units(shlex.split(command)):
-        key = _settings_unit_key(unit)
-        matches = [item for item in units if _settings_unit_key(item) == key]
-        units = [item for item in units if _settings_unit_key(item) != key]
+    units = flag_units(current, python)
+    for unit in flag_units(shlex.split(command), python):
+        key = _settings_unit_key(unit, python)
+        matches = [item for item in units if _settings_unit_key(item, python) == key]
+        units = [item for item in units if _settings_unit_key(item, python) != key]
         if action != 'remove' and (action == 'add' or matches != [unit]):
             units.append(unit)
     return [word for unit in units for word in unit]
@@ -228,7 +234,8 @@ def _settings_flags_menu(editor, key, profile=None):
             continue
         if command in ('', 'back'):
             return
-        changed = [] if command == 'clear' else _settings_change_flags(current, command)
+        changed = [] if command == 'clear' else _settings_change_flags(
+            current, command, python=key in ('PYTHON_FLAGS', 'MODE_CPYTHON', 'MODE_PYPY'))
         if profile:
             updated = dict(editor.data[key])
             updated[profile] = shlex.join(changed)
