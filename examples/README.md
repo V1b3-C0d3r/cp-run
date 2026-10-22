@@ -25,11 +25,11 @@ Two numbered pairs in `tests/` expect 5 and 15. Each invocation gets an independ
 
 ## Existing whole-file and auto tests
 
-In `testing/`, `sum.cpp` reads two integers. `input.txt`/`ans.txt` expect 5; `wrong.ans` deliberately differs.
+In `testing/`, `sum.cpp` sums each input pair until EOF. `in.txt`/`ans.txt` expect the two lines 5 and 15; `wrong.ans` deliberately differs.
 
 ```sh
 cp-run test sum.cpp --cout
-cp-run test sum.cpp input.txt wrong.ans --cout
+cp-run test sum.cpp in.txt wrong.ans --cout
 cp-run test=auto sum.cpp auto.in auto.ans --sep='\n\n'
 cp-run test=auto 2 sum.cpp auto.in auto.ans --sep='\n\n' --cout
 cp-run test=auto sum.cpp custom.in custom.ans --sep='\n###\n'
@@ -78,8 +78,8 @@ In `file-io/`:
 
 ```sh
 cp-run main.cpp -f
-cp-run main.cpp -f=auto input.txt result.txt
-cp-run main.cpp --file-io in input.txt
+cp-run main.cpp -f=auto in.txt result.txt
+cp-run main.cpp --file-io in in.txt
 cp-run test main.cpp
 ```
 

@@ -14,7 +14,7 @@ EXAMPLE_FILES = (
     'README.md',
     'companion/sample.json',
     'file-io/ans.txt',
-    'file-io/input.txt',
+    'file-io/in.txt',
     'file-io/main.cpp',
     'languages/main.c',
     'mult/main.py',
@@ -44,7 +44,7 @@ EXAMPLE_FILES = (
     'testing/console.txt',
     'testing/custom.ans',
     'testing/custom.in',
-    'testing/input.txt',
+    'testing/in.txt',
     'testing/sum.cpp',
     'testing/wrong.ans',
 )

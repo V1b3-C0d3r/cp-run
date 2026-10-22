@@ -519,7 +519,7 @@ def edit_settings(script_path):
         ('DEFAULT_WORKSPACE', 'Workspace path', None),
         ('DEFAULT_DESTINATION', 'Workspace-relative destination', _settings_destination),
         ('DEFAULT_INPUT', 'Input file ({wsp-dir}/PATH supported)', _settings_file_path), ('DEFAULT_ANSWER', 'Answer file ({wsp-dir}/PATH supported)', _settings_file_path),
-        ('DEFAULT_OUTPUT', 'Redirected program output', _settings_file_path),
+        ('DEFAULT_OUTPUT', 'Program output: checks and -f auto/out ({wsp-dir}/PATH supported)', _settings_file_path),
         ('DEFAULT_REPORT', 'Test/stress report', _settings_file_path),
         ('DEFAULT_F_MODE', 'Bare -f action', _settings_choice('macro', 'auto', 'in', 'out')),
         ('DEFAULT_MACRO', '-f macro identifier', _settings_macro),
@@ -554,7 +554,7 @@ def edit_settings(script_path):
     ]
     try:
         while True:
-            print('\ncp-run 1.1 defaults — changes stay pending until save')
+            print('\ncp-run defaults — changes stay pending until save')
             print('  1. Build: {} / {} / {}'.format(editor.data['DEFAULT_COMPILER'],
                 editor.data['DEFAULT_STANDARD'], shlex.join(editor.data['DEFAULT_FLAGS']) or '(no flags)'))
             print('  2. Files: {} / {} / {}'.format(editor.data['DEFAULT_SOURCE'],
@@ -572,7 +572,7 @@ def edit_settings(script_path):
                 if choice == '1':
                     _settings_build(editor)
                 elif choice == '2':
-                    _settings_fields(editor, 'Files (real-out.txt is fixed)', files)
+                    _settings_fields(editor, 'Files (paths may start with {wsp-dir}/)', files)
                 elif choice == '3':
                     _settings_warnings(editor)
                 elif choice == '4':

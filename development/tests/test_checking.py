@@ -23,7 +23,7 @@ class CheckingTest(unittest.TestCase):
         os.chdir(self.temporary.name)
         self.directory = Path.cwd()
         self.binary = self.program("solver.out", "import sys\nsys.stdout.buffer.write(sys.stdin.buffer.read())\n")
-        Path("input.txt").write_bytes(b"hello\n")
+        Path("in.txt").write_bytes(b"hello\n")
         Path("ans.txt").write_bytes(b"hello\n")
         self.config = {"operation": "test", "executable": str(self.binary)}
 
@@ -44,7 +44,7 @@ class CheckingTest(unittest.TestCase):
         return status, stdout.getvalue(), stderr.getvalue()
 
     def auto(self, incoming=b"a\n\nb\n\nc\n", answer=None, **extra):
-        Path("input.txt").write_bytes(incoming)
+        Path("in.txt").write_bytes(incoming)
         Path("ans.txt").write_bytes(incoming if answer is None else answer)
         self.config.update(auto=True, **extra)
         return self.config
@@ -61,7 +61,7 @@ class CheckingTest(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertEqual(stdout, "")
         self.assertIn("PASS", stderr)
-        self.assertEqual(Path("real-out.txt").read_bytes(), b"hello\n")
+        self.assertEqual(Path("out.txt").read_bytes(), b"hello\n")
         self.assertIn("Test 1: AC", Path("test_out").read_text())
         self.assertFalse(any(p.name.startswith(".cp-run-") for p in Path.cwd().iterdir()))
 
@@ -71,36 +71,36 @@ class CheckingTest(unittest.TestCase):
         report = Path("test_out").read_text()
         self.assertEqual(status, 3)
         self.assertIn('input:1 | "hello"', report)
-        self.assertIn('! real-out.txt:1 | "hello"', report)
+        self.assertIn('! out.txt:1 | "hello"', report)
         self.assertIn('! ans:1 | "expected"', report)
 
     def test_inserted_answer_line_retains_both_files_numbers(self):
-        Path("input.txt").write_text("first\nlast\n")
+        Path("in.txt").write_text("first\nlast\n")
         Path("ans.txt").write_text("first\ninserted\nlast\n")
         self.assertEqual(self.execute()[0], 3)
         report = Path("test_out").read_text()
         self.assertIn('ans:2 | "inserted"', report)
-        self.assertIn('real-out.txt:2 | "last"', report)
-        self.assertIn('real-out.txt:— | <missing line>; ans:2', report)
+        self.assertIn('out.txt:2 | "last"', report)
+        self.assertIn('out.txt:— | <missing line>; ans:2', report)
 
     def test_deleted_answer_line_marks_missing_answer(self):
-        Path("input.txt").write_text("first\ninserted\nlast\n")
+        Path("in.txt").write_text("first\ninserted\nlast\n")
         Path("ans.txt").write_text("first\nlast\n")
         self.assertEqual(self.execute()[0], 3)
-        self.assertIn('ans:— | <missing line>; real-out.txt:2', Path("test_out").read_text())
+        self.assertIn('ans:— | <missing line>; out.txt:2', Path("test_out").read_text())
 
     def test_comparison_normalizes_crlf_and_optional_last_newline(self):
-        Path("input.txt").write_bytes(b"hello\r\n")
+        Path("in.txt").write_bytes(b"hello\r\n")
         Path("ans.txt").write_bytes(b"hello")
         self.assertEqual(self.execute()[0], 0)
 
     def test_spaces_and_extra_blank_rows_are_significant(self):
         for output in (b"hello \n", b"hello\n\n"):
-            Path("input.txt").write_bytes(output)
+            Path("in.txt").write_bytes(output)
             self.assertEqual(self.execute()[0], 3)
 
     def test_report_control_bytes_are_quoted(self):
-        Path("input.txt").write_bytes(b"\x1b[31m\xff\n")
+        Path("in.txt").write_bytes(b"\x1b[31m\xff\n")
         self.assertEqual(self.execute()[0], 3)
         report = Path("test_out").read_text()
         self.assertNotIn("\x1b", report)
@@ -121,20 +121,20 @@ class CheckingTest(unittest.TestCase):
         self.assertIn("selected 2 of 2", Path("test_out").read_text())
 
     def test_opaque_normal_test_does_not_split_blank_lines(self):
-        Path("input.txt").write_text("2\n\nvalue\n")
+        Path("in.txt").write_text("2\n\nvalue\n")
         Path("ans.txt").write_text("2\n\nvalue\n")
         self.assertEqual(self.execute()[0], 0)
         self.assertIn("selected 1 of 1", Path("test_out").read_text())
 
     def test_mismatched_counts_do_not_touch_prior_artifacts_or_print(self):
         self.auto(b"a\n\nb", b"a\n")
-        Path("real-out.txt").write_text("old output")
+        Path("out.txt").write_text("old output")
         Path("test_out").write_text("old report")
         output, error = io.StringIO(), io.StringIO()
         with redirect_stdout(output), redirect_stderr(error), self.assertRaisesRegex(ENGINE.CheckUsageError, "count mismatch"):
             ENGINE.preflight_check(self.config)
         self.assertEqual(output.getvalue() + error.getvalue(), "")
-        self.assertEqual(Path("real-out.txt").read_text(), "old output")
+        self.assertEqual(Path("out.txt").read_text(), "old output")
         self.assertEqual(Path("test_out").read_text(), "old report")
 
     def test_selections_cannot_hide_bad_bundle(self):
@@ -215,7 +215,7 @@ class CheckingTest(unittest.TestCase):
         self.assertIn("Test 1: INTERRUPTED", report)
         self.assertNotIn("Test 2:", report)
         self.assertNotIn("INCOMPLETE", report)
-        self.assertEqual(Path("real-out.txt").read_bytes(), b"partial\n")
+        self.assertEqual(Path("out.txt").read_bytes(), b"partial\n")
 
     def test_child_exit_three_is_rte_not_wa(self):
         self.program("solver.out", "raise SystemExit(3)\n")
@@ -225,12 +225,12 @@ class CheckingTest(unittest.TestCase):
         self.assertNotIn("Test 1: WA", report)
 
     def test_comparison_budget_returns_incomplete_not_pass(self):
-        Path("input.txt").write_text("a\nb\nc\n")
+        Path("in.txt").write_text("a\nb\nc\n")
         Path("ans.txt").write_text("a\nb\nc\n")
         self.config["line_limit"] = 2
         self.assertEqual(self.execute()[0], 4)
         self.assertIn("INCOMPLETE", Path("test_out").read_text())
-        self.assertEqual(Path("real-out.txt").read_text(), "a\nb\nc\n")
+        self.assertEqual(Path("out.txt").read_text(), "a\nb\nc\n")
 
     def test_exact_end_at_budget_is_pass(self):
         self.config["line_limit"] = 1
@@ -247,7 +247,7 @@ class CheckingTest(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertIn("Test 1: AC", stdout)
         self.assertEqual(stderr, "")
-        self.assertTrue(Path("real-out.txt").exists())
+        self.assertTrue(Path("out.txt").exists())
         self.assertFalse(Path("test_out").exists())
 
     def test_console_framing_and_literal_escape(self):
@@ -286,13 +286,13 @@ class CheckingTest(unittest.TestCase):
             sys.stdin = original
 
     def test_collision_roles_reject_before_truncation(self):
-        for report in ("input.txt", "ans.txt", "real-out.txt", str(self.binary)):
+        for report in ("in.txt", "ans.txt", "out.txt", str(self.binary)):
             with self.assertRaises(ENGINE.CheckUsageError):
                 ENGINE.preflight_check({**self.config, "report": report})
-        self.assertEqual(Path("input.txt").read_text(), "hello\n")
+        self.assertEqual(Path("in.txt").read_text(), "hello\n")
 
     def test_hardlink_output_alias_is_rejected(self):
-        os.link("ans.txt", "real-out.txt")
+        os.link("ans.txt", "out.txt")
         with self.assertRaises(ENGINE.CheckUsageError):
             ENGINE.preflight_check(self.config)
 
@@ -311,13 +311,13 @@ class CheckingTest(unittest.TestCase):
         with ENGINE.check_lock():
             with self.assertRaisesRegex(ENGINE.CheckSetupError, "another test/stress"):
                 self.execute()
-        self.assertFalse(Path("real-out.txt").exists())
+        self.assertFalse(Path("out.txt").exists())
 
     def test_stress_success_records_finite_claim_and_latest_actual(self):
         status, _, stderr = self.execute(self.stress(), stress=True)
         self.assertEqual(status, 0)
         self.assertIn("No difference in 3 generated cases", stderr)
-        self.assertEqual(Path("real-out.txt").read_text(), "19\n")
+        self.assertEqual(Path("out.txt").read_text(), "19\n")
         self.assertFalse(Path("stress-failure").exists())
 
     def test_stress_mismatch_saves_input_seed_outputs_and_replay(self):
@@ -325,9 +325,9 @@ class CheckingTest(unittest.TestCase):
         status, _, stderr = self.execute(self.stress(main=wrong), stress=True)
         self.assertEqual(status, 3)
         bundle = Path("stress-failure")
-        self.assertEqual((bundle / "input.txt").read_text(), "17\n")
+        self.assertEqual((bundle / "in.txt").read_text(), "17\n")
         self.assertEqual((bundle / "ans.txt").read_text(), "17\n")
-        self.assertEqual((bundle / "real-out.txt").read_text(), "wrong\n")
+        self.assertEqual((bundle / "out.txt").read_text(), "wrong\n")
         manifest = json.loads((bundle / "manifest.json").read_text())
         self.assertEqual(manifest["seed"], 17)
         self.assertEqual(manifest["iteration"], 1)
@@ -343,7 +343,7 @@ class CheckingTest(unittest.TestCase):
         status, _, stderr = self.execute(config, stress=True)
         self.assertEqual(status, 0, stderr)
         self.assertIn('start seed 4', Path('test_out').read_text())
-        self.assertEqual(Path('real-out.txt').read_text(), '5\n')
+        self.assertEqual(Path('out.txt').read_text(), '5\n')
 
     def test_oversized_seed_and_iteration_values_are_usage_errors(self):
         for extra in ({'seed': '9' * 5000}, {'num_test': '9' * 5000}):
@@ -390,7 +390,7 @@ class CheckingTest(unittest.TestCase):
 
     def test_stress_unsigned_seed_wraparound(self):
         self.assertEqual(self.execute(self.stress(seed=str(2**64-1), iterations=2), stress=True)[0], 0)
-        self.assertEqual(Path("real-out.txt").read_text(), "0\n")
+        self.assertEqual(Path("out.txt").read_text(), "0\n")
 
     def test_stress_num_test_overrides_iteration_default(self):
         self.assertEqual(self.execute(self.stress(num_test=1), stress=True)[0], 0)

@@ -92,6 +92,7 @@ Plain `pragma`, `pragma-fast`, `pragma-native` are native driver flag sets, not 
 | `--dest-dir=DIR` | Workspace-relative artifact destination. Default `./`; `test=mult` and Companion default `tests`. |
 | `--save-relpath[=0|1]` | Preserve source-parent subtree under destination; bare = 1. |
 | `-o PATH`, `-oPATH`, `--output=PATH` | Exact native artifact path; bypass artifact workspace/destination lookup. |
+| `--out=FILE`, `--out FILE` | Program stdout file for test/stress or `-f=auto/out`; default `out.txt`. Distinct from binary output `-o`. |
 | `--find=NAME` | With omitted run target, check destination and optional invocation subtree. NAME and NAME.out are equivalent; two matches are an error. |
 | `--test-dir=DIR` | Separate mult/Companion data directory; otherwise destination is used. |
 | `--save-test-relpath[=0|1]` | Append source-parent subtree to test root, independently of artifact routing. |
@@ -108,19 +109,19 @@ Prefix a saved filename with **`{wsp-dir}/`** to resolve it from the selected wo
 | Setting | Example |
 | --- | --- |
 | Fallback source | `{wsp-dir}/src/main.cpp` |
-| Input | `{wsp-dir}/data/input.txt` |
+| Input | `{wsp-dir}/data/in.txt` |
 | Answer | `{wsp-dir}/data/ans.txt` |
-| Redirected output | `{wsp-dir}/data/output.txt` |
+| Program output (checks and `-f=auto/out`) | `{wsp-dir}/data/out.txt` |
 | Test/stress report | `{wsp-dir}/logs/test_out` |
 
-C/Python fallback sources, the stress reference and generator accept the same prefix in their menus. Parent directories for ordinary I/O and report files must already exist. Discovery still prefers a sole local source before consulting the configured fallback.
+C/Python fallback sources, the stress reference and generator accept the same prefix in their menus. Parent directories for input/output/report files must already exist. Discovery still prefers a sole local source before consulting the configured fallback.
 
 Without the prefix, relative file paths keep their usual meaning: **relative to the invocation directory**. The token must be at the start, followed by `/` and a path; `..` and symlinks escaping the workspace are rejected. It is literal data, never shell expansion. Settings export/import preserves it.
 
 The same prefix works in explicit source, `-o`, redirection and checking file operands; quote it in shell commands:
 
 ```sh
-cp-run test '{wsp-dir}/src/main.cpp' '{wsp-dir}/data/input.txt' \
+cp-run test '{wsp-dir}/src/main.cpp' '{wsp-dir}/data/in.txt' \
   '{wsp-dir}/data/ans.txt' --wsp-dir=/projects/contest --cout
 ```
 
@@ -137,7 +138,7 @@ cp-run main.py -f in data.in          # Redirect stdin only
 cp-run main.py --file-io=out data.out  # Redirect stdout only
 ```
 
-Bare action and macro name are editable. Auto defaults to input.txt/output.txt. Optional file operands stop at an option or argument boundary; FILE precedes them or is discovered. File input uses console redirection, not source editing. Missing input is an execution/open failure. Test/stress reject `-f` because they own I/O. Redirected output cannot overwrite another protected role.
+Bare action and macro name are editable. Auto defaults to in.txt/out.txt. Optional file operands stop at an option or argument boundary; FILE precedes them or is discovered. File input uses console redirection, not source editing. Missing input is an execution/open failure. Test/stress reject `-f` because they own I/O. Redirected output cannot overwrite another protected role.
 
 ## Measurements and limits
 
@@ -188,16 +189,15 @@ Value options accept `=` or a separate operand, including `-f auto`. Required va
 
 ## Formatting
 
-**`--make-prettier` edits formatting with an external formatter.** It does not optimize code, insert pragmas or fix algorithmic errors. A requested missing formatter stops the operation with an installation hint.
+**`--make-prettier` formats source and exits.** `--make-prettier=check` (or `--make-prettier check`) verifies style without editing. Neither form compiles, runs or checks test answers, even when an explicit FILE is supplied. Formatting does not optimize code, insert pragmas or fix algorithmic errors. A missing formatter stops the operation with an installation hint.
 
 | Command | Edits source? | Compiles/runs? |
 | --- | --- | --- |
-| `cp-run main.cpp --make-prettier=only` | Yes | No |
+| `cp-run main.cpp --make-prettier` | Yes | No |
 | `cp-run main.py --make-prettier=check` | No; nonzero exit if changes are needed | No |
-| `cp-run main.cpp --make-prettier` | Yes | Yes, after successful formatting |
 | `cp-run --make-prettier` | Yes, discovered source | No |
-| `cp-run --make-prettier=before` | Yes, discovered source | Yes |
-| `cp-run test main.cpp --make-prettier` | Yes | Compile and check tests |
+| `cp-run test main.cpp --make-prettier` | Yes, source only | No |
+| `cp-run stress main.cpp brute.cpp gen.cpp --make-prettier` | Yes, all three sources | No |
 
 Install only the needed tool:
 
@@ -207,13 +207,13 @@ Install only the needed tool:
 For example, `print( 1+2 )` becomes `print(1 + 2)` with Ruff's default style:
 
 ```sh
-cp-run main.py --make-prettier=only
+cp-run main.py --make-prettier
 cp-run main.py --make-prettier=check    # Exit 0 when no changes are needed
 ```
 
-Only selected physical source files are formatted, once each; stress includes MAIN, BRUTE and GEN. No recursive project sweep occurs. All formatter executables are resolved before the first edit. A formatter failure stops the build; edits already made by an earlier formatter remain. Binary-only `run` operations cannot format.
+Only selected physical source files are formatted, once each; stress includes MAIN, BRUTE and GEN. No recursive project sweep occurs. All formatter executables are resolved before the first edit. A formatter failure stops formatting; edits already made by an earlier formatter remain. Binary-only `run` operations cannot format. Backend arguments, `-o`/`--out`, runtime arguments and measurement/redirection controls are incompatible with formatting. The former `only` and `before` values are no longer supported; invoke a normal build separately after formatting.
 
-Formatter output goes to stderr, leaving stdout for program output or the compiled path. **Formatting is separate from linting**: `ruff check`, import sorting and `clang-tidy` are not invoked. Formatting follows external-tool style rules; review source changes as usual.
+Formatter output goes to stderr; stdout remains empty. **Formatting is separate from linting**: `ruff check`, import sorting and `clang-tidy` are not invoked. Formatting follows external-tool style rules; review source changes as usual.
 
 ## Diagnostics and exit status
 

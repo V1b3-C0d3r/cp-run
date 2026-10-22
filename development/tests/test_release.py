@@ -72,7 +72,7 @@ class ReleaseCliTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, '')
         self.assertEqual(counter.read_text(), '4')
-        self.assertEqual((self.cwd / 'output.txt').read_text(), 'run=2\nhello\n')
+        self.assertEqual((self.cwd / 'out.txt').read_text(), 'run=2\nhello\n')
 
     def test_file_io_long_alias_matches_macro_and_redirection(self):
         result = self.invoke('compile', self.source.name, '--file-io')
@@ -82,7 +82,7 @@ class ReleaseCliTest(unittest.TestCase):
         for option in ('--file-io=auto', '-f=auto'):
             result = self.invoke(self.source.name, option, env={'FAKE_PROGRAM_STDIN': '1'})
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual((self.cwd / 'output.txt').read_text(), 'hello\n')
+            self.assertEqual((self.cwd / 'out.txt').read_text(), 'hello\n')
 
     def test_invalid_measurement_controls_and_units(self):
         for arguments in (('--average=',), ('--average=-1',), ('--average=abc',),
@@ -187,7 +187,7 @@ class ReleaseCliTest(unittest.TestCase):
         result = self.invoke('test', 'run', program, '-t', '--warm-up=0', '--average=3')
         self.assertEqual(result.returncode, 3, result.stderr)
         self.assertEqual(counter.read_text(), '2')
-        self.assertEqual((self.cwd / 'real-out.txt').read_text(), 'hello\n')
+        self.assertEqual((self.cwd / 'out.txt').read_text(), 'hello\n')
         self.assertIn('FAILED REPEAT 2', (self.cwd / 'test_out').read_text())
 
     def test_repeated_terminal_input_is_recorded_once_and_replayed(self):
@@ -346,8 +346,8 @@ class ReleaseEngineTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             try:
                 os.chdir(temp)
-                Path('input.txt').write_bytes(b'x' * 100 + b'\n\nsmall\n')
-                Path('ans.txt').write_bytes(Path('input.txt').read_bytes())
+                Path('in.txt').write_bytes(b'x' * 100 + b'\n\nsmall\n')
+                Path('ans.txt').write_bytes(Path('in.txt').read_bytes())
                 with redirect_stderr(io.StringIO()):
                     status = engine.execute_test({'executable': '/bin/cat', 'auto': True, 'max_line': 10})
                 self.assertEqual(status, 4)

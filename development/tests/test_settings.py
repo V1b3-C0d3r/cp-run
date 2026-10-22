@@ -149,18 +149,18 @@ class SettingsTest(unittest.TestCase):
     def test_file_macro_is_configurable_without_enabling_redirection(self):
         self.configure('2\n9\nMY_FILEIO\nsave\ny\n')
         self.assertIn('-DMY_FILEIO', self.build('-f'))
-        self.assertFalse((self.cwd / 'output.txt').exists())
+        self.assertFalse((self.cwd / 'out.txt').exists())
 
     def test_saved_bare_f_action_can_return_from_auto_to_macro(self):
         self.configure('2\n8\nauto\nsave\ny\n')
         self.configure('2\n8\nmacro\nsave\ny\n')
         self.assertIn('-DFILEO', self.build('-f'))
-        self.assertFalse((self.cwd / 'output.txt').exists())
+        self.assertFalse((self.cwd / 'out.txt').exists())
 
     def test_global_separator_and_comparison_budget_apply_to_checks(self):
         self.configure('4\n3\n\\n###\\n\n4\n1\nsave\ny\n')
         self.binary()
-        (self.cwd / 'input.txt').write_text('one\n###\ntwo\n')
+        (self.cwd / 'in.txt').write_text('one\n###\ntwo\n')
         (self.cwd / 'ans.txt').write_text('one\n###\ntwo\n')
         result = self.invoke('test=auto', 'run', './runner.out')
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -181,7 +181,7 @@ class SettingsTest(unittest.TestCase):
         for flags, expected in (((), '0\n'), (('--seed=8',), '8\n')):
             result = self.invoke('stress', 'run', 'candidate', 'brute', 'gen', '--test-iters=1', *flags)
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual((self.cwd / 'real-out.txt').read_text(), expected)
+            self.assertEqual((self.cwd / 'out.txt').read_text(), expected)
         self.configure('6\nreset\nsave\ny\n')
         self.assertEqual(self.data()['DEFAULT_SEED'], '4')
 

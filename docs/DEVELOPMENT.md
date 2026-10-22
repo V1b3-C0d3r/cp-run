@@ -1,6 +1,6 @@
 # cp-run development standards
 
-Applies to 1.1 development. Progress and verification are recorded in the implementation journal.
+Applies to the maintained 1.x sources. Progress and verification are recorded in the implementation journal.
 
 ## Architecture and ownership
 
@@ -55,7 +55,7 @@ Applies to 1.1 development. Progress and verification are recorded in the implem
 
 ## Git and release workflow
 
-- Work in the actual Git checkout on a dedicated 1.1 development branch. Published 1.0 artifacts remain frozen.
+- Work in the actual Git checkout. Published version snapshots remain frozen; prepare each update as a new release.
 - As authorized by the owner, make small coherent commits and push completed, checked stages during implementation. Commit the fix, relevant tests and contract documentation together; avoid committing a knowingly broken intermediate state as a completed milestone.
 - Use clear English imperative commit subjects. Record what changed, what was checked and remaining blockers in a short development journal. Never put credentials, personal state, generated local history or scratch logs in commits.
 - Keep generated distribution artifacts synchronized at explicit packaging checkpoints, not as a second editable source tree. Prepare release notes from actual final behavior and test evidence.

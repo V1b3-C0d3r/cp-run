@@ -215,15 +215,15 @@ class _ToolchainCase(unittest.TestCase):
 
     def check_answer_blocks(self):
         self.source(SUM)
-        (self.cwd / 'input.txt').write_text('2 3\n\n7 8\n')
+        (self.cwd / 'in.txt').write_text('2 3\n\n7 8\n')
         (self.cwd / 'ans.txt').write_text('5\n\n15\n')
         result = self.invoke('test=auto', r'--sep=\n\n')
         self.assert_ok(result)
         report = (self.cwd / 'test_out').read_text()
         self.assertIn('PASS', report)
         self.assertIn('2 selected cases executed', report)
-        self.assertIn('5', (self.cwd / 'real-out.txt').read_text())
-        self.assertIn('15', (self.cwd / 'real-out.txt').read_text())
+        self.assertIn('5', (self.cwd / 'out.txt').read_text())
+        self.assertIn('15', (self.cwd / 'out.txt').read_text())
 
     def stress_sources(self, wrong=False):
         self.source(SUM.replace('a + b', 'a + b + 1') if wrong else SUM)
@@ -249,9 +249,9 @@ class _ToolchainCase(unittest.TestCase):
         manifest = json.loads((bundle / 'manifest.json').read_text())
         self.assertEqual(manifest['seed'], 40)
         self.assertEqual(manifest['iteration'], 1)
-        self.assertEqual((bundle / 'input.txt').read_text(), '40 2\n')
+        self.assertEqual((bundle / 'in.txt').read_text(), '40 2\n')
         self.assertEqual((bundle / 'ans.txt').read_text(), '42\n')
-        self.assertEqual((bundle / 'real-out.txt').read_text(), '43\n')
+        self.assertEqual((bundle / 'out.txt').read_text(), '43\n')
         replay = subprocess.run(manifest['replay_argv'], cwd=self.cwd, env=self.env,
                                 capture_output=True, text=True, timeout=10)
         self.assertEqual(replay.returncode, 3, replay.stderr)

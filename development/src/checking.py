@@ -1,5 +1,7 @@
 """Shared case execution, continuation, and output publication."""
 
+import errno
+
 
 def _runner(config):
     return Runner(timeout_ms=str(config.get('timeout_ms', 'inf')),
@@ -68,7 +70,7 @@ def execute_test(config):
             report.emit('cp-run test: selected {} of {} cases'.format(len(plan.selected), len(plan.inputs)))
             with open(combined, 'wb') as all_output:
                 for position, number in enumerate(plan.selected):
-                    incoming, answer, actual = (directory / name for name in ('input.txt', 'ans.txt', 'actual.txt'))
+                    incoming, answer, actual = (directory / name for name in ('in.txt', 'ans.txt', 'actual.txt'))
                     index = positions[number]
                     plan.inputs[index].copy_to(incoming); plan.answers[index].copy_to(answer)
                     actual.unlink(missing_ok=True)
@@ -89,7 +91,13 @@ def execute_test(config):
                 len(verdicts), sum(v != 'AC' for v, _ in verdicts))
             report.emit(summary)
             if not config.get('cout'): print('cp-run: ' + summary + '; report: ' + str(config.get('report', 'test_out')), file=sys.stderr)
-            os.replace(combined, config['actual'])
+            # Keep same-filesystem publication cheap; a workspace output may
+            # live on another mount, where replacement needs sibling staging.
+            try:
+                os.replace(combined, config['actual'])
+            except OSError as error:
+                if error.errno != errno.EXDEV: raise
+                _publish_actual(combined, config['actual'])
             report.finish()
             return status
         except BaseException:

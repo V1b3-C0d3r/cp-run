@@ -159,7 +159,7 @@ def _validate_paths(config):
     protected.extend(str(config[key]) for key in ("executable", "brute", "generator") if config.get(key))
     reads = []
     if operation == "test" and not config.get("cin"):
-        reads = config.get("case_reads") if config.get("mult") else [config.get("input", "input.txt"), config.get("answer", "ans.txt")]
+        reads = config.get("case_reads") if config.get("mult") else [config.get("input", "in.txt"), config.get("answer", "ans.txt")]
         reads = reads or []
         if len(reads) == 2 and _same_path(*reads):
             raise CheckUsageError("test input and answer must be different files")
@@ -168,8 +168,9 @@ def _validate_paths(config):
                 raise CheckSetupError("test file not found or not regular: " + str(path))
             if any(_same_path(path, other) for other in protected):
                 raise CheckUsageError("test data must not alias a source or executable: " + str(path))
-    actual = Path("real-out.txt").absolute()
-    # The fixed name is intentional; config cannot quietly change this role.
+    # The CLI expands workspace anchors before transport; validate the selected
+    # result path alongside the report, source, binary and every input/answer.
+    actual = Path(config.get("actual", "out.txt")).absolute()
     config["actual"] = str(actual)
     writes = [str(actual)]
     if not config.get("cout"):
@@ -220,7 +221,7 @@ def _prepare_check(config):
         config['case_reads'] = [case.path for case in (*inputs, *answers)]
     else:
         paths = _console_paths(config) if config.get('cin') else {
-            'input': config.get('input', 'input.txt'), 'answer': config.get('answer', 'ans.txt')}
+            'input': config.get('input', 'in.txt'), 'answer': config.get('answer', 'ans.txt')}
         auto = bool(config.get('auto'))
         reader = counted_cases if auto and config.get('bundle_format') == 'counted' else index_cases
         inputs = reader(paths['input'], separator if auto else None)

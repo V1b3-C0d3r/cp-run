@@ -113,18 +113,18 @@ def _section(report, title, path, different=None, display_limit=10000):
             if ending.read(1) != b'\n': report.detail('  [no final newline]')
 
 
-def _failure_details(report, incoming, actual, answer, comparison, display_limit):
+def _failure_details(report, incoming, actual, answer, comparison, display_limit, actual_label="out.txt"):
     report.detail_remaining = report.max_details
     display_limit = report.display_lines
     if comparison.reason: report.emit('INCOMPLETE: ' + comparison.reason)
     _section(report, "input", incoming, display_limit=display_limit)
-    _section(report, "real-out.txt", actual, comparison.actual_different, display_limit)
+    _section(report, actual_label, actual, comparison.actual_different, display_limit)
     _section(report, "ans", answer, comparison.answer_different, display_limit)
     for left, right in comparison.missing_rows:
         if left is None:
-            report.detail("  ! real-out.txt:— | <missing line>; ans:{}".format(right))
+            report.detail("  ! {}:— | <missing line>; ans:{}".format(actual_label, right))
         if right is None:
-            report.detail("  ! ans:— | <missing line>; real-out.txt:{}".format(left))
+            report.detail("  ! ans:— | <missing line>; {}:{}".format(actual_label, left))
 
 
 def compare_case(actual, answer, config):

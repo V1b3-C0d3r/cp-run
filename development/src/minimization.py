@@ -119,7 +119,7 @@ def reduce_items(payload, grammar, predicate, attempts=200, seconds=30):
 
 def minimize_failure(config, directory, bundle):
     """Save reduced files beside untouched original evidence, never over it."""
-    original = Path(directory) / "input.txt"
+    original = Path(directory) / "in.txt"
     if original.stat().st_size > 4 * 1024 * 1024:
         print("cp-run: reduction skipped: input exceeds 4 MiB", file=sys.stderr)
         return

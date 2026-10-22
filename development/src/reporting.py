@@ -85,7 +85,8 @@ def case_protocol(report, config, number, incoming, actual, answer, result, comp
     report.emit("TEST {}{}".format(number, " (seed {})".format(seed) if seed is not None else ""))
     if config.get("report_tests", "all") == "all" or verdict != "AC":
         comparison = comparison or Comparison(False, False, 0, set(), set(), [])
-        _failure_details(report, incoming, actual, answer, comparison, report.display_lines)
+        _failure_details(report, incoming, actual, answer, comparison, report.display_lines,
+                         Path(config.get("actual", "out.txt")).name)
     # A hidden failing repeat is evidence, never a replacement for the first stdout.
     failed = config.get("_failed_output")
     if failed and Path(failed).exists():

@@ -8,7 +8,7 @@
 emulate -LR zsh
 setopt NO_UNSET PIPE_FAIL EXTENDED_GLOB
 unsetopt ALIASES
-typeset -r PROGRAM=cp-run VERSION=1.1
+typeset -r PROGRAM=cp-run VERSION=1.1.1
 typeset -r SCRIPT_PATH=${0:A} # Settings follow the real script when invoked through a symlink.
 
 # CP_RUN_SETTINGS_BEGIN
@@ -20,8 +20,8 @@ typeset -gA LANGUAGE_COMPILERS=()
 typeset -g DEFAULT_SOURCE=main.cpp
 typeset -g DEFAULT_TIMEOUT=inf
 typeset -g DEFAULT_MEMORY_LIMIT=inf
-typeset -g DEFAULT_INPUT=input.txt
-typeset -g DEFAULT_OUTPUT=output.txt
+typeset -g DEFAULT_INPUT=in.txt
+typeset -g DEFAULT_OUTPUT=out.txt
 typeset -g DEFAULT_ANSWER=ans.txt
 typeset -g DEFAULT_REPORT=test_out
 typeset -g DEFAULT_SEPARATOR='\n\x1e\n'
@@ -142,9 +142,9 @@ Language and build:
   --no-w                  Omit generated baseline warnings
   -o PATH, -oPATH         Exact native output; overrides artifact routing
   -f, --file-io           Saved action; factory action defines FILEO (native only)
-  -f=auto [IN [OUT]]      Redirect both streams; defaults input.txt/output.txt
+  -f=auto [IN [OUT]]      Redirect both streams; defaults in.txt/out.txt
   -f=in [IN], -f=out [OUT] Redirect only the selected stream
-  --make-prettier[=MODE]  Format before build; only/check exit; standalone formats
+  --make-prettier[=check] Format source and stop; check only verifies formatting
 
 Routing and checking:
   --wsp-dir=DIR           Workspace path; default ./; value is required
@@ -156,6 +156,7 @@ Routing and checking:
   --save-test-relpath[=0|1] Preserve the test-data subtree independently
   --in-tmp=PATTERN        Input template: ./{n}.in; {n}, {stem}, {wsp-dir}
   --ans-tmp=PATTERN       Answer template: ./{n}.ans
+  --out=FILE             Program-output file for checks or -f auto/out; default out.txt
   --sep=TEXT              Internal separator; default visible escape '\n\x1e\n'
   --text                  Pack/unpack manual files using the saved text marker
   --text-sep=TEXT         Manual-file pack/unpack conversion; default '\n###\n'
@@ -350,6 +351,9 @@ parse_cli() {
                     *) case "$value" in B|KB|KiB|MB|MiB) memory_unit=$value ;; *) fail '--memory-unit accepts B, KB, KiB, MB or MiB' ;; esac ;;
                 esac ;;
             --profile|--profile=*) take_value "$@"; (( ! consumed )) || shift; select_profile "$value" ;;
+            --out|--out=*)
+                take_value "$@"; (( ! consumed )) || shift
+                result_file=$value; result_given=1 ;;
             --compiler|--compiler=*|--dest-dir|--dest-dir=*|--wsp-dir|--wsp-dir=*|--wsp-name|--wsp-name=*|--find|--find=*|--TLE|--TLE=*|--MLE|--MLE=*|--sep|--sep=*|--test-iters|--test-iters=*|--seed|--seed=*)
                 take_value "$@"; (( ! consumed )) || shift
                 case "$arg" in
@@ -379,10 +383,11 @@ parse_cli() {
             --validator|--validator=*) take_value "$@"; (( ! consumed )) || shift; validator=$value ;;
             --doctor) doctor_requested=1 ;;
             --make-prettier|--make-prettier=*)
-                if [[ $arg == *=* ]]; then prettier=${arg#*=}
-                elif (( $# )) && [[ $1 == only || $1 == check || $1 == before ]]; then prettier=$1; shift
-                else prettier=auto; fi
-                case "$prettier" in auto|only|check|before) ;; *) fail '--make-prettier accepts before, only or check' ;; esac ;;
+                if [[ $arg == *=* ]]; then
+                    [[ ${arg#*=} == check ]] || fail '--make-prettier accepts check; omit its value to format'
+                    prettier=check
+                elif (( $# )) && [[ $1 == check ]]; then prettier=check; shift
+                else prettier=format; fi ;;
             --port|--port=*|--wait|--wait=*)
                 take_value "$@"; (( ! consumed )) || shift
                 companion_controls=1
@@ -1150,7 +1155,7 @@ build_artifact() {
     # protection to named runtime roles without adding those roles to the
     # checker's separate source/binary list (where they would alias themselves).
     if [[ $action == test || $action == stress ]]; then
-        sidecar_protected+=("$cwd/real-out.txt")
+        sidecar_protected+=("${result_file:A}")
         (( console_out )) || sidecar_protected+=("$report_file")
         if [[ $action == test ]] && (( ! console_in )); then sidecar_protected+=("$input_file" "$answer_file"); fi
     elif [[ $f_mode == auto || $f_mode == in || $f_mode == out ]]; then
@@ -1304,7 +1309,7 @@ main() {
     local -i data_controls=0 layout_controls=0 companion_controls=0 source_given=0 report_controls=0 bundle_given=0
     local -i overwrite=0 text_conversion=0 stop_on_failure=0
     local -i positional_count=0 mult=0 save_test_relpath=0 relpath_given=0 test_relpath_given=0
-    local -i timeout_given=0 memory_given=0 measurement_controls=0 debug_run=0 compile_only=0
+    local -i timeout_given=0 memory_given=0 measurement_controls=0 debug_run=0 compile_only=0 result_given=0
     local -a interpreter_args=() recalled_launch=() launch_args=() primary_launch=() original_compiler_args=() original_standards=()
     local -a compiler_args=() runtime_args=() cases=() sources=() artifacts=() protected_files=() build_indices=()
     local -A config=() compiler_paths=() compiler_banners=() standard_vocab=()
@@ -1322,12 +1327,31 @@ main() {
         config=(interpreter "$interpreter_choice" native_formatter "$NATIVE_FORMATTER" python_formatter "$PYTHON_FORMATTER")
         python_action doctor; return $?
     fi
-    if [[ $prettier == only || $prettier == check || $prettier == auto && $action == ordinary && $positional_count == 0 ]]; then
-        (( ! binary_mode && ! ${#compiler_args} && ! ${#runtime_args} && ! output_given )) || fail 'format-only action does not compile or run; provide a source file'
+    # Formatting is a terminal action, before artifact planning or any compiler
+    # lookup. A successful formatter can never fall through into preparation/run.
+    if [[ -n $prettier ]]; then
+        (( ! binary_mode && ! ${#compiler_args} && ! ${#runtime_args} && ! output_given && ! result_given &&
+           ! measure_time && ! measure_memory && ! measurement_controls && ! timeout_given && ! memory_given )) &&
+            [[ $f_mode == none ]] || fail 'formatting does not compile or run; remove build/runtime options'
+        [[ $action != companion && $action != pack && $action != unpack ]] || fail 'formatting requires a source operation'
         [[ $profile == none || -n ${MODE_KIND[$profile]-} ]] || fail "profile not found: $profile"
+        [[ $action != debug || ${MODE_KIND[$profile]-} == debug ]] || fail "profile '$profile' is a flags set; select it with --profile=$profile"
+        if [[ $source_file == - ]]; then
+            resolve_workspace_root
+            history_location || fail 'source history is not accessible' 1
+            history_read source; source_file=$value
+        fi
         if [[ -n $source_file ]]; then workspace_file_path "$source_file"; source_file=$value
         else select_source; fi
         protected_files=("${source_file:A}")
+        if [[ $action == stress ]]; then
+            source_language "$source_file"; primary_language=$language
+            if (( positional_count < 2 )); then discover_role "$brute_file" brute; brute_file=$value; fi
+            if (( positional_count < 3 )); then discover_role "$generator_file" gen; generator_file=$value; fi
+            for role in "$brute_file" "$generator_file"; do
+                workspace_file_path "$role"; protected_files+=("${value:A}")
+            done
+        fi
         config=(prettier "$prettier" native_formatter "$NATIVE_FORMATTER" python_formatter "$PYTHON_FORMATTER")
         python_action format; return $?
     fi
@@ -1403,6 +1427,9 @@ main() {
     if (( compile_only )); then
         (( ! measure_time && ! measure_memory && ! ${#runtime_args} )) && [[ $f_mode != auto && $f_mode != in && $f_mode != out ]] || fail 'runtime options require an execution command'
     fi
+    if (( result_given )); then
+        [[ $action == test || $action == stress || $f_mode == auto || $f_mode == out ]] || fail '--out requires test/stress or -f=auto/out'
+    fi
     case "$f_mode" in none|auto|in|out) ;; macro) macro_file_io=1 ;; *) fail 'invalid saved -f mode; use --set-defaults' ;; esac
     [[ $DEFAULT_MACRO == [A-Za-z_][A-Za-z0-9_]# ]] || fail 'FILEO macro setting must be a C identifier'
     for option_name value in --TLE "$timeout_ms" --MLE "$memory_mib"; do
@@ -1422,7 +1449,9 @@ main() {
         workspace_file_path "$report_file"; report_file=$value
     fi
     if [[ $f_mode == auto || $f_mode == in ]]; then workspace_file_path "$input_file"; input_file=$value; fi
-    if [[ $f_mode == auto || $f_mode == out ]]; then workspace_file_path "$result_file"; result_file=$value; fi
+    if [[ $action == test || $action == stress || $f_mode == auto || $f_mode == out ]]; then
+        workspace_file_path "$result_file"; result_file=$value
+    fi
     if [[ -n $validator ]]; then
         workspace_file_path "$validator"; validator=${value:A}
         [[ -f $validator && ( -x $validator || $validator == *.py ) ]] || fail 'validator must be executable or a Python script'
@@ -1525,7 +1554,7 @@ main() {
             in_template "$in_template" ans_template "$ans_template" bundle_format "$bundle_format"
             minimize "$minimize" validator "$validator" validator_interpreter "$interpreter_choice" minimize_attempts "$MINIMIZE_ATTEMPTS" minimize_seconds "$MINIMIZE_SECONDS"
             report_tests "$report_tests" stop_on_failure "$stop_on_failure" max_failures "$MAX_FAILURES" input "$input_file" answer "$answer_file" report "$report_file"
-            actual "$cwd/real-out.txt" sep "$separator" cases "${(j:,:)cases}" num_test "$num_test"
+            actual "$result_file" sep "$separator" cases "${(j:,:)cases}" num_test "$num_test"
             line_limit "$DEFAULT_LINE_LIMIT" cin "$console_in" cout "$console_out" executable "$output_abs"
             timeout_ms "$timeout_ms" memory_mib "$memory_mib" show_time "$measure_time" show_memory "$measure_memory"
             show_command "$show_command" seed "$seed" iterations "$DEFAULT_ITERATIONS" script "$SCRIPT_PATH"
@@ -1553,13 +1582,6 @@ main() {
         if [[ $f_mode != out ]]; then
             for value in "${artifacts[@]}"; do [[ ${value:A} != ${input_file:A} && ! $value -ef $input_file ]] || fail 'binary output would overwrite runtime input' 1; done
         fi
-    fi
-    if [[ -n $prettier ]]; then
-        (( ! binary_mode )) || fail 'formatting needs source files'
-        local -a protected_files=("${sources[@]}")
-        config[prettier]=$prettier; config[native_formatter]=$NATIVE_FORMATTER; config[python_formatter]=$PYTHON_FORMATTER
-        python_action format || return $?
-        protected_files=("${sources[@]}" "${artifacts[@]}")
     fi
     if (( ! binary_mode )); then
         original_compiler_args=("${compiler_args[@]}")
@@ -2525,7 +2547,7 @@ def _validate_paths(config):
     protected.extend(str(config[key]) for key in ("executable", "brute", "generator") if config.get(key))
     reads = []
     if operation == "test" and not config.get("cin"):
-        reads = config.get("case_reads") if config.get("mult") else [config.get("input", "input.txt"), config.get("answer", "ans.txt")]
+        reads = config.get("case_reads") if config.get("mult") else [config.get("input", "in.txt"), config.get("answer", "ans.txt")]
         reads = reads or []
         if len(reads) == 2 and _same_path(*reads):
             raise CheckUsageError("test input and answer must be different files")
@@ -2534,8 +2556,9 @@ def _validate_paths(config):
                 raise CheckSetupError("test file not found or not regular: " + str(path))
             if any(_same_path(path, other) for other in protected):
                 raise CheckUsageError("test data must not alias a source or executable: " + str(path))
-    actual = Path("real-out.txt").absolute()
-    # The fixed name is intentional; config cannot quietly change this role.
+    # The CLI expands workspace anchors before transport; validate the selected
+    # result path alongside the report, source, binary and every input/answer.
+    actual = Path(config.get("actual", "out.txt")).absolute()
     config["actual"] = str(actual)
     writes = [str(actual)]
     if not config.get("cout"):
@@ -2586,7 +2609,7 @@ def _prepare_check(config):
         config['case_reads'] = [case.path for case in (*inputs, *answers)]
     else:
         paths = _console_paths(config) if config.get('cin') else {
-            'input': config.get('input', 'input.txt'), 'answer': config.get('answer', 'ans.txt')}
+            'input': config.get('input', 'in.txt'), 'answer': config.get('answer', 'ans.txt')}
         auto = bool(config.get('auto'))
         reader = counted_cases if auto and config.get('bundle_format') == 'counted' else index_cases
         inputs = reader(paths['input'], separator if auto else None)
@@ -2941,7 +2964,7 @@ def execute_bundle(config):
         raise CheckUsageError("--pack/--unpack accepts in or ans")
     source, target = config.get("data_input"), config.get("data_output")
     default_file = (
-        config.get("default_input", "input.txt")
+        config.get("default_input", "in.txt")
         if stream == "in"
         else config.get("default_answer", "ans.txt")
     )
@@ -3147,18 +3170,18 @@ def _section(report, title, path, different=None, display_limit=10000):
             if ending.read(1) != b'\n': report.detail('  [no final newline]')
 
 
-def _failure_details(report, incoming, actual, answer, comparison, display_limit):
+def _failure_details(report, incoming, actual, answer, comparison, display_limit, actual_label="out.txt"):
     report.detail_remaining = report.max_details
     display_limit = report.display_lines
     if comparison.reason: report.emit('INCOMPLETE: ' + comparison.reason)
     _section(report, "input", incoming, display_limit=display_limit)
-    _section(report, "real-out.txt", actual, comparison.actual_different, display_limit)
+    _section(report, actual_label, actual, comparison.actual_different, display_limit)
     _section(report, "ans", answer, comparison.answer_different, display_limit)
     for left, right in comparison.missing_rows:
         if left is None:
-            report.detail("  ! real-out.txt:— | <missing line>; ans:{}".format(right))
+            report.detail("  ! {}:— | <missing line>; ans:{}".format(actual_label, right))
         if right is None:
-            report.detail("  ! ans:— | <missing line>; real-out.txt:{}".format(left))
+            report.detail("  ! ans:— | <missing line>; {}:{}".format(actual_label, left))
 
 
 def compare_case(actual, answer, config):
@@ -3258,7 +3281,8 @@ def case_protocol(report, config, number, incoming, actual, answer, result, comp
     report.emit("TEST {}{}".format(number, " (seed {})".format(seed) if seed is not None else ""))
     if config.get("report_tests", "all") == "all" or verdict != "AC":
         comparison = comparison or Comparison(False, False, 0, set(), set(), [])
-        _failure_details(report, incoming, actual, answer, comparison, report.display_lines)
+        _failure_details(report, incoming, actual, answer, comparison, report.display_lines,
+                         Path(config.get("actual", "out.txt")).name)
     # A hidden failing repeat is evidence, never a replacement for the first stdout.
     failed = config.get("_failed_output")
     if failed and Path(failed).exists():
@@ -3362,6 +3386,8 @@ def retain_failed_repeat(config, number):
 # Source: checking.py
 """Shared case execution, continuation, and output publication."""
 
+import errno
+
 
 def _runner(config):
     return Runner(timeout_ms=str(config.get('timeout_ms', 'inf')),
@@ -3430,7 +3456,7 @@ def execute_test(config):
             report.emit('cp-run test: selected {} of {} cases'.format(len(plan.selected), len(plan.inputs)))
             with open(combined, 'wb') as all_output:
                 for position, number in enumerate(plan.selected):
-                    incoming, answer, actual = (directory / name for name in ('input.txt', 'ans.txt', 'actual.txt'))
+                    incoming, answer, actual = (directory / name for name in ('in.txt', 'ans.txt', 'actual.txt'))
                     index = positions[number]
                     plan.inputs[index].copy_to(incoming); plan.answers[index].copy_to(answer)
                     actual.unlink(missing_ok=True)
@@ -3451,7 +3477,13 @@ def execute_test(config):
                 len(verdicts), sum(v != 'AC' for v, _ in verdicts))
             report.emit(summary)
             if not config.get('cout'): print('cp-run: ' + summary + '; report: ' + str(config.get('report', 'test_out')), file=sys.stderr)
-            os.replace(combined, config['actual'])
+            # Keep same-filesystem publication cheap; a workspace output may
+            # live on another mount, where replacement needs sibling staging.
+            try:
+                os.replace(combined, config['actual'])
+            except OSError as error:
+                if error.errno != errno.EXDEV: raise
+                _publish_actual(combined, config['actual'])
             report.finish()
             return status
         except BaseException:
@@ -3482,7 +3514,7 @@ def _bundle(config, report, directory, seed, iteration, verdict, results):
     else:
         raise CheckSetupError("cannot choose a free stress failure directory")
     files = {}
-    for filename in ("input.txt", "ans.txt", "real-out.txt"):
+    for filename in ("in.txt", "ans.txt", "out.txt"):
         source = directory / filename
         if source.exists():
             target = destination / filename
@@ -3502,7 +3534,7 @@ def _bundle(config, report, directory, seed, iteration, verdict, results):
                   "--MLE=" + str(config.get("memory_mib", "inf")), "--", *config.get("runtime_args", [])]
     else:
         replay = [str(config.get("script", "cp-run")), "test", "run", str(config["executable"]),
-                  str(destination / "input.txt"), str(destination / "ans.txt"), str(destination / "replay-report.txt"),
+                  str(destination / "in.txt"), str(destination / "ans.txt"), str(destination / "replay-report.txt"),
                   "--TLE=" + str(config.get("timeout_ms", "inf")),
                   "--MLE=" + str(config.get("memory_mib", "inf")), "--", *config.get("runtime_args", [])]
     # A saved candidate failure replays against the saved answer, so only its
@@ -3553,7 +3585,7 @@ def execute_stress(config):
     maximum = positive_setting(config.get('max_failures', 10), 'failure bundle limit')
     with check_lock(), tempfile.TemporaryDirectory(prefix='.cp-run-stress-', dir='.') as temporary:
         directory, report = Path(temporary), Protocol(config)
-        incoming, answer, actual = (directory / name for name in ('input.txt', 'ans.txt', 'real-out.txt'))
+        incoming, answer, actual = (directory / name for name in ('in.txt', 'ans.txt', 'out.txt'))
         seed, iteration, results = start, 0, {}
         current_bundle = None
         try:
@@ -3737,7 +3769,7 @@ def reduce_items(payload, grammar, predicate, attempts=200, seconds=30):
 
 def minimize_failure(config, directory, bundle):
     """Save reduced files beside untouched original evidence, never over it."""
-    original = Path(directory) / "input.txt"
+    original = Path(directory) / "in.txt"
     if original.stat().st_size > 4 * 1024 * 1024:
         print("cp-run: reduction skipped: input exceeds 4 MiB", file=sys.stderr)
         return
@@ -4183,8 +4215,8 @@ FACTORY_SETTINGS = {
     'DEFAULT_COMPILER': 'GCC', 'DEFAULT_STANDARD': 'auto',
     'DEFAULT_LANGUAGE': 'c++', 'LANGUAGE_COMPILERS': {},
     'DEFAULT_SOURCE': 'main.cpp', 'DEFAULT_TIMEOUT': 'inf',
-    'DEFAULT_MEMORY_LIMIT': 'inf', 'DEFAULT_INPUT': 'input.txt',
-    'DEFAULT_OUTPUT': 'output.txt', 'DEFAULT_ANSWER': 'ans.txt',
+    'DEFAULT_MEMORY_LIMIT': 'inf', 'DEFAULT_INPUT': 'in.txt',
+    'DEFAULT_OUTPUT': 'out.txt', 'DEFAULT_ANSWER': 'ans.txt',
     'DEFAULT_REPORT': 'test_out', 'DEFAULT_SEPARATOR': r'\n\x1e\n',
     'MANUAL_SEPARATOR': r'\n###\n', 'DEFAULT_INTERPRETER': 'pypy3',
     'C_STANDARD': 'auto', 'C_SOURCE': 'main.c', 'PYTHON_SOURCE': 'main.py',
@@ -4831,7 +4863,7 @@ def edit_settings(script_path):
         ('DEFAULT_WORKSPACE', 'Workspace path', None),
         ('DEFAULT_DESTINATION', 'Workspace-relative destination', _settings_destination),
         ('DEFAULT_INPUT', 'Input file ({wsp-dir}/PATH supported)', _settings_file_path), ('DEFAULT_ANSWER', 'Answer file ({wsp-dir}/PATH supported)', _settings_file_path),
-        ('DEFAULT_OUTPUT', 'Redirected program output', _settings_file_path),
+        ('DEFAULT_OUTPUT', 'Program output: checks and -f auto/out ({wsp-dir}/PATH supported)', _settings_file_path),
         ('DEFAULT_REPORT', 'Test/stress report', _settings_file_path),
         ('DEFAULT_F_MODE', 'Bare -f action', _settings_choice('macro', 'auto', 'in', 'out')),
         ('DEFAULT_MACRO', '-f macro identifier', _settings_macro),
@@ -4866,7 +4898,7 @@ def edit_settings(script_path):
     ]
     try:
         while True:
-            print('\ncp-run 1.1 defaults — changes stay pending until save')
+            print('\ncp-run defaults — changes stay pending until save')
             print('  1. Build: {} / {} / {}'.format(editor.data['DEFAULT_COMPILER'],
                 editor.data['DEFAULT_STANDARD'], shlex.join(editor.data['DEFAULT_FLAGS']) or '(no flags)'))
             print('  2. Files: {} / {} / {}'.format(editor.data['DEFAULT_SOURCE'],
@@ -4884,7 +4916,7 @@ def edit_settings(script_path):
                 if choice == '1':
                     _settings_build(editor)
                 elif choice == '2':
-                    _settings_fields(editor, 'Files (real-out.txt is fixed)', files)
+                    _settings_fields(editor, 'Files (paths may start with {wsp-dir}/)', files)
                 elif choice == '3':
                     _settings_warnings(editor)
                 elif choice == '4':

@@ -245,7 +245,7 @@ class AdvancedCliTest(unittest.TestCase):
     source = language_fixtures.LanguagesTest.source
 
     def data(self, value="hello\n"):
-        (self.cwd / "input.txt").write_text(value)
+        (self.cwd / "in.txt").write_text(value)
         (self.cwd / "ans.txt").write_text(value)
 
     def test_whole_file_is_one_test_with_numbered_sections_and_metrics(self):
@@ -256,7 +256,7 @@ class AdvancedCliTest(unittest.TestCase):
         self.assertEqual(result.stdout.count("TEST 1\n"), 1)
         for value in (
             "input:1",
-            "real-out.txt:1",
+            "out.txt:1",
             "ans:1",
             "Test 1: AC",
             "TIME:",
@@ -307,7 +307,7 @@ class AdvancedCliTest(unittest.TestCase):
         self.data()
         result = self.invoke("test", "-tm", "--warm-up=0", "--average=2", "--cout")
         self.assertEqual(result.returncode, 3, result.stderr)
-        self.assertEqual((self.cwd / "real-out.txt").read_text(), "hello\n")
+        self.assertEqual((self.cwd / "out.txt").read_text(), "hello\n")
         self.assertIn("FAILED REPEAT 2", result.stdout)
         self.assertIn("Test 1: WA", result.stdout)
 
@@ -391,7 +391,7 @@ class AdvancedCliTest(unittest.TestCase):
         result = self.invoke("stress", "--test-iters=1", "--minimize=sequence")
         self.assertEqual(result.returncode, 3, result.stderr)
         bundle = self.cwd / "stress-failure"
-        self.assertEqual((bundle / "input.txt").read_bytes(), b"6\n1 2 7 3 4 5\n")
+        self.assertEqual((bundle / "in.txt").read_bytes(), b"6\n1 2 7 3 4 5\n")
         self.assertEqual(
             engine.SequenceGrammar().decode((bundle / "reduced-input.txt").read_bytes()), [7]
         )
@@ -399,9 +399,9 @@ class AdvancedCliTest(unittest.TestCase):
 
     def test_out_only_may_use_the_unused_default_input_filename(self):
         self.source(content='print("written")\n')
-        result = self.invoke("main.py", "-f=out", "input.txt")
+        result = self.invoke("main.py", "-f=out", "in.txt")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual((self.cwd / "input.txt").read_text(), "written\n")
+        self.assertEqual((self.cwd / "in.txt").read_text(), "written\n")
 
     @unittest.skipUnless(shutil.which("ruff"), "optional Ruff formatter")
     def test_real_python_format_only_check_and_reserved_stdout(self):
@@ -418,7 +418,7 @@ class AdvancedCliTest(unittest.TestCase):
     def test_real_native_format_does_not_query_a_compiler(self):
         source = self.source("main.c", "int main(void){return 0;}\n")
         self.env["CC"] = "/missing/compiler"
-        result = self.invoke(source, "--make-prettier=only")
+        result = self.invoke(source, "--make-prettier")
         self.assertEqual((result.returncode, result.stdout), (0, ""), result.stderr)
         self.assertIn("return 0;", source.read_text())
         self.assertNotEqual(source.read_text(), "int main(void){return 0;}\n")
@@ -428,7 +428,7 @@ class AdvancedCliTest(unittest.TestCase):
         (self.cwd / "tests/1.in").write_bytes(b"2 3\n")
         packed = self.invoke("--pack", "in")
         self.assertEqual(packed.returncode, 0, packed.stderr)
-        self.assertEqual((self.cwd / "input.bundle").read_bytes(), b"1\n2 3\n")
+        self.assertEqual((self.cwd / "in.bundle").read_bytes(), b"1\n2 3\n")
 
     def test_interpreter_argument_replay_retains_diagnostic_options(self):
         self.source(content='print("wrong")\n')

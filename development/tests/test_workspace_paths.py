@@ -40,16 +40,18 @@ class WorkspacePathsTest(unittest.TestCase):
         workspace = self.cwd
         (workspace / 'data').mkdir()
         (workspace / 'reports').mkdir()
-        (workspace / 'data/input.txt').write_text('root input\n')
+        (workspace / 'data/in.txt').write_text('root input\n')
         (workspace / 'data/answer.txt').write_text('root input\n')
         self.save(DEFAULT_WORKSPACE='..', DEFAULT_SOURCE='{wsp-dir}/main.cpp',
-                  DEFAULT_INPUT='{wsp-dir}/data/input.txt', DEFAULT_ANSWER='{wsp-dir}/data/answer.txt',
+                  DEFAULT_INPUT='{wsp-dir}/data/in.txt', DEFAULT_ANSWER='{wsp-dir}/data/answer.txt',
+                  DEFAULT_OUTPUT='{wsp-dir}/data/chosen.txt',
                   DEFAULT_REPORT='{wsp-dir}/reports/test.txt')
         self.nested()
         result = self.invoke('test')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('FINAL VERDICT: AC', (workspace / 'reports/test.txt').read_text())
-        self.assertEqual((self.cwd / 'real-out.txt').read_text(), 'root input\n')
+        self.assertEqual((workspace / 'data/chosen.txt').read_text(), 'root input\n')
+        self.assertFalse((self.cwd / 'out.txt').exists())
         self.assertFalse((self.cwd / 'test_out').exists())
 
     def test_redirection_and_explicit_cli_paths(self):
@@ -88,7 +90,7 @@ class WorkspacePathsTest(unittest.TestCase):
         (workspace / 'cases/main/1.in').write_text('case one\n')
         (workspace / 'cases/main/1.ans').write_text('case one\n')
         self.save(DEFAULT_WORKSPACE='..', DEFAULT_SOURCE='{wsp-dir}/main.cpp',
-                  DEFAULT_INPUT='{wsp-dir}/data/input.txt',
+                  DEFAULT_INPUT='{wsp-dir}/data/in.txt',
                   DEFAULT_INPUT_TEMPLATE='{wsp-dir}/cases/{stem}/{n}.in',
                   DEFAULT_ANSWER_TEMPLATE='{wsp-dir}/cases/{stem}/{n}.ans')
         self.nested()
@@ -97,7 +99,7 @@ class WorkspacePathsTest(unittest.TestCase):
         self.assertIn('Test 1: AC', result.stdout)
         result = self.invoke('--pack=in')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual((workspace / 'data/input.bundle').read_bytes(), b'1\ncase one\n')
+        self.assertEqual((workspace / 'data/in.bundle').read_bytes(), b'1\ncase one\n')
 
     def test_unused_anchored_defaults_do_not_force_workspace_lookup(self):
         self.save(DEFAULT_SOURCE='{wsp-dir}/missing.cpp', DEFAULT_INPUT='{wsp-dir}/missing.in',
@@ -135,15 +137,17 @@ class WorkspacePathsTest(unittest.TestCase):
         self.save(DEFAULT_WORKSPACE='..', DEFAULT_LANGUAGE='python',
                   PYTHON_SOURCE='{wsp-dir}/programs/main.py', DEFAULT_BRUTE='{wsp-dir}/programs/brute.py',
                   DEFAULT_GENERATOR='{wsp-dir}/programs/gen.py', DEFAULT_INTERPRETER=sys.executable,
-                  DEFAULT_REPORT='{wsp-dir}/report.txt')
+                  DEFAULT_REPORT='{wsp-dir}/report.txt', DEFAULT_OUTPUT='{wsp-dir}/stress-result.txt')
         self.nested()
         result = self.invoke('stress', '--test-iters=1')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('FINAL VERDICT: AC', (workspace / 'report.txt').read_text())
+        self.assertEqual((workspace / 'stress-result.txt').read_text(), '4\n')
+        self.assertFalse((self.cwd / 'out.txt').exists())
 
     def test_menu_and_export_roundtrip_accept_workspace_paths(self):
-        result = self.configure('2\n1\n{wsp-dir}/src/main.cpp\n4\n{wsp-dir}/data/input.txt\n'
-                                '5\n{wsp-dir}/data/ans.txt\n6\n{wsp-dir}/data/output.txt\n'
+        result = self.configure('2\n1\n{wsp-dir}/src/main.cpp\n4\n{wsp-dir}/data/in.txt\n'
+                                '5\n{wsp-dir}/data/ans.txt\n6\n{wsp-dir}/data/out.txt\n'
                                 '7\n{wsp-dir}/logs/report.txt\nback\nsave\ny\n')
         self.assertEqual(self.data()['DEFAULT_SOURCE'], '{wsp-dir}/src/main.cpp')
         export = self.cwd / 'export.json'

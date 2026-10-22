@@ -40,9 +40,9 @@ Language and build:
   --no-w                  Omit generated baseline warnings
   -o PATH, -oPATH         Exact native output; overrides artifact routing
   -f, --file-io           Saved action; factory action defines FILEO (native only)
-  -f=auto [IN [OUT]]      Redirect both streams; defaults input.txt/output.txt
+  -f=auto [IN [OUT]]      Redirect both streams; defaults in.txt/out.txt
   -f=in [IN], -f=out [OUT] Redirect only the selected stream
-  --make-prettier[=MODE]  Format before build; only/check exit; standalone formats
+  --make-prettier[=check] Format source and stop; check only verifies formatting
 
 Routing and checking:
   --wsp-dir=DIR           Workspace path; default ./; value is required
@@ -54,6 +54,7 @@ Routing and checking:
   --save-test-relpath[=0|1] Preserve the test-data subtree independently
   --in-tmp=PATTERN        Input template: ./{n}.in; {n}, {stem}, {wsp-dir}
   --ans-tmp=PATTERN       Answer template: ./{n}.ans
+  --out=FILE             Program-output file for checks or -f auto/out; default out.txt
   --sep=TEXT              Internal separator; default visible escape '\n\x1e\n'
   --text                  Pack/unpack manual files using the saved text marker
   --text-sep=TEXT         Manual-file pack/unpack conversion; default '\n###\n'
@@ -248,6 +249,9 @@ parse_cli() {
                     *) case "$value" in B|KB|KiB|MB|MiB) memory_unit=$value ;; *) fail '--memory-unit accepts B, KB, KiB, MB or MiB' ;; esac ;;
                 esac ;;
             --profile|--profile=*) take_value "$@"; (( ! consumed )) || shift; select_profile "$value" ;;
+            --out|--out=*)
+                take_value "$@"; (( ! consumed )) || shift
+                result_file=$value; result_given=1 ;;
             --compiler|--compiler=*|--dest-dir|--dest-dir=*|--wsp-dir|--wsp-dir=*|--wsp-name|--wsp-name=*|--find|--find=*|--TLE|--TLE=*|--MLE|--MLE=*|--sep|--sep=*|--test-iters|--test-iters=*|--seed|--seed=*)
                 take_value "$@"; (( ! consumed )) || shift
                 case "$arg" in
@@ -277,10 +281,11 @@ parse_cli() {
             --validator|--validator=*) take_value "$@"; (( ! consumed )) || shift; validator=$value ;;
             --doctor) doctor_requested=1 ;;
             --make-prettier|--make-prettier=*)
-                if [[ $arg == *=* ]]; then prettier=${arg#*=}
-                elif (( $# )) && [[ $1 == only || $1 == check || $1 == before ]]; then prettier=$1; shift
-                else prettier=auto; fi
-                case "$prettier" in auto|only|check|before) ;; *) fail '--make-prettier accepts before, only or check' ;; esac ;;
+                if [[ $arg == *=* ]]; then
+                    [[ ${arg#*=} == check ]] || fail '--make-prettier accepts check; omit its value to format'
+                    prettier=check
+                elif (( $# )) && [[ $1 == check ]]; then prettier=check; shift
+                else prettier=format; fi ;;
             --port|--port=*|--wait|--wait=*)
                 take_value "$@"; (( ! consumed )) || shift
                 companion_controls=1

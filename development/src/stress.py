@@ -21,7 +21,7 @@ def _bundle(config, report, directory, seed, iteration, verdict, results):
     else:
         raise CheckSetupError("cannot choose a free stress failure directory")
     files = {}
-    for filename in ("input.txt", "ans.txt", "real-out.txt"):
+    for filename in ("in.txt", "ans.txt", "out.txt"):
         source = directory / filename
         if source.exists():
             target = destination / filename
@@ -41,7 +41,7 @@ def _bundle(config, report, directory, seed, iteration, verdict, results):
                   "--MLE=" + str(config.get("memory_mib", "inf")), "--", *config.get("runtime_args", [])]
     else:
         replay = [str(config.get("script", "cp-run")), "test", "run", str(config["executable"]),
-                  str(destination / "input.txt"), str(destination / "ans.txt"), str(destination / "replay-report.txt"),
+                  str(destination / "in.txt"), str(destination / "ans.txt"), str(destination / "replay-report.txt"),
                   "--TLE=" + str(config.get("timeout_ms", "inf")),
                   "--MLE=" + str(config.get("memory_mib", "inf")), "--", *config.get("runtime_args", [])]
     # A saved candidate failure replays against the saved answer, so only its
@@ -92,7 +92,7 @@ def execute_stress(config):
     maximum = positive_setting(config.get('max_failures', 10), 'failure bundle limit')
     with check_lock(), tempfile.TemporaryDirectory(prefix='.cp-run-stress-', dir='.') as temporary:
         directory, report = Path(temporary), Protocol(config)
-        incoming, answer, actual = (directory / name for name in ('input.txt', 'ans.txt', 'real-out.txt'))
+        incoming, answer, actual = (directory / name for name in ('in.txt', 'ans.txt', 'out.txt'))
         seed, iteration, results = start, 0, {}
         current_bundle = None
         try:

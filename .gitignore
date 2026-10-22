@@ -10,6 +10,7 @@ __pycache__/
 *.dSYM/
 .cp-run-*/
 test_out
+out.txt
 real-out.txt
 stress-failure*/
 test-repeat-failure*/

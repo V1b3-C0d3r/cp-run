@@ -63,7 +63,7 @@ def execute_bundle(config):
         raise CheckUsageError("--pack/--unpack accepts in or ans")
     source, target = config.get("data_input"), config.get("data_output")
     default_file = (
-        config.get("default_input", "input.txt")
+        config.get("default_input", "in.txt")
         if stream == "in"
         else config.get("default_answer", "ans.txt")
     )

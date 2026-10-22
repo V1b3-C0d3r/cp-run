@@ -15,7 +15,7 @@ cp-run                         # Find the source, compile if needed, and run
 cp-run debug                   # Build with diagnostics; do not run
 cp-run debug run               # Build with diagnostics, then run
 cp-run compile                 # Prepare the program without running it
-cp-run test --cout             # Check input.txt against ans.txt
+cp-run test --cout             # Check in.txt against ans.txt
 cp-run stress --test-iters=100  # Find main, brute and gen; compare 100 generated tests
 ```
 
@@ -66,7 +66,7 @@ Use [WSL2 with Ubuntu or Debian](https://learn.microsoft.com/en-us/windows/wsl/i
 
 ## Check samples
 
-For one complete test, save the input in **`input.txt`** and the expected stdout in **`ans.txt`**. `cp-run test --cout` displays the report; omit `--cout` to save it as **`test_out`**.
+For one complete test, save the input in **`in.txt`** and the expected stdout in **`ans.txt`**. The program's output stays in **`out.txt`**. `cp-run test --cout` displays only the report; omit `--cout` to save it as **`test_out`**. File defaults are editable; use `--out=FILE` to change the result path for one check.
 
 For independent samples, create numbered pairs:
 
@@ -113,7 +113,7 @@ cp-run main.cpp --profile=pragma-native
 
 C/C++ use **`-O2`** and the newest ISO standard advertised by the compiler, including draft modes. Native debug profiles use sanitizers and checks selected from the **actual C++ library**; Python profiles use interpreter diagnostics. The `pragma` profiles provide native optimization flag sets. Fast-math changes floating-point behavior, and host-tuned binaries may not run on another CPU. [Profile components and safeguards](docs/CLI.md#languages-and-profiles).
 
-**Make it yours:** `cp-run --set-defaults` → **Languages & tools → Language/compiler defaults** selects a preferred language, separate C/C++ compilers and the Python interpreter. Settings also cover profiles, warnings, paths and limits. Use **`{wsp-dir}/data/input.txt`** in a file default to keep it relative to the workspace; [path examples](docs/CLI.md#workspace-rooted-file-preferences). Explicit command options override saved defaults. [Discovery and precedence](docs/CLI.md#source-discovery-and-language-defaults).
+**Make it yours:** `cp-run --set-defaults` → **Languages & tools → Language/compiler defaults** selects a preferred language, separate C/C++ compilers and the Python interpreter. Settings also cover profiles, warnings, paths and limits. Use **`{wsp-dir}/data/in.txt`** in a file default to keep it relative to the workspace; [path examples](docs/CLI.md#workspace-rooted-file-preferences). Explicit command options override saved defaults. [Discovery and precedence](docs/CLI.md#source-discovery-and-language-defaults).
 
 Settings live inside the installed script. Before replacing it, export them, install the new version, then import:
 
@@ -128,9 +128,8 @@ cp-run --import-settings cp-run-settings.json
 Use optional [clang-format](https://clang.llvm.org/docs/ClangFormat.html) for C/C++ or [Ruff](https://docs.astral.sh/ruff/installation/) for Python. Install the formatter first.
 
 ```sh
-cp-run main.cpp --make-prettier=only  # Format this file; stop
+cp-run main.cpp --make-prettier       # Format this file; do not compile or run
 cp-run main.py --make-prettier=check  # Check style; do not edit or run
-cp-run main.cpp --make-prettier       # Format, then compile and run
 cp-run --make-prettier                # Find a source, format it, then stop
 ```
 
@@ -146,7 +145,7 @@ python3 -B -m unittest discover -s development/tests -v
 python3 -B development/package.py
 ```
 
-The build generates **`cp-run.zsh`**; packaging creates **`cp-run-1.1.zip`**. End users install only the generated script. [Architecture and development rules](docs/DEVELOPMENT.md).
+The build generates **`cp-run.zsh`**; packaging creates **`cp-run-1.1.1.zip`**. End users install only the generated script. [Architecture and development rules](docs/DEVELOPMENT.md).
 
 MIT licensed. Reproducible bug reports and contributions are welcome.
 

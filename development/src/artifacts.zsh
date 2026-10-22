@@ -19,7 +19,7 @@ build_artifact() {
     # protection to named runtime roles without adding those roles to the
     # checker's separate source/binary list (where they would alias themselves).
     if [[ $action == test || $action == stress ]]; then
-        sidecar_protected+=("$cwd/real-out.txt")
+        sidecar_protected+=("${result_file:A}")
         (( console_out )) || sidecar_protected+=("$report_file")
         if [[ $action == test ]] && (( ! console_in )); then sidecar_protected+=("$input_file" "$answer_file"); fi
     elif [[ $f_mode == auto || $f_mode == in || $f_mode == out ]]; then

@@ -19,6 +19,7 @@ import unittest
 
 
 from _paths import RELEASE
+from build import VERSION
 
 SCRIPT = RELEASE / "cp-run.zsh"
 BASE_WARNINGS = (
@@ -221,7 +222,7 @@ class CliTest(unittest.TestCase):
         return target
 
     def data(self, incoming="hello\n", expected="hello\n"):
-        (self.cwd / "input.txt").write_text(incoming)
+        (self.cwd / "in.txt").write_text(incoming)
         (self.cwd / "ans.txt").write_text(expected)
 
     def test_shell_syntax(self):
@@ -548,21 +549,21 @@ class CliTest(unittest.TestCase):
     def test_compiler_sidecar_cannot_overwrite_redirected_input(self):
         incoming = self.cwd / 'main file.out.map'
         incoming.write_text('keep my input\n')
-        result = self.invoke(self.source.name, '-f=auto', incoming.name, 'output.txt',
+        result = self.invoke(self.source.name, '-f=auto', incoming.name, 'out.txt',
                              env={'FAKE_SIDECAR': 'symbols'})
         self.assertEqual(result.returncode, 1, result.stderr)
         self.assertEqual(incoming.read_text(), 'keep my input\n')
-        self.assertFalse((self.cwd / 'output.txt').exists())
+        self.assertFalse((self.cwd / 'out.txt').exists())
 
     def test_compiler_sidecar_cannot_overwrite_expected_answer(self):
-        (self.cwd / 'input.txt').write_text('data\n')
+        (self.cwd / 'in.txt').write_text('data\n')
         answer = self.cwd / 'main file.out.map'
         answer.write_text('keep my answer\n')
-        result = self.invoke('test', self.source.name, 'input.txt', answer.name,
+        result = self.invoke('test', self.source.name, 'in.txt', answer.name,
                              env={'FAKE_SIDECAR': 'symbols'})
         self.assertEqual(result.returncode, 1, result.stderr)
         self.assertEqual(answer.read_text(), 'keep my answer\n')
-        self.assertFalse((self.cwd / 'real-out.txt').exists())
+        self.assertFalse((self.cwd / 'out.txt').exists())
 
     def test_success_without_new_artifact_never_runs_stale_binary(self):
         self.binary("main file.out", 'echo stale\n')
@@ -593,7 +594,7 @@ class CliTest(unittest.TestCase):
     def test_version_has_wrapper_and_compiler_information(self):
         result = self.invoke("--version")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("cp-run 1.1", result.stdout)
+        self.assertEqual(result.stdout.splitlines()[0], "cp-run " + VERSION)
         self.assertIn("GNU GCC integration fixture", result.stdout)
 
     def test_missing_compiler_is_status_127(self):
@@ -642,14 +643,14 @@ class CliTest(unittest.TestCase):
         result = self.invoke(self.source.name, "-f", env={"FAKE_PROGRAM_STDOUT": "console\n"})
         self.assertEqual((result.returncode, result.stdout), (0, "console\n"))
         self.assertIn("-DFILEO", self.calls()[-1])
-        self.assertFalse((self.cwd / "output.txt").exists())
+        self.assertFalse((self.cwd / "out.txt").exists())
 
     def test_auto_file_io_redirects_without_macro(self):
         self.data()
         for flags in (("-f=auto",), ("-f", "auto")):
             result = self.invoke(self.source.name, *flags, env={"FAKE_PROGRAM_STDIN": "1"})
             self.assertEqual((result.returncode, result.stdout), (0, ""))
-            self.assertEqual((self.cwd / "output.txt").read_text(), "hello\n")
+            self.assertEqual((self.cwd / "out.txt").read_text(), "hello\n")
             self.assertNotIn("-DFILEO", self.calls()[-1])
 
     def test_separate_auto_mode_preserves_subsequent_compiler_options(self):
@@ -657,7 +658,7 @@ class CliTest(unittest.TestCase):
         result = self.invoke(self.source.name, '-f', 'auto', '-DUSER=7', '--', '-pthread',
                              env={'FAKE_PROGRAM_STDIN': '1'})
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual((self.cwd / 'output.txt').read_text(), 'hello\n')
+        self.assertEqual((self.cwd / 'out.txt').read_text(), 'hello\n')
         self.assertIn('-DUSER=7', self.calls()[-1])
         self.assertIn('-pthread', self.calls()[-1])
         self.assertNotIn('-DFILEO', self.calls()[-1])
@@ -681,17 +682,17 @@ class CliTest(unittest.TestCase):
         for flags in (('-ftm=auto',), ('-ftm', 'auto'), ('-mtf=auto',), ('-mtf', 'auto')):
             result = self.invoke(self.source.name, *flags, env={'FAKE_PROGRAM_STDIN': '1'})
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual((self.cwd / 'output.txt').read_text(), 'hello\n')
+            self.assertEqual((self.cwd / 'out.txt').read_text(), 'hello\n')
             self.assertEqual(result.stderr.count('cp-run: time:'), 1)
             self.assertEqual(result.stderr.count('cp-run: peak RSS:'), 1)
             self.assertNotIn('-DFILEO', self.calls()[-1])
 
     def test_missing_auto_input_is_native_runtime_error_and_does_not_truncate_output(self):
-        target = self.cwd / "output.txt"; target.write_text("previous\n")
+        target = self.cwd / "out.txt"; target.write_text("previous\n")
         result = self.invoke(self.source.name, "-f=auto")
         self.assertNotEqual(result.returncode, 0)
         self.assertNotIn("cp-run:", result.stderr)
-        self.assertIn("input.txt", result.stderr)
+        self.assertIn("in.txt", result.stderr)
         self.assertEqual(target.read_text(), "previous\n")
         self.assertEqual(len(self.calls()), 1)
 
@@ -700,7 +701,7 @@ class CliTest(unittest.TestCase):
         # File routing is independent of cold interpreter startup on CI.
         result = self.invoke("test", '--TLE=inf', env={"FAKE_PROGRAM_STDIN": "1"})
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual((self.cwd / "real-out.txt").read_text(), "hello\n")
+        self.assertEqual((self.cwd / "out.txt").read_text(), "hello\n")
         self.assertIn("PASS", (self.cwd / "test_out").read_text())
         self.assertEqual(len(self.calls()), 1)
 
@@ -713,7 +714,7 @@ class CliTest(unittest.TestCase):
 
     def test_test_count_mismatch_has_one_error_no_probe_or_output_changes(self):
         self.data("one\n\x1e\ntwo\n", "one\n")
-        previous = self.cwd / "real-out.txt"; previous.write_text("previous\n")
+        previous = self.cwd / "out.txt"; previous.write_text("previous\n")
         result = self.invoke("test=auto", "--show-command")
         self.assertEqual(result.returncode, 2)
         self.assertEqual(result.stdout, "")
@@ -735,7 +736,7 @@ class CliTest(unittest.TestCase):
         result = self.invoke("test", "run", "runner.out", "--cout")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("PASS", result.stdout)
-        self.assertEqual((self.cwd / "real-out.txt").read_text(), "hello\n")
+        self.assertEqual((self.cwd / "out.txt").read_text(), "hello\n")
         self.assertFalse((self.cwd / "test_out").exists())
 
     def test_test_console_input_is_framed(self):
@@ -786,7 +787,7 @@ class CliTest(unittest.TestCase):
         for _ in range(2):
             result = self.invoke('stress', 'run', 'candidate', 'brute', 'gen', '--test-iters=2')
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual((self.cwd / 'real-out.txt').read_text(), '5\n')
+            self.assertEqual((self.cwd / 'out.txt').read_text(), '5\n')
             self.assertIn('start seed 4', (self.cwd / 'test_out').read_text())
 
     def test_stress_seed_zero_and_repeated_values_use_the_last_value(self):
@@ -797,7 +798,7 @@ class CliTest(unittest.TestCase):
                                  (('--seed=0004',), '4\n')):
             result = self.invoke('stress', 'run', 'candidate', 'brute', 'gen', '--test-iters=1', *values)
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual((self.cwd / 'real-out.txt').read_text(), expected)
+            self.assertEqual((self.cwd / 'out.txt').read_text(), expected)
 
     def test_separate_checking_and_binary_lookup_operands_match_attached_values(self):
         self.binary(body='cat\n')
@@ -806,7 +807,7 @@ class CliTest(unittest.TestCase):
                       ('--find', 'runner', '--sep', r'\n###\n', '--test-iters', '1')):
             result = self.invoke('test=auto', 'run', *flags)
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual((self.cwd / 'real-out.txt').read_text(), 'one')
+            self.assertEqual((self.cwd / 'out.txt').read_text(), 'one')
 
     def test_invalid_stress_seeds_fail_before_any_compiler_probe(self):
         for value in ('-1', str(2**64), '1.5', 'inf', '９', '9' * 5000):
@@ -822,9 +823,9 @@ class CliTest(unittest.TestCase):
         self.assertEqual(result.returncode, 3, result.stderr)
         bundles = list(self.cwd.glob("stress-failure*"))
         self.assertEqual(len(bundles), 1)
-        self.assertEqual((bundles[0] / "input.txt").read_text(), "7\n")
+        self.assertEqual((bundles[0] / "in.txt").read_text(), "7\n")
         self.assertEqual((bundles[0] / "ans.txt").read_text(), "7\n")
-        self.assertEqual((bundles[0] / "real-out.txt").read_text(), "bad\n")
+        self.assertEqual((bundles[0] / "out.txt").read_text(), "bad\n")
         self.assertEqual(self.calls(include_probes=True), [])
 
     def test_integrated_timer_excludes_compilation_and_setup(self):
@@ -898,7 +899,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(counter.read_text(), '2')
         self.assertEqual(result.stdout, '')
-        self.assertEqual((self.cwd / 'output.txt').read_text(), 'same input\n')
+        self.assertEqual((self.cwd / 'out.txt').read_text(), 'same input\n')
         self.assertNotIn('hidden', result.stderr)
 
     def test_warmup_preserves_runtime_arguments_and_shows_only_measured_command(self):
@@ -1006,8 +1007,8 @@ class CliTest(unittest.TestCase):
         result = self.invoke(self.source.name, "-f=auto", "-t", "--show-command",
                              env={"FAKE_PROGRAM_STDIN": "1"})
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertRegex(result.stderr, r"< (?:\S*/)?input\.txt > (?:\S*/)?output\.txt")
-        self.assertEqual((self.cwd / "output.txt").read_text(), "hello\n")
+        self.assertRegex(result.stderr, r"< (?:\S*/)?in\.txt > (?:\S*/)?out\.txt")
+        self.assertEqual((self.cwd / "out.txt").read_text(), "hello\n")
 
     def test_integrated_timeout_uses_runtime_not_compilation(self):
         result = self.invoke(self.source.name, "--TLE=2000", env={

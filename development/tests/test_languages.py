@@ -128,7 +128,7 @@ class LanguagesTest(unittest.TestCase):
 
     def test_python_in_out_redirects_are_independent(self):
         path = self.source(content="import sys\nsys.stdout.write(sys.stdin.read())\n")
-        (self.cwd / "input.txt").write_text("input\n")
+        (self.cwd / "in.txt").write_text("input\n")
         result = self.invoke(path, "-f", "in")
         self.assertEqual(result.stdout, "input\n")
         result = self.invoke(path, "--file-io=out", "chosen.txt", input="output\n")
@@ -166,7 +166,7 @@ class LanguagesTest(unittest.TestCase):
         for args in ((path,), ("debug", "run", path), ("debug=extra", "run", path)):
             result = self.invoke(*args, "--interpreter=pypy3")
             self.assertEqual((result.returncode, result.stdout), (0, "hello\n"), result.stderr)
-        (self.cwd / "input.txt").write_text("")
+        (self.cwd / "in.txt").write_text("")
         (self.cwd / "ans.txt").write_text("hello\n")
         self.assertEqual(self.invoke("test", path, "--interpreter=pypy3").returncode, 0)
 

@@ -37,7 +37,7 @@ main() {
     local -i data_controls=0 layout_controls=0 companion_controls=0 source_given=0 report_controls=0 bundle_given=0
     local -i overwrite=0 text_conversion=0 stop_on_failure=0
     local -i positional_count=0 mult=0 save_test_relpath=0 relpath_given=0 test_relpath_given=0
-    local -i timeout_given=0 memory_given=0 measurement_controls=0 debug_run=0 compile_only=0
+    local -i timeout_given=0 memory_given=0 measurement_controls=0 debug_run=0 compile_only=0 result_given=0
     local -a interpreter_args=() recalled_launch=() launch_args=() primary_launch=() original_compiler_args=() original_standards=()
     local -a compiler_args=() runtime_args=() cases=() sources=() artifacts=() protected_files=() build_indices=()
     local -A config=() compiler_paths=() compiler_banners=() standard_vocab=()
@@ -55,12 +55,31 @@ main() {
         config=(interpreter "$interpreter_choice" native_formatter "$NATIVE_FORMATTER" python_formatter "$PYTHON_FORMATTER")
         python_action doctor; return $?
     fi
-    if [[ $prettier == only || $prettier == check || $prettier == auto && $action == ordinary && $positional_count == 0 ]]; then
-        (( ! binary_mode && ! ${#compiler_args} && ! ${#runtime_args} && ! output_given )) || fail 'format-only action does not compile or run; provide a source file'
+    # Formatting is a terminal action, before artifact planning or any compiler
+    # lookup. A successful formatter can never fall through into preparation/run.
+    if [[ -n $prettier ]]; then
+        (( ! binary_mode && ! ${#compiler_args} && ! ${#runtime_args} && ! output_given && ! result_given &&
+           ! measure_time && ! measure_memory && ! measurement_controls && ! timeout_given && ! memory_given )) &&
+            [[ $f_mode == none ]] || fail 'formatting does not compile or run; remove build/runtime options'
+        [[ $action != companion && $action != pack && $action != unpack ]] || fail 'formatting requires a source operation'
         [[ $profile == none || -n ${MODE_KIND[$profile]-} ]] || fail "profile not found: $profile"
+        [[ $action != debug || ${MODE_KIND[$profile]-} == debug ]] || fail "profile '$profile' is a flags set; select it with --profile=$profile"
+        if [[ $source_file == - ]]; then
+            resolve_workspace_root
+            history_location || fail 'source history is not accessible' 1
+            history_read source; source_file=$value
+        fi
         if [[ -n $source_file ]]; then workspace_file_path "$source_file"; source_file=$value
         else select_source; fi
         protected_files=("${source_file:A}")
+        if [[ $action == stress ]]; then
+            source_language "$source_file"; primary_language=$language
+            if (( positional_count < 2 )); then discover_role "$brute_file" brute; brute_file=$value; fi
+            if (( positional_count < 3 )); then discover_role "$generator_file" gen; generator_file=$value; fi
+            for role in "$brute_file" "$generator_file"; do
+                workspace_file_path "$role"; protected_files+=("${value:A}")
+            done
+        fi
         config=(prettier "$prettier" native_formatter "$NATIVE_FORMATTER" python_formatter "$PYTHON_FORMATTER")
         python_action format; return $?
     fi
@@ -136,6 +155,9 @@ main() {
     if (( compile_only )); then
         (( ! measure_time && ! measure_memory && ! ${#runtime_args} )) && [[ $f_mode != auto && $f_mode != in && $f_mode != out ]] || fail 'runtime options require an execution command'
     fi
+    if (( result_given )); then
+        [[ $action == test || $action == stress || $f_mode == auto || $f_mode == out ]] || fail '--out requires test/stress or -f=auto/out'
+    fi
     case "$f_mode" in none|auto|in|out) ;; macro) macro_file_io=1 ;; *) fail 'invalid saved -f mode; use --set-defaults' ;; esac
     [[ $DEFAULT_MACRO == [A-Za-z_][A-Za-z0-9_]# ]] || fail 'FILEO macro setting must be a C identifier'
     for option_name value in --TLE "$timeout_ms" --MLE "$memory_mib"; do
@@ -155,7 +177,9 @@ main() {
         workspace_file_path "$report_file"; report_file=$value
     fi
     if [[ $f_mode == auto || $f_mode == in ]]; then workspace_file_path "$input_file"; input_file=$value; fi
-    if [[ $f_mode == auto || $f_mode == out ]]; then workspace_file_path "$result_file"; result_file=$value; fi
+    if [[ $action == test || $action == stress || $f_mode == auto || $f_mode == out ]]; then
+        workspace_file_path "$result_file"; result_file=$value
+    fi
     if [[ -n $validator ]]; then
         workspace_file_path "$validator"; validator=${value:A}
         [[ -f $validator && ( -x $validator || $validator == *.py ) ]] || fail 'validator must be executable or a Python script'
@@ -258,7 +282,7 @@ main() {
             in_template "$in_template" ans_template "$ans_template" bundle_format "$bundle_format"
             minimize "$minimize" validator "$validator" validator_interpreter "$interpreter_choice" minimize_attempts "$MINIMIZE_ATTEMPTS" minimize_seconds "$MINIMIZE_SECONDS"
             report_tests "$report_tests" stop_on_failure "$stop_on_failure" max_failures "$MAX_FAILURES" input "$input_file" answer "$answer_file" report "$report_file"
-            actual "$cwd/real-out.txt" sep "$separator" cases "${(j:,:)cases}" num_test "$num_test"
+            actual "$result_file" sep "$separator" cases "${(j:,:)cases}" num_test "$num_test"
             line_limit "$DEFAULT_LINE_LIMIT" cin "$console_in" cout "$console_out" executable "$output_abs"
             timeout_ms "$timeout_ms" memory_mib "$memory_mib" show_time "$measure_time" show_memory "$measure_memory"
             show_command "$show_command" seed "$seed" iterations "$DEFAULT_ITERATIONS" script "$SCRIPT_PATH"
@@ -286,13 +310,6 @@ main() {
         if [[ $f_mode != out ]]; then
             for value in "${artifacts[@]}"; do [[ ${value:A} != ${input_file:A} && ! $value -ef $input_file ]] || fail 'binary output would overwrite runtime input' 1; done
         fi
-    fi
-    if [[ -n $prettier ]]; then
-        (( ! binary_mode )) || fail 'formatting needs source files'
-        local -a protected_files=("${sources[@]}")
-        config[prettier]=$prettier; config[native_formatter]=$NATIVE_FORMATTER; config[python_formatter]=$PYTHON_FORMATTER
-        python_action format || return $?
-        protected_files=("${sources[@]}" "${artifacts[@]}")
     fi
     if (( ! binary_mode )); then
         original_compiler_args=("${compiler_args[@]}")
