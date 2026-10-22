@@ -151,6 +151,15 @@ class LanguagesTest(unittest.TestCase):
         self.assertEqual(recalled.stdout, first.stdout, recalled.stderr)
         self.assertEqual(recalled.stdout, "True\n")
 
+    def test_history_accepts_new_explicit_interpreter_arguments(self):
+        source = self.source(content='import sys; print(sys.flags.dev_mode, bool(sys.flags.dont_write_bytecode))\n')
+        first = self.invoke('debug', source)
+        self.assertEqual((first.returncode, first.stdout), (0, 'True False\n'), first.stderr)
+        recalled = self.invoke('run', '-', '--interpreter-arg=-B')
+        self.assertEqual((recalled.returncode, recalled.stdout), (0, 'True True\n'), recalled.stderr)
+        rejected = self.invoke('run', '-', '--interpreter-arg=-cprint(42)')
+        self.assertEqual(rejected.returncode, 2, rejected.stderr)
+
     @unittest.skipUnless(shutil.which("pypy3"), "PyPy is optional; exercised on Linux CI")
     def test_pypy_profiles_and_checking(self):
         path = self.source(content='print("hello")\n')

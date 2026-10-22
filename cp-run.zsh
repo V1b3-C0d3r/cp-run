@@ -1536,7 +1536,11 @@ main() {
         for (( index=1; index<=${#artifacts}; ++index )); do
             source_language "${artifacts[index]}"
             if [[ $language == python ]]; then
-                if (( index == 1 && ${#recalled_launch} && ! interpreter_given )); then launch_args=("${recalled_launch[@]}")
+                if (( index == 1 && ${#recalled_launch} && ! interpreter_given )); then
+                    # Keep the recorded interpreter/profile, but honour newly
+                    # explicit interpreter options before the original source.
+                    audit_python_options 0 default "${interpreter_args[@]}"
+                    launch_args=("${(@)recalled_launch[1,-2]}" "${interpreter_args[@]}" "${artifacts[index]}")
                 else python_launch "${artifacts[index]}" none || return $?; fi
             else launch_args=("${artifacts[index]}"); fi
             case $index in 1) role=main; primary_launch=("${launch_args[@]}") ;; 2) role=brute ;; 3) role=generator ;; esac

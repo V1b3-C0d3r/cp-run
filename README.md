@@ -31,7 +31,13 @@ mkdir -p ~/.local/bin
 install -m 755 cp-run.zsh ~/.local/bin/cp-run
 ```
 
-Add `~/.local/bin` to your shell's `PATH` if needed. To uninstall, remove `~/.local/bin/cp-run`.
+If the command is not found, enable its directory for this terminal:
+
+```sh
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+Put that line in your shell's startup file (for example `~/.zshrc`) to keep it. To uninstall, remove `~/.local/bin/cp-run`.
 
 **Requirements:** zsh **5.9+**; GCC or Clang for native sources; **PyPy 3** for Python sources by default. CPython is also supported. Measurements, tests, settings and integrations use a separate **Python 3.9+** standard-library service. Optional tools are needed only when you request their features; `cp-run --doctor` lists what is installed.
 
@@ -69,7 +75,13 @@ cp-run main.py --interpreter=python3  # CPython instead
 cp-run main.py -- -- --input data.txt # Arguments for your program
 ```
 
-Run **`cp-run --set-defaults` → Languages & tools → Language/compiler defaults** to choose the preferred language, a compiler for C, a compiler for C++, and the Python interpreter. Explicit filenames and tool options override saved defaults. Changes are saved inside the installed script; export/import preserves them when updating.
+Run **`cp-run --set-defaults` → Languages & tools → Language/compiler defaults** to choose the preferred language, a compiler for C, a compiler for C++, and the Python interpreter. Explicit filenames and tool options override saved defaults. Changes are saved inside the installed script. Before replacing an installation, export settings, install the new script, then import:
+
+```sh
+cp-run --export-settings cp-run-settings.json
+# Install the new cp-run.zsh with the command above.
+cp-run --import-settings cp-run-settings.json
+```
 
 C/C++ use **`-O2`** and the newest ISO standard advertised by the selected compiler, including draft modes. Python uses the selected interpreter's normal defaults; assertion-removing `-O` is never added automatically. [Backend options and boundaries](docs/CLI.md#commands-and-argument-boundaries).
 

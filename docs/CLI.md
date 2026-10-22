@@ -42,7 +42,7 @@ Stress discovers conventional `brute` and `gen`, preferring the main language. E
 
 In **`--set-defaults` → Languages & tools → Language/compiler defaults**, choose the preferred language, C compiler, C++ compiler and Python interpreter. Native `inherit` uses the Build menu's compiler. Python's factory interpreter is **`pypy3`**; a missing requested interpreter is an error, with no silent switch to CPython.
 
-FILE `-` recalls the workspace's last source or launched target; `./-` is literal. `tr` means `test run -`; `sr BRUTE GEN` means `stress run - BRUTE GEN`. Failed compilation does not replace source history. Python target history retains interpreter options; a newly explicit interpreter overrides them.
+FILE `-` recalls the workspace's last source or launched target; `./-` is literal. `tr` means `test run -`; `sr BRUTE GEN` means `stress run - BRUTE GEN`. Failed compilation does not replace source history. Python target history retains interpreter options; newly supplied `--interpreter-arg` options are appended before the source, and a newly explicit interpreter rebuilds the launch from current defaults.
 
 ## Languages and profiles
 
@@ -65,7 +65,7 @@ FILE `-` recalls the workspace's last source or launched target; `./-` is litera
 | --- | --- | --- |
 | Native code | Address/undefined/float-cast sanitizers, `-O2 -g2`, frame pointers, no sanitizer recovery | `-Og -g2`, additional bounds checks and stricter warnings, no sibling-call optimization |
 | libstdc++ | `_GLIBCXX_ASSERTIONS` | `_GLIBCXX_DEBUG` and `_GLIBCXX_DEBUG_PEDANTIC` |
-| libc++ | Available hardening/assertion API detected from headers | Strongest supported debug/assertion API detected from headers |
+| libc++ | FAST hardening, verified in selected headers | DEBUG hardening, verified in selected headers |
 | CPython | `-X dev -W default` | `-X dev -W error` |
 | PyPy | `-X track-resources -W default` | `-X track-resources -W error` |
 

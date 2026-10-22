@@ -55,3 +55,7 @@
 - Source-free packaging and local links validate. Extracted archive regression suite is running; final archive will be regenerated after journal/preview changes.
 
 - CI 39785394615: both Ubuntu architectures passed. macOS ARM exposed an existing EPERM-before-waitable-exit race in process-group signalling. Added an owned, unreaped leader fallback only on group EPERM; genuine leader permission denial remains an error. A controlled regression covers delayed exit publication without timing sleeps.
+
+- Final behavior audit found that `run -` retained interpreter history but ignored newly supplied --interpreter-arg options. Fixed insertion before the recorded source and added an exact argv/runtime regression plus execution-replacement rejection.
+- The rebuilt archive passed **417 tests** (one unavailable local clang-format skip), 148.756 s; **27 isolated documented workflows** passed, including mixed-language stress, minimization/replay, real HTTP sample import, formatting and settings round trip. Build and package reproduce byte-for-byte after extraction.
+- Startup benchmark (15 samples, informational): native 1.0 median 8.330 ms, native 1.1 9.415 ms; direct native 2.038 ms. PyPy launch median 23.724 ms through cp-run versus 13.810 ms directly. Native unlimited execution still starts no service Python; no unsupported speedup claim.
