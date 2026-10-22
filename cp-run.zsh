@@ -1866,7 +1866,7 @@ class Runner:
                 return
             if signalling:
                 return  # A nested signal is covered by the pending deadline.
-            denied = None
+            denied, group_denied = None, False
             signalling = True
             try:
                 # Keep the leader unreaped through this short check+kill
@@ -1877,15 +1877,24 @@ class Runner:
                     except ProcessLookupError:
                         pass
                     except PermissionError as error:
-                        denied = error
+                        group_denied = True
+                        # Darwin can reject a zombie-only group before wait4
+                        # exposes its leader's exit. Signal our still-unreaped
+                        # child directly: its PID cannot yet be reused. A live
+                        # child with a genuine permission denial still fails.
+                        try:
+                            os.kill(pid, signum)
+                        except ProcessLookupError:
+                            pass
+                        except PermissionError:
+                            denied = error
             finally:
                 signalling = False
-            if denied is not None:
-                # Darwin can report EPERM for a group containing only zombies.
-                # Reap after releasing the signal guard; suppress the error only
-                # if this child really exited. Never hide a live-child denial.
+            if group_denied:
+                # Exit may become waitable only on a later SIGCHLD. A successful
+                # direct signal needs no guessed delay or blocking zombie probe.
                 collect_exit()
-                if outcome is None:
+                if denied is not None and outcome is None:
                     raise denied
 
         def collect_exit():
@@ -4530,14 +4539,18 @@ def _settings_finish(filename, original, initial, editor):
     print('\nReview pending changes:')
     for key, before, after in changed:
         print('  {}: {} -> {}'.format(key, repr(before), repr(after)))
-    compiler = editor.data['DEFAULT_COMPILER']
-    warnings = editor.data['WARNINGS_GCC' if compiler == 'GCC' else 'WARNINGS_CLANG']
-    standard = editor.data['DEFAULT_STANDARD']
-    if standard.isdecimal():
-        standard = 'c++' + standard
-    print('Result: --compiler={} {} {}'.format(compiler,
-        '[newest supported ISO C++]' if standard == 'auto' else '-std=' + standard,
-        shlex.join(editor.data['DEFAULT_FLAGS'] + warnings)))
+    print('Preferred omitted-source language: ' + editor.data['DEFAULT_LANGUAGE'])
+    # Preview each actual backend instead of showing a misleading C++ command
+    # when Python or C is the user's preferred language.
+    for language, standard_key in (('c++', 'DEFAULT_STANDARD'), ('c', 'C_STANDARD')):
+        compiler = editor.data['LANGUAGE_COMPILERS'].get(language, editor.data['DEFAULT_COMPILER'])
+        warnings = editor.data['WARNINGS_GCC' if compiler == 'GCC' else 'WARNINGS_CLANG']
+        standard = editor.data[standard_key]
+        if standard.isdecimal(): standard = language + standard
+        dialect = '[newest supported ISO ' + language + ']' if standard == 'auto' else '-std=' + standard
+        print('Result ({}): --compiler={} {} {}'.format(language, compiler, dialect,
+              shlex.join(editor.data['DEFAULT_FLAGS'] + warnings)))
+    print('Result (python): ' + shlex.join([editor.data['DEFAULT_INTERPRETER'], *editor.data['PYTHON_FLAGS']]))
     answer = input('Write these changes to this script? [y/N]: ').strip().lower()
     if answer not in ('y', 'yes'):
         print('Cancelled; nothing saved.')

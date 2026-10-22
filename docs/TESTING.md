@@ -162,7 +162,7 @@ cp-run test main.py --cin --cout <<'EOF'
 EOF
 ```
 
-`:::answer:::` on its own line separates input from answer. Prefix it with a backslash (`\:::answer:::`) to include that literal marker line in a payload. `--cin` is for whole-file/auto tests, not mult or stress. `--cout` redirects only the protocol; raw program stdout still goes to real-out.txt.
+`:::answer:::` on its own line separates input from answer. Prefix it with a backslash (`\:::answer:::`) to include that literal marker line in a payload. `--cin` is for whole-file/auto tests, not mult or stress. `--cout` redirects only the protocol; raw program stdout still goes to `real-out.txt`. In auto/mult, that file joins each selected test's first measured stdout with the internal separator, in execution order (no count header). Use the report to read per-test output.
 
 ## Verdicts and resource statistics
 

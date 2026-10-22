@@ -313,6 +313,7 @@ class RuntimeTest(unittest.TestCase):
                         mock.patch.object(runtime.os, 'posix_spawnp', return_value=pid), \
                         mock.patch.object(runtime.os, 'wait4', wait), \
                         mock.patch.object(runtime.os, 'killpg', side_effect=deny) as kill, \
+                        mock.patch.object(runtime.os, 'kill', side_effect=denied), \
                         contextlib.redirect_stderr(io.StringIO()):
                     if completes:
                         result = runner.run(['/controlled/child'])
@@ -324,6 +325,42 @@ class RuntimeTest(unittest.TestCase):
                         self.assertIs(error.exception, denied)
                 self.assertFalse(runner._running)
                 self.assertIs(signal.getsignal(signal.SIGCHLD), old_handler)
+
+    def test_group_eperm_before_exit_is_waitable_uses_owned_leader(self):
+        pid, signalled, wait_after_signal = 123456789, False, 0
+        clock = mock.Mock(return_value=1_000_000_000)
+        usage = SimpleNamespace(ru_maxrss=0)
+
+        def sample(_pid):
+            clock.return_value += 30_000_000
+            return 0
+
+        def kill_leader(child_pid, signum):
+            nonlocal signalled
+            self.assertEqual((child_pid, signum), (pid, signal.SIGKILL))
+            signalled = True
+
+        def wait(child_pid, options):
+            nonlocal wait_after_signal
+            self.assertEqual((child_pid, options), (pid, os.WNOHANG))
+            if signalled:
+                wait_after_signal += 1
+                if wait_after_signal >= 2:
+                    return pid, signal.SIGKILL, usage
+            return 0, 0, None
+
+        runner = runtime.Runner(timeout_ms='10')
+        runner.sampler = SimpleNamespace(sample=sample)
+        with mock.patch.object(runtime.time, 'monotonic_ns', clock), \
+                mock.patch.object(runtime.os, 'posix_spawnp', return_value=pid), \
+                mock.patch.object(runtime.os, 'wait4', side_effect=wait), \
+                mock.patch.object(runtime.os, 'killpg', side_effect=PermissionError(errno.EPERM, 'exiting group')), \
+                mock.patch.object(runtime.os, 'kill', side_effect=kill_leader) as direct, \
+                mock.patch.object(runtime.select, 'select', return_value=([], [], [])):
+            result = runner.run(['/controlled/child'], report=False)
+        self.assertEqual((result.status, result.verdict), (124, 'TLE'))
+        direct.assert_called_once_with(pid, signal.SIGKILL)
+        self.assertEqual(wait_after_signal, 2)
 
     def test_group_timeout_stops_grandchild(self):
         script = (

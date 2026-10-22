@@ -12,7 +12,7 @@
 - Added settings groups for language/profile/action routing; pragma profiles explicitly request -Wunknown-pragmas.
 - Native observer and timing implementation are unchanged. Real C/Python smoke runs passed; focused regressions are being added.
 
-## Remaining
+## Remaining at the initial checkpoint
 
 - Settings/menu migration validation and complete language regressions.
 - Per-case reports/verdicts/stderr, CE finalization and stress continuation.
@@ -47,3 +47,11 @@
 
 - Full local source checkpoint: **414 tests passed**, one unavailable native-formatter skip; 163.851 s. The last two added language regressions and final warning-abbreviation guard are checked separately before pushing.
 - Verified every local Markdown file/heading link. Confirmed old CI failed only on GCC warning wording and Companion reverse-DNS startup; both fixes are included.
+
+### Post-commit audit
+
+- Reviewed all maintained documentation, CLI help, default/profile composition, source discovery, formatting, stress replay and generated/archive manifests after commit 56f28a9.
+- Clarified profile components, raw auto/mult output framing and --no-w restrictions. Improved save preview to show C, C++ and Python settings independently.
+- Source-free packaging and local links validate. Extracted archive regression suite is running; final archive will be regenerated after journal/preview changes.
+
+- CI 39785394615: both Ubuntu architectures passed. macOS ARM exposed an existing EPERM-before-waitable-exit race in process-group signalling. Added an owned, unreaped leader fallback only on group EPERM; genuine leader permission denial remains an error. A controlled regression covers delayed exit publication without timing sleeps.

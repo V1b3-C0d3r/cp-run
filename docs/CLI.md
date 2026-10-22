@@ -54,12 +54,24 @@ FILE `-` recalls the workspace's last source or launched target; `./-` is litera
 | `--interpreter=NAME_OR_PATH` | Python executable, default **`pypy3`**; use `python3` or an executable path for CPython. Does not select cp-run's internal service Python. |
 | `-std=VALUE`, `-std VALUE` | Numeric shorthand or native C/C++ dialect. Default: newest advertised ISO mode, which may be a draft. Invalid managed choices fail before compiling. |
 | `--profile=NAME` | Saved diagnostic or plain-flags profile. `debug=NAME` accepts diagnostic profiles only. |
-| `--no-w` | Removes baseline generated native warnings; profile-specific diagnostics remain. |
+| `--no-w` | Removes baseline native warnings. Incompatible with diagnostic profiles; explicit/common profile warning flags remain. |
 | `--show-command` | Show escaped build/run commands on stderr. Otherwise compiler/program diagnostics are unwrapped. |
 
 `compile` prints an absolute native artifact path. For Python it validates syntax without running/importing the program and prints the original source path; no `.out`/portable `.pyc` is created. `run` accepts readable `.py` even without executable permission. Python does not support explicit native `-o`, `-std` or macro action.
 
+**Built-in diagnostic components:**
+
+| Component | `debug` | `extra` |
+| --- | --- | --- |
+| Native code | Address/undefined/float-cast sanitizers, `-O2 -g2`, frame pointers, no sanitizer recovery | `-Og -g2`, additional bounds checks and stricter warnings, no sibling-call optimization |
+| libstdc++ | `_GLIBCXX_ASSERTIONS` | `_GLIBCXX_DEBUG` and `_GLIBCXX_DEBUG_PEDANTIC` |
+| libc++ | Available hardening/assertion API detected from headers | Strongest supported debug/assertion API detected from headers |
+| CPython | `-X dev -W default` | `-X dev -W error` |
+| PyPy | `-X track-resources -W default` | `-X track-resources -W error` |
+
 Native `debug` combines sanitizers, frame pointers and assertions for actual libstdc++/libc++ headers. `extra` strengthens warnings, bounds/library checks and debug information. C omits C++ library flags. Diagnostic profiles reject known weakening options in both managed and backend arguments; unsupported required diagnostics fail clearly. For example, `debug -- -O0` is allowed, but `debug -- -O3`, disabling sanitizers, response files and warning suppression are rejected.
+
+For example, `cp-run debug main.py --interpreter=python3 --show-command` launches `python3 -X dev -W default main.py` (paths are resolved in actual output). `debug=extra` replaces the warning action with `error`.
 
 Python `debug`/`extra` use implementation-specific runtime diagnostics, not native sanitizers or an automatic debugger. Assertion-removing optimization and conflicting warning filters are rejected, including `PYTHONOPTIMIZE`. The requested interpreter reports its implementation/version; CPython development diagnostics require 3.7+. Ordinary Python execution has no extra version-probe process. Native `-O` is unrelated to Python's `-O`/`-OO` assertion removal.
 

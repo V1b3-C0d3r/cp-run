@@ -466,14 +466,18 @@ def _settings_finish(filename, original, initial, editor):
     print('\nReview pending changes:')
     for key, before, after in changed:
         print('  {}: {} -> {}'.format(key, repr(before), repr(after)))
-    compiler = editor.data['DEFAULT_COMPILER']
-    warnings = editor.data['WARNINGS_GCC' if compiler == 'GCC' else 'WARNINGS_CLANG']
-    standard = editor.data['DEFAULT_STANDARD']
-    if standard.isdecimal():
-        standard = 'c++' + standard
-    print('Result: --compiler={} {} {}'.format(compiler,
-        '[newest supported ISO C++]' if standard == 'auto' else '-std=' + standard,
-        shlex.join(editor.data['DEFAULT_FLAGS'] + warnings)))
+    print('Preferred omitted-source language: ' + editor.data['DEFAULT_LANGUAGE'])
+    # Preview each actual backend instead of showing a misleading C++ command
+    # when Python or C is the user's preferred language.
+    for language, standard_key in (('c++', 'DEFAULT_STANDARD'), ('c', 'C_STANDARD')):
+        compiler = editor.data['LANGUAGE_COMPILERS'].get(language, editor.data['DEFAULT_COMPILER'])
+        warnings = editor.data['WARNINGS_GCC' if compiler == 'GCC' else 'WARNINGS_CLANG']
+        standard = editor.data[standard_key]
+        if standard.isdecimal(): standard = language + standard
+        dialect = '[newest supported ISO ' + language + ']' if standard == 'auto' else '-std=' + standard
+        print('Result ({}): --compiler={} {} {}'.format(language, compiler, dialect,
+              shlex.join(editor.data['DEFAULT_FLAGS'] + warnings)))
+    print('Result (python): ' + shlex.join([editor.data['DEFAULT_INTERPRETER'], *editor.data['PYTHON_FLAGS']]))
     answer = input('Write these changes to this script? [y/N]: ').strip().lower()
     if answer not in ('y', 'yes'):
         print('Cancelled; nothing saved.')
