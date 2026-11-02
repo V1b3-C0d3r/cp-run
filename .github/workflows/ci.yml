@@ -66,7 +66,10 @@ jobs:
           zsh -n cp-run.zsh
           git diff --exit-code -- cp-run.zsh
 
-      - name: Run regressions
+      - name: Run regressions including controlling-terminal input
+        timeout-minutes: 15
+        # PTY tests hold compilation at an explicit gate, then queue input.
+        # They need a controlling terminal; redirected pipes cannot catch re-echo.
         run: python3 -m unittest discover -s development/tests -v
 
       - name: Check one-file install and removal

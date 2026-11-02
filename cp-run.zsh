@@ -8,7 +8,7 @@
 emulate -LR zsh
 setopt NO_UNSET PIPE_FAIL EXTENDED_GLOB
 unsetopt ALIASES
-typeset -r PROGRAM=cp-run VERSION=1.1.1
+typeset -r PROGRAM=cp-run VERSION=1.1.2
 typeset -r SCRIPT_PATH=${0:A} # Settings follow the real script when invoked through a symlink.
 
 # CP_RUN_SETTINGS_BEGIN
@@ -1204,9 +1204,22 @@ build_artifact() {
 # Source: history.zsh
 # History is user data, never sourced shell text. Native zsh I/O keeps the
 # unlimited execution path independent of Python and external hash programs.
+history_load_fields() {
+    # zsh 5.9's read -d changes the controlling tty even with redirected stdin.
+    # That re-echoes queued input on macOS. Read metadata without touching tty
+    # modes or program stdin; the final NUL also protects trailing newlines
+    # from command substitution. Return complete fields in the caller's array.
+    local record
+    record=$(< "$1") || return 1
+    [[ $record == *$'\0' ]] || return 1
+    history_fields=("${(@0)record}")
+    history_fields[-1]=()
+}
+
 history_location() {
     local scope=${workspace:-$cwd} state_root=${XDG_STATE_HOME:-$HOME/.local/state}/cp-run/history
-    local character stored= digest= hi lo
+    local character digest= hi lo
+    local -a history_fields=()
     local -i hash=1469598103934665603 code
     [[ -z $history_directory ]] || return 0
     # Stable FNV-style key plus a checked scope record: a collision can cause
@@ -1222,14 +1235,14 @@ history_location() {
         history_warn; return 1
     fi
     if [[ -e $directory/scope ]]; then
-        IFS= read -r -d $'\0' stored < "$directory/scope" || { history_warn; return 1; }
-        [[ $stored == "$scope" ]] || { history_warn; return 1; }
+        history_load_fields "$directory/scope" || { history_warn; return 1; }
+        [[ ${history_fields[1]-} == "$scope" ]] || { history_warn; return 1; }
     else
         # Exclusive creation resolves concurrent first use without replacing
         # an already claimed scope. NUL terminates paths containing newlines.
         (umask 077; setopt NO_CLOBBER; printf '%s\0' "$scope" > "$directory/scope") 2>/dev/null || {
-            IFS= read -r -d $'\0' stored < "$directory/scope" || { history_warn; return 1; }
-            [[ $stored == "$scope" ]] || { history_warn; return 1; }
+            history_load_fields "$directory/scope" || { history_warn; return 1; }
+            [[ ${history_fields[1]-} == "$scope" ]] || { history_warn; return 1; }
         }
     fi
     history_directory=$directory
@@ -1243,18 +1256,15 @@ history_warn() {
 }
 
 history_read() {
-    local marker= field
+    local -a history_fields=()
     [[ -f $history_directory/$1 && ! -L $history_directory/$1 ]] || fail "no last $1 in this workspace" 1
-    {
-        IFS= read -r -d $'\0' value || fail 'invalid history record' 1
-        if [[ $1 == binary ]] && IFS= read -r -d $'\0' marker; then
-            [[ $marker == CP_RUN_ARGV_V1 ]] || fail 'unsupported launch history record' 1
-            while IFS= read -r -d $'\0' field; do
-                (( ${#recalled_launch} < 256 )) || fail 'launch history has too many arguments' 1
-                recalled_launch+=("$field")
-            done
-        fi
-    } < "$history_directory/$1"
+    history_load_fields "$history_directory/$1" || fail 'invalid history record' 1
+    value=${history_fields[1]-}
+    if [[ $1 == binary ]] && (( ${#history_fields} > 1 )); then
+        [[ ${history_fields[2]} == CP_RUN_ARGV_V1 ]] || fail 'unsupported launch history record' 1
+        (( ${#history_fields} <= 258 )) || fail 'launch history has too many arguments' 1
+        recalled_launch=("${history_fields[@]:2}")
+    fi
     [[ -n $value && -f $value && -r $value ]] || fail "last $1 is missing or unreadable: $value" 1
     [[ $1 != binary || $value == *.py || -x $value ]] || fail "last binary is no longer executable: $value" 126
     if (( ${#recalled_launch} )); then

@@ -157,7 +157,7 @@ python3 -B -m unittest discover -s development/tests -v
 python3 -B development/package.py
 ```
 
-The build generates **`cp-run.zsh`**; packaging creates **`cp-run-1.1.1.zip`**. End users install only the generated script. [Architecture and development rules](docs/DEVELOPMENT.md).
+The build generates **`cp-run.zsh`**; packaging creates **`cp-run-1.1.2.zip`**. End users install only the generated script. [Architecture and development rules](docs/DEVELOPMENT.md).
 
 MIT licensed. Reproducible bug reports and contributions are welcome.
 

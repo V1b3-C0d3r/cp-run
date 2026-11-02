@@ -138,6 +138,8 @@ cp-run test=mult main.cpp --test-f='{wsp-dir}/tasks/A/tests' --cout
 
 **`-f` takes no mode value.** `--file-io` is its full alias; both use the saved action. Without either flag, ordinary execution keeps console stdin/stdout.
 
+You can type or paste terminal input while compilation is still running. On a successful build, the queued bytes reach the program without an extra echo from cp-run, including a line started during compilation and completed after launch. Normal terminal echo and line editing remain enabled.
+
 Choose the action with **`cp-run configure` → Files → Bare -f action**:
 
 | Saved action | What `-f` does |

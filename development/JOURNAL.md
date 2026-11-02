@@ -114,3 +114,10 @@
 - Native runtime observer and memory backend are unchanged. New routing normalizes once into existing execution paths; ordinary unlimited native launches still avoid Python. The tested modules/tests and generated script match the working sources exactly.
 - Workspace cleanup verified all 33 old Work/Development files against the frozen 1.0 archive before removing the redundant copy. Removed obsolete applied patches/check helpers and Finder artifacts outside frozen snapshots; grouped old verification records by release. All 39 frozen file hashes remain unchanged.
 - Final packaging/reproducibility, commit, platform CI and publication evidence are recorded under Work/Verification/1.1.1. Previous draft assets must be replaced with this build before publication.
+
+## Release 1.1.2: terminal typeahead
+
+- Reproduced duplicate echo on macOS with an existing workspace history: input entered during compilation was displayed once immediately and again when the program read it. zsh 5.9's `read -d` temporarily changes the controlling terminal even when reading a redirected history file.
+- Replaced history reads with native zsh file loading and NUL field splitting. Program stdin and terminal modes remain untouched; newline-containing paths and empty interpreter arguments survive. Unterminated records fail explicitly, and the existing argument limit remains enforced.
+- Added 15 regressions with a controlling PTY and an explicit compilation/launch gate: complete and partial lines, multiline paste, early/late input, source/binary recall, measured/repeated runs, failed/cancelled compilation, and history validation. Four key cases fail on the original 1.1.1 script with the exact duplicate echo and pass with the fix.
+- Updated the CLI contract, generated-script version and CI regression step. Full source verification passed 522 tests in 349.993 s; the extracted archive passed the same 522 tests in 346.375 s, with no skips. Real GCC/Clang terminal checks and 33 documented commands passed. All 29 local Markdown links/anchors validate. Four-platform CI remains the publication gate; published evidence belongs to the 1.1.2 release notes.
