@@ -54,6 +54,31 @@ class WorkspacePathsTest(unittest.TestCase):
         self.assertFalse((self.cwd / 'out.txt').exists())
         self.assertFalse((self.cwd / 'test_out').exists())
 
+    def test_nearest_workspace_and_explicit_overrides(self):
+        outer = self.cwd / 'contest'
+        inner = outer / 'round one'
+        task = inner / 'A'
+        task.mkdir(parents=True)
+        source = task / 'solution.cpp'
+        source.write_text('int main() {}')
+        self.configure(f'workspaces\nmain {outer}\nadd {inner}\nsave\ny\n')
+        self.assertEqual(self.data()['EXTRA_WORKSPACES'], [str(inner)])
+        for flags, expected in [
+            ([], inner), (['--main-wsp'], outer), (['--main-wsp='], outer),
+            (['--main-wsp', str(inner)], inner), ([f'--main-wsp={outer}'], outer),
+        ]:
+            with self.subTest(flags=flags):
+                result = self.invoke('compile', source, *flags)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(Path(result.stdout.strip()), (expected / 'solution.out').resolve())
+        unknown = self.invoke('compile', source, '--main-wsp', task, '-o', 'bad.out')
+        self.assertNotEqual(unknown.returncode, 0)
+        self.assertIn('not in the saved list', unknown.stderr)
+        self.assertFalse((self.cwd / 'bad.out').exists())
+        outside = self.invoke('compile', self.source)
+        self.assertIn('no saved workspace', outside.stderr)
+        self.assertEqual(self.invoke('compile', self.source, '--main-wsp').returncode, 0)
+
     def test_redirection_and_explicit_cli_paths(self):
         workspace = self.cwd
         (workspace / 'data').mkdir()

@@ -18,6 +18,7 @@ main() {
     local DEFAULT_SOURCE=$DEFAULT_SOURCE C_SOURCE=$C_SOURCE PYTHON_SOURCE=$PYTHON_SOURCE
     local language=c++ primary_language=c++ interpreter= interpreter_choice=$DEFAULT_INTERPRETER language_choice=$DEFAULT_LANGUAGE
     local action=ordinary source_file= compiler_choice=$DEFAULT_COMPILER family= compiler= compiler_banner= profile=none
+    local main_wsp= main_wsp_given=0
     local workspace_dir=$DEFAULT_WORKSPACE workspace_name= destination=$DEFAULT_DESTINATION workspace= workspace_prefix=
     local output= output_dir= output_name= output_abs= planned_source= planned_output= resolved_binary= auto_standard=
     local input_file=$DEFAULT_INPUT result_file=$DEFAULT_OUTPUT answer_file=$DEFAULT_ANSWER report_file=$DEFAULT_REPORT
@@ -51,6 +52,10 @@ main() {
     # explicit run modifier permits runtime I/O, observation and execution.
     if [[ $action == compile || $action == debug && $debug_run == 0 ]]; then compile_only=1; fi
     if (( help_requested )); then show_help; return; fi
+    if (( main_wsp_given )); then
+        (( ! dir_given && ! name_given )) || fail '--main-wsp conflicts with --wsp-dir and --wsp-name'
+        resolve_workspace_root
+    fi
     if [[ $action == configure ]]; then
         (( argument_count == 1 )) || fail 'use cp-run configure on its own'
         embedded_python settings "$SCRIPT_PATH"; return $?
@@ -172,6 +177,9 @@ main() {
         [[ $value == <-> && ${#value} -le 12 ]] && (( 10#$value > 0 )) || fail "$option_name requires a positive integer (up to 12 digits) or inf"
     done
     cwd=$(pwd -P) || fail 'cannot resolve the current directory' 1
+    if (( ${#EXTRA_WORKSPACES} && ! binary_mode )) && [[ -z $source_file && $action != (pack|unpack|companion) ]]; then
+        select_source
+    fi
     # Expand only file roles used by this operation; unused preferences must
     # not turn a direct run/-o invocation into a workspace lookup.
     if [[ -n $source_file ]]; then workspace_file_path "$source_file"; source_file=$value; fi

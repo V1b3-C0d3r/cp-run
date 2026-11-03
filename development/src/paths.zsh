@@ -6,7 +6,32 @@ resolve_workspace_root() {
     if (( name_given )); then
         case "$workspace_name" in ''|.|..|*/*) fail 'workspace name must be one nonempty directory name' ;; esac
     fi
-    if (( dir_given || ! name_given )); then
+    if (( main_wsp_given )) && [[ -z $main_wsp ]]; then
+        [[ -d $DEFAULT_WORKSPACE && -x $DEFAULT_WORKSPACE ]] || fail "workspace directory is not accessible: $DEFAULT_WORKSPACE" 1
+        workspace=${DEFAULT_WORKSPACE:P}
+    elif (( main_wsp_given || ${#EXTRA_WORKSPACES} && ! dir_given && ! name_given )); then
+        local root ancestor
+        local -a roots=("$DEFAULT_WORKSPACE" "${EXTRA_WORKSPACES[@]}") available=()
+        for root in "${roots[@]}"; do
+            [[ -d $root && -x $root ]] && available+=("${root:P}")
+        done
+        if (( main_wsp_given )); then
+            requested=$main_wsp
+            [[ -d $requested && -x $requested ]] || fail "workspace directory is not accessible: $requested" 1
+            workspace=${requested:P}
+            (( ${available[(Ie)$workspace]} )) || fail "workspace is not in the saved list: $requested"
+        else
+            ancestor=${cwd:A}
+            if [[ -n $source_file && $source_file != - && $source_file != *'{wsp-dir}'* ]]; then
+                ancestor=${source_file:h:P}
+            fi
+            while ! (( ${available[(Ie)$ancestor]} )); do
+                [[ $ancestor != / ]] || fail 'no saved workspace contains this file or directory; use --main-wsp' 1
+                ancestor=${ancestor:h}
+            done
+            workspace=$ancestor
+        fi
+    elif (( dir_given || ! name_given )); then
         requested=$workspace_dir
         case "$requested" in
             .|./|"$cwd"|"$cwd"/) workspace=${cwd:A} ;;

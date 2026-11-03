@@ -99,6 +99,7 @@ Python profiles enable interpreter diagnostics, not native sanitizers or a debug
 
 | Option | Meaning |
 | --- | --- |
+| `--main-wsp[=DIR]` | Skip ancestor search. Without DIR, use the first saved root. With DIR, require a saved root. A space before DIR also works. |
 | `--wsp-dir=DIR` | Absolute or invocation-relative workspace; factory `./`. A value is required. |
 | `--wsp-name=NAME` | Alone: search ancestor directory names. With explicit `--wsp-dir`: verify its basename. No default name. |
 | `--dest-dir=DIR` | Workspace-relative **artifact** directory; factory `./`, with a separate `test=mult` default of `tests`. Does not choose the test-data folder. |
@@ -107,6 +108,8 @@ Python profiles enable interpreter diagnostics, not native sanitizers or a debug
 | `--find=NAME` | With omitted run target: look under artifact destination and optional invocation subtree. NAME and NAME.out are equivalent; ambiguity is an error. |
 | `--out=FILE` | Raw program stdout for checks or auto-mode `-f`; factory `out.txt`. Distinct from binary `-o`. |
 | `--test-f=DIR` | One task's numbered sample folder; factory `{wsp-dir}/tests`. Used by mult, Companion, pack and unpack. |
+
+**Multiple workspaces.** Open `cp-run configure` → `workspaces`. Use `main PATH` to set the first root and `add PATH` for each additional root. Paths with spaces need no quotes in the menu. Prefer absolute paths; relative roots are interpreted from the invocation directory. With additional roots configured, compilation walks up from the source directory and picks the closest saved root. With no source (for example, `run --find`) the walk starts in the current directory. A workspace-prefixed source also starts there. If the walk finds nothing, use `cp-run compile solution.cpp --main-wsp` or select a saved root with `--main-wsp=/path/to/root`. A single configured root retains the previous fixed-directory behavior. Explicit `--wsp-dir` and `--wsp-name` keep their own routing and cannot be combined with `--main-wsp`.
 
 Artifact settings resolve independently: **explicit CLI → profile override → operation/submode override → global fallback → factory**. Missing map entries inherit; explicit 0 disables a saved boolean. Edit them in **advanced → Build destinations**. `--find` with `--save-relpath` searches `workspace/destination/relative-path/NAME[.out]`.
 

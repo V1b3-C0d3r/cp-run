@@ -125,3 +125,7 @@
 ## 1.2.0 — Task-based settings
 
 The first screen groups everyday file, profile and tool settings and keeps detailed controls under Advanced. Saving reviews only the changes. Existing numeric shortcuts and long transfer flags remain available. Short --export and --import forms use the same validated JSON transfer. --save-relpath now uses the normal build destination; older exports drop only the obsolete separate destination during this migration.
+
+## 1.3.0 — Multiple workspaces
+
+Settings can store additional workspace roots. Compilation selects the nearest saved ancestor of the source; `--main-wsp[=DIR]` selects a saved root explicitly. Existing single-root settings retain their fixed destination.

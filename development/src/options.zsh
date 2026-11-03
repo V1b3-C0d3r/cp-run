@@ -51,6 +51,7 @@ Language and build:
 
 Routing and checking:
   --wsp-dir=DIR           Workspace path; default ./; value is required
+  --main-wsp[=DIR]        Use the first saved workspace, or a specified saved root
   --wsp-name=NAME         Search ancestors, or check an explicit workspace
   --dest-dir=DIR          Workspace-relative destination; action/profile configurable
   --save-relpath[=0|1]    Preserve artifact subtree; bare means 1
@@ -282,6 +283,11 @@ parse_cli() {
                     --test-iters*) num_test=$value ;;
                     --seed*) seed=$value ;;
                 esac ;;
+            --main-wsp|--main-wsp=*)
+                main_wsp_given=1; main_wsp=
+                if [[ $arg == *=* ]]; then main_wsp=${arg#*=}
+                elif (( $# )) && [[ $1 != -* ]]; then main_wsp=$1; shift
+                fi ;;
             --save-relpath|--save-relpath=*)
                 if [[ $arg == *=* ]]; then value=${arg#*=}
                 elif (( $# )) && [[ $1 == 0 || $1 == 1 ]]; then value=$1; shift

@@ -8,7 +8,7 @@
 emulate -LR zsh
 setopt NO_UNSET PIPE_FAIL EXTENDED_GLOB
 unsetopt ALIASES
-typeset -r PROGRAM=cp-run VERSION=1.2.0
+typeset -r PROGRAM=cp-run VERSION=1.3.0
 typeset -r SCRIPT_PATH=${0:A} # Settings follow the real script when invoked through a symlink.
 
 # CP_RUN_SETTINGS_BEGIN
@@ -49,6 +49,7 @@ typeset -g DEFAULT_LINE_LIMIT=10000
 typeset -g DEFAULT_F_MODE=macro
 typeset -g DEFAULT_MACRO=FILEO
 typeset -g DEFAULT_WORKSPACE=.
+typeset -ga EXTRA_WORKSPACES=()
 typeset -g DEFAULT_DESTINATION=.
 typeset -g DEFAULT_BRUTE=brute.cpp
 typeset -g DEFAULT_GENERATOR=gen.cpp
@@ -147,6 +148,7 @@ Language and build:
 
 Routing and checking:
   --wsp-dir=DIR           Workspace path; default ./; value is required
+  --main-wsp[=DIR]        Use the first saved workspace, or a specified saved root
   --wsp-name=NAME         Search ancestors, or check an explicit workspace
   --dest-dir=DIR          Workspace-relative destination; action/profile configurable
   --save-relpath[=0|1]    Preserve artifact subtree; bare means 1
@@ -378,6 +380,11 @@ parse_cli() {
                     --test-iters*) num_test=$value ;;
                     --seed*) seed=$value ;;
                 esac ;;
+            --main-wsp|--main-wsp=*)
+                main_wsp_given=1; main_wsp=
+                if [[ $arg == *=* ]]; then main_wsp=${arg#*=}
+                elif (( $# )) && [[ $1 != -* ]]; then main_wsp=$1; shift
+                fi ;;
             --save-relpath|--save-relpath=*)
                 if [[ $arg == *=* ]]; then value=${arg#*=}
                 elif (( $# )) && [[ $1 == 0 || $1 == 1 ]]; then value=$1; shift
@@ -480,7 +487,32 @@ resolve_workspace_root() {
     if (( name_given )); then
         case "$workspace_name" in ''|.|..|*/*) fail 'workspace name must be one nonempty directory name' ;; esac
     fi
-    if (( dir_given || ! name_given )); then
+    if (( main_wsp_given )) && [[ -z $main_wsp ]]; then
+        [[ -d $DEFAULT_WORKSPACE && -x $DEFAULT_WORKSPACE ]] || fail "workspace directory is not accessible: $DEFAULT_WORKSPACE" 1
+        workspace=${DEFAULT_WORKSPACE:P}
+    elif (( main_wsp_given || ${#EXTRA_WORKSPACES} && ! dir_given && ! name_given )); then
+        local root ancestor
+        local -a roots=("$DEFAULT_WORKSPACE" "${EXTRA_WORKSPACES[@]}") available=()
+        for root in "${roots[@]}"; do
+            [[ -d $root && -x $root ]] && available+=("${root:P}")
+        done
+        if (( main_wsp_given )); then
+            requested=$main_wsp
+            [[ -d $requested && -x $requested ]] || fail "workspace directory is not accessible: $requested" 1
+            workspace=${requested:P}
+            (( ${available[(Ie)$workspace]} )) || fail "workspace is not in the saved list: $requested"
+        else
+            ancestor=${cwd:A}
+            if [[ -n $source_file && $source_file != - && $source_file != *'{wsp-dir}'* ]]; then
+                ancestor=${source_file:h:P}
+            fi
+            while ! (( ${available[(Ie)$ancestor]} )); do
+                [[ $ancestor != / ]] || fail 'no saved workspace contains this file or directory; use --main-wsp' 1
+                ancestor=${ancestor:h}
+            done
+            workspace=$ancestor
+        fi
+    elif (( dir_given || ! name_given )); then
         requested=$workspace_dir
         case "$requested" in
             .|./|"$cwd"|"$cwd"/) workspace=${cwd:A} ;;
@@ -1298,6 +1330,7 @@ main() {
     local DEFAULT_SOURCE=$DEFAULT_SOURCE C_SOURCE=$C_SOURCE PYTHON_SOURCE=$PYTHON_SOURCE
     local language=c++ primary_language=c++ interpreter= interpreter_choice=$DEFAULT_INTERPRETER language_choice=$DEFAULT_LANGUAGE
     local action=ordinary source_file= compiler_choice=$DEFAULT_COMPILER family= compiler= compiler_banner= profile=none
+    local main_wsp= main_wsp_given=0
     local workspace_dir=$DEFAULT_WORKSPACE workspace_name= destination=$DEFAULT_DESTINATION workspace= workspace_prefix=
     local output= output_dir= output_name= output_abs= planned_source= planned_output= resolved_binary= auto_standard=
     local input_file=$DEFAULT_INPUT result_file=$DEFAULT_OUTPUT answer_file=$DEFAULT_ANSWER report_file=$DEFAULT_REPORT
@@ -1331,6 +1364,10 @@ main() {
     # explicit run modifier permits runtime I/O, observation and execution.
     if [[ $action == compile || $action == debug && $debug_run == 0 ]]; then compile_only=1; fi
     if (( help_requested )); then show_help; return; fi
+    if (( main_wsp_given )); then
+        (( ! dir_given && ! name_given )) || fail '--main-wsp conflicts with --wsp-dir and --wsp-name'
+        resolve_workspace_root
+    fi
     if [[ $action == configure ]]; then
         (( argument_count == 1 )) || fail 'use cp-run configure on its own'
         embedded_python settings "$SCRIPT_PATH"; return $?
@@ -1452,6 +1489,9 @@ main() {
         [[ $value == <-> && ${#value} -le 12 ]] && (( 10#$value > 0 )) || fail "$option_name requires a positive integer (up to 12 digits) or inf"
     done
     cwd=$(pwd -P) || fail 'cannot resolve the current directory' 1
+    if (( ${#EXTRA_WORKSPACES} && ! binary_mode )) && [[ -z $source_file && $action != (pack|unpack|companion) ]]; then
+        select_source
+    fi
     # Expand only file roles used by this operation; unused preferences must
     # not turn a direct run/-o invocation into a workspace lookup.
     if [[ -n $source_file ]]; then workspace_file_path "$source_file"; source_file=$value; fi
@@ -4119,7 +4159,7 @@ FACTORY_SETTINGS = {
     'COMPANION_PORT': '27122', 'COMPANION_WAIT': '120',
     'MINIMIZE_ATTEMPTS': '200', 'MINIMIZE_SECONDS': '30', 'MAX_FAILURES': '10',
     'DEFAULT_LINE_LIMIT': '10000', 'DEFAULT_F_MODE': 'macro',
-    'DEFAULT_MACRO': 'FILEO', 'DEFAULT_WORKSPACE': '.',
+    'DEFAULT_MACRO': 'FILEO', 'DEFAULT_WORKSPACE': '.', 'EXTRA_WORKSPACES': [],
     'DEFAULT_DESTINATION': '.',
     'DEFAULT_BRUTE': 'brute.cpp', 'DEFAULT_GENERATOR': 'gen.cpp',
     'DEFAULT_ITERATIONS': '1000', 'DEFAULT_SEED': '4',
@@ -4744,6 +4784,34 @@ def _settings_finish(filename, original, initial, editor):
     return 0
 
 
+def _settings_workspaces(editor):
+    with editor.scope(['DEFAULT_WORKSPACE', 'EXTRA_WORKSPACES']):
+        while True:
+            roots = [editor.data['DEFAULT_WORKSPACE'], *editor.data['EXTRA_WORKSPACES']]
+            for i, root in enumerate(roots, 1):
+                print('  {}. {}{}'.format(i, root, ' (main)' if i == 1 else ''))
+            command = editor.ask('workspaces> [main PATH / add PATH / remove NUMBER / back]: ')
+            if command is None:
+                continue
+            if command in ('', 'back'):
+                return
+            action, _, path = command.partition(' ')
+            path = path.strip()
+            if action == 'remove' and path.isdecimal() and 2 <= int(path) <= len(roots):
+                del roots[int(path) - 1]
+                editor.set('EXTRA_WORKSPACES', roots[1:])
+            elif action in ('add', 'main') and path and '{wsp-dir}' not in path:
+                path = os.path.expanduser(path)
+                if path in (roots if action == 'add' else roots[1:]):
+                    raise ValueError('workspace is already listed')
+                if action == 'main':
+                    editor.set('DEFAULT_WORKSPACE', path)
+                else:
+                    editor.set('EXTRA_WORKSPACES', [*roots[1:], path])
+            else:
+                print('Set the first path with main, add another path, or remove a number from 2 onward.')
+
+
 def edit_settings(script_path):
     """Enter a pipe-testable menu; EOF/cancellation never writes preferences."""
     filename = Path(script_path).resolve()
@@ -4791,6 +4859,7 @@ def edit_settings(script_path):
         while True:
             print('\ncp-run settings')
             print('  files      Input, answers and sample folder')
+            print('  workspaces Choose the main workspace and add other roots')
             print('  profiles   Create or edit build profiles')
             print('  tools      Choose language, compiler and interpreter')
             print('  advanced   Paths, build options, checks and measurements')
@@ -4814,6 +4883,9 @@ def edit_settings(script_path):
                         choice = sections[int(choice) - 1][1]
                     if choice in ('', 'back'):
                         continue
+                elif choice == 'workspaces':
+                    _settings_workspaces(editor)
+                    continue
                 elif choice == 'files':
                     _settings_fields(editor, 'Files', [
                         ('DEFAULT_INPUT', 'Read input from', _settings_file_path),
@@ -5035,7 +5107,10 @@ def validate_preferences(values):
         if not data[key]: raise ValueError('empty setting: ' + key)
     for key in ('DEFAULT_INPUT', 'DEFAULT_OUTPUT', 'DEFAULT_ANSWER', 'DEFAULT_REPORT'):
         _settings_file_path(data[key])
-    if '{wsp-dir}' in data['DEFAULT_WORKSPACE']:
+    roots = [data['DEFAULT_WORKSPACE'], *data['EXTRA_WORKSPACES']]
+    if not all(roots) or len(roots) != len(set(roots)):
+        raise ValueError('workspace paths must be nonempty and distinct')
+    if any('{wsp-dir}' in root for root in roots):
         raise ValueError('workspace path cannot refer to itself with {wsp-dir}')
     # Optional map entries inherit; an explicit zero remains a real override.
     actions = {'ordinary', 'compile', 'debug', 'run', 'test', 'test-auto', 'test-mult', 'stress', 'companion'}

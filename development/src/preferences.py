@@ -60,7 +60,10 @@ def validate_preferences(values):
         if not data[key]: raise ValueError('empty setting: ' + key)
     for key in ('DEFAULT_INPUT', 'DEFAULT_OUTPUT', 'DEFAULT_ANSWER', 'DEFAULT_REPORT'):
         _settings_file_path(data[key])
-    if '{wsp-dir}' in data['DEFAULT_WORKSPACE']:
+    roots = [data['DEFAULT_WORKSPACE'], *data['EXTRA_WORKSPACES']]
+    if not all(roots) or len(roots) != len(set(roots)):
+        raise ValueError('workspace paths must be nonempty and distinct')
+    if any('{wsp-dir}' in root for root in roots):
         raise ValueError('workspace path cannot refer to itself with {wsp-dir}')
     # Optional map entries inherit; an explicit zero remains a real override.
     actions = {'ordinary', 'compile', 'debug', 'run', 'test', 'test-auto', 'test-mult', 'stress', 'companion'}

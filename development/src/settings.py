@@ -511,6 +511,34 @@ def _settings_finish(filename, original, initial, editor):
     return 0
 
 
+def _settings_workspaces(editor):
+    with editor.scope(['DEFAULT_WORKSPACE', 'EXTRA_WORKSPACES']):
+        while True:
+            roots = [editor.data['DEFAULT_WORKSPACE'], *editor.data['EXTRA_WORKSPACES']]
+            for i, root in enumerate(roots, 1):
+                print('  {}. {}{}'.format(i, root, ' (main)' if i == 1 else ''))
+            command = editor.ask('workspaces> [main PATH / add PATH / remove NUMBER / back]: ')
+            if command is None:
+                continue
+            if command in ('', 'back'):
+                return
+            action, _, path = command.partition(' ')
+            path = path.strip()
+            if action == 'remove' and path.isdecimal() and 2 <= int(path) <= len(roots):
+                del roots[int(path) - 1]
+                editor.set('EXTRA_WORKSPACES', roots[1:])
+            elif action in ('add', 'main') and path and '{wsp-dir}' not in path:
+                path = os.path.expanduser(path)
+                if path in (roots if action == 'add' else roots[1:]):
+                    raise ValueError('workspace is already listed')
+                if action == 'main':
+                    editor.set('DEFAULT_WORKSPACE', path)
+                else:
+                    editor.set('EXTRA_WORKSPACES', [*roots[1:], path])
+            else:
+                print('Set the first path with main, add another path, or remove a number from 2 onward.')
+
+
 def edit_settings(script_path):
     """Enter a pipe-testable menu; EOF/cancellation never writes preferences."""
     filename = Path(script_path).resolve()
@@ -558,6 +586,7 @@ def edit_settings(script_path):
         while True:
             print('\ncp-run settings')
             print('  files      Input, answers and sample folder')
+            print('  workspaces Choose the main workspace and add other roots')
             print('  profiles   Create or edit build profiles')
             print('  tools      Choose language, compiler and interpreter')
             print('  advanced   Paths, build options, checks and measurements')
@@ -581,6 +610,9 @@ def edit_settings(script_path):
                         choice = sections[int(choice) - 1][1]
                     if choice in ('', 'back'):
                         continue
+                elif choice == 'workspaces':
+                    _settings_workspaces(editor)
+                    continue
                 elif choice == 'files':
                     _settings_fields(editor, 'Files', [
                         ('DEFAULT_INPUT', 'Read input from', _settings_file_path),
