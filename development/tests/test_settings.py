@@ -79,6 +79,22 @@ class SettingsTest(unittest.TestCase):
         self.assertEqual(native, settings.FACTORY_SETTINGS)
         self.assertEqual(settings.read_settings(settings.settings_text(native)), native)
 
+    def test_task_menu_and_portable_settings(self):
+        edited = self.configure('files\n1\ncontest.in\nsave\ny\n')
+        self.assertEqual(edited.returncode, 0, edited.stderr)
+        record = self.cwd / 'prefs.json'
+        result = self.invoke('--export', record)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        data = json.loads(record.read_text())
+        self.assertEqual(data['settings']['DEFAULT_INPUT'], 'contest.in')
+        data['settings']['DEFAULT_RELPATH_DESTINATION'] = 'old-build'
+        data['settings']['DEFAULT_DESTINATION'] = 'build'
+        record.write_text(json.dumps(data))
+        result = self.invoke('--import=' + str(record))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn('DEFAULT_RELPATH_DESTINATION', self.data())
+        self.assertEqual(self.data()['DEFAULT_DESTINATION'], 'build')
+
     def test_menu_cancel_eof_and_declined_save_leave_copy_identical(self):
         original = self.script.read_bytes()
         for commands in ('1\n3\n-O0\ncancel\n', '1\n1\nclang\n',
@@ -89,7 +105,7 @@ class SettingsTest(unittest.TestCase):
     def test_saved_standard_and_flags_reach_public_compilation(self):
         result = self.configure('1\n2\n20\n3\n-O0 -g\nsave\ny\n')
         self.assertIn('Review pending changes', result.stdout)
-        self.assertIn('-std=c++20', result.stdout)
+        self.assertIn("DEFAULT_STANDARD: 'auto' -> '20'", result.stdout)
         argv = self.build()
         self.assertIn('-std=c++20', argv)
         self.assertIn('-O0', argv)
@@ -195,20 +211,19 @@ class SettingsTest(unittest.TestCase):
             self.assertEqual(self.script.read_bytes(), original)
 
     def test_saved_destinations_apply_to_their_routes_and_explicit_dest_wins(self):
-        self.configure('2\n3\nflat\n10\ntree\nsave\ny\n')
-        for flags, destination in (((), 'flat'), (('--save-relpath',), 'tree'),
+        self.configure('advanced\n2\n3\nflat\nsave\ny\n')
+        for flags, destination in (((), 'flat'), (('--save-relpath',), 'flat'),
                                    (('--save-relpath', '--dest-dir=chosen'), 'chosen')):
             result = self.invoke('compile', *flags)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(Path(result.stdout.strip()), (self.cwd / destination / 'main.out').resolve())
 
-    def test_both_destination_editors_reject_invalid_relative_paths(self):
+    def test_destination_editor_rejects_invalid_relative_paths(self):
         original = self.script.read_bytes()
-        for field in ('3', '10'):
-            for path in ('/absolute', '../outside', 'a/../b'):
-                result = self.configure('2\n' + field + '\n' + path + '\ncancel\n')
-                self.assertIn('Not changed', result.stdout)
-                self.assertEqual(self.script.read_bytes(), original)
+        for path in ('/absolute', '../outside', 'a/../b'):
+            result = self.configure('advanced\n2\n3\n' + path + '\ncancel\n')
+            self.assertIn('Not changed', result.stdout)
+            self.assertEqual(self.script.read_bytes(), original)
 
     def test_create_guarded_profile_copy_and_remove_it(self):
         self.configure('5\nnew contest debug\nflags\n-O0\nsave\ny\n')

@@ -83,7 +83,7 @@ Measurements (program execution, excluding compilation):
 
 Information and preferences:
   --doctor                Check required/optional tools without installing anything
-  --export-settings=FILE, --import-settings=FILE Portable data-only preferences
+  --export FILE / --import FILE   Back up or restore settings as JSON
   --help, --version       Show help / cp-run and compiler versions
 
 Required values accept '=' or a separate operand: --wsp-dir DIR, -std 23.
@@ -243,10 +243,10 @@ parse_cli() {
                 select_operation_alias "$arg" ;;
             --set-default|--set-default=*|--set-defaults|--set-defaults=*) fail 'use cp-run configure' ;;
             --pack|--pack=*|--unpack|--unpack=*) fail 'use cp-run pack or cp-run unpack' ;;
-            --export-settings|--export-settings=*|--import-settings|--import-settings=*)
+            --export|--export=*|--import|--import=*|--export-settings|--export-settings=*|--import-settings|--import-settings=*)
                 [[ -z $transfer_action ]] || fail 'select one settings transfer action'
                 take_value "$@"; (( ! consumed )) || shift
-                transfer_path=$value; transfer_action=${arg#--}; transfer_action=${transfer_action%%-*} ;;
+                transfer_path=$value; transfer_action=${arg#--}; transfer_action=${transfer_action%%[-=]*} ;;
             --warm-up|--warm-up=*|--average|--average=*)
                 measurement_controls=1
                 if [[ $arg == *=* ]]; then value=${arg#*=}

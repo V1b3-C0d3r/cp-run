@@ -58,7 +58,7 @@ Explicit FILE selects its language: `.c` is C; `.py` is Python; `.cpp`, `.cc`, `
 2. Use its sole source; with several sources, use its saved fallback (`main.cpp`, `main.c` or `main.py`). Otherwise request FILE.
 3. If that language is absent, use the sole supported source or a unique saved fallback across languages. `--language=auto` starts here.
 
-Stress discovers `brute` and `gen`, preferring the candidate's language. Explicit roles may mix languages. Under **`cp-run configure` → Languages & tools → Language/compiler defaults**, select the discovery preference, separate C/C++ compiler families and Python interpreter. An explicit `--compiler` applies to every native role.
+Stress discovers `brute` and `gen`, preferring the candidate's language. Explicit roles may mix languages. Under **`cp-run configure` → tools**, select the discovery preference, separate C/C++ compiler families and Python interpreter. An explicit `--compiler` applies to every native role.
 
 **History:** FILE `-` recalls the workspace's last source or launched target. `./-` is a literal filename. Failed compilation does not replace source history. Python target history retains interpreter arguments; new `--interpreter-arg` values are appended before the source. An explicit new interpreter uses the current interpreter defaults.
 
@@ -102,15 +102,15 @@ Python profiles enable interpreter diagnostics, not native sanitizers or a debug
 | `--wsp-dir=DIR` | Absolute or invocation-relative workspace; factory `./`. A value is required. |
 | `--wsp-name=NAME` | Alone: search ancestor directory names. With explicit `--wsp-dir`: verify its basename. No default name. |
 | `--dest-dir=DIR` | Workspace-relative **artifact** directory; factory `./`, with a separate `test=mult` default of `tests`. Does not choose the test-data folder. |
-| `--save-relpath[=0\|1]` | Preserve source-parent subtree below artifact destination; bare means 1. |
+| `--save-relpath[=0\|1]` | Append the source directory relative to the workspace to the selected build destination. For example, `src/A/main.cpp` under `--dest-dir=bin --save-relpath` builds in `bin/src/A/`. |
 | `-o PATH`, `-oPATH`, `--output=PATH` | Exact native artifact path; bypass unused artifact workspace/destination settings. |
 | `--find=NAME` | With omitted run target: look under artifact destination and optional invocation subtree. NAME and NAME.out are equivalent; ambiguity is an error. |
 | `--out=FILE` | Raw program stdout for checks or auto-mode `-f`; factory `out.txt`. Distinct from binary `-o`. |
 | `--test-f=DIR` | One task's numbered sample folder; factory `{wsp-dir}/tests`. Used by mult, Companion, pack and unpack. |
 
-Artifact settings resolve independently: **explicit CLI → profile override → operation/submode override → global fallback → factory**. Missing map entries inherit; explicit 0 disables a saved boolean. Edit them in **Action/profile routing**. `--find` with `--save-relpath` searches `workspace/destination/relative-path/NAME[.out]`.
+Artifact settings resolve independently: **explicit CLI → profile override → operation/submode override → global fallback → factory**. Missing map entries inherit; explicit 0 disables a saved boolean. Edit them in **advanced → Build destinations**. `--find` with `--save-relpath` searches `workspace/destination/relative-path/NAME[.out]`.
 
-**Test storage is simpler:** `--test-f` overrides **Test files & integrations → Test folder**. It never inherits binary routing or adds source subdirectories. Relative folders start at the invocation directory; absolute paths work. `{wsp-dir}/tasks/A/tests` starts at the workspace; `{wsp-dir}` alone selects its root. Filenames are always `inN.txt` and `ansN.txt`, starting at 1. They cannot be configured.
+**Numbered samples.** `--test-f` overrides **files → Numbered sample folder**. It never inherits binary routing or adds source subdirectories. Relative folders start at the invocation directory; absolute paths work. `{wsp-dir}/tasks/A/tests` starts at the workspace; `{wsp-dir}` alone selects its root. Filenames are always `inN.txt` and `ansN.txt`, starting at 1. They cannot be configured.
 
 ## Workspace-rooted file preferences
 
@@ -124,7 +124,7 @@ Use the literal prefix **`{wsp-dir}/`** in saved filenames or explicit file oper
 | Test/stress report | `{wsp-dir}/results/test_out` |
 | Numbered test folder | `{wsp-dir}/tasks/A/tests` |
 
-Edit file roles in **`cp-run configure` → Files**, and the numbered folder in **Test files & integrations**. C/Python fallbacks and stress roles accept the same prefix. Without it, relative files start at the invocation directory. Ordinary input/output/report parent directories must exist; data imports and pack/unpack create their output directories.
+Edit file roles in **`cp-run configure` → Files**, including the numbered sample folder. C/Python fallbacks and stress roles accept the same prefix. Without it, relative files start at the invocation directory. Ordinary input/output/report parent directories must exist; data imports and pack/unpack create their output directories.
 
 The token is literal data: put it at the beginning and quote it in shell commands. Parent escapes and symlinks escaping an anchored workspace are rejected. No source-stem or per-test filename placeholders are supported.
 
@@ -136,42 +136,22 @@ cp-run test=mult main.cpp --test-f='{wsp-dir}/tasks/A/tests' --cout
 
 ## File I/O
 
-**`-f` takes no mode value.** `--file-io` is its full alias; both use the saved action. Without either flag, ordinary execution keeps console stdin/stdout.
+By default the program inherits terminal stdin and stdout. You can type during compilation. To use files, choose what `-f` means in **configure → files → File I/O**.
 
-You can type or paste terminal input while compilation is still running. On a successful build, the queued bytes reach the program without an extra echo from cp-run, including a line started during compilation and completed after launch. Normal terminal echo and line editing remain enabled.
-
-Choose the action with **`cp-run configure` → Files → Bare -f action**:
-
-| Saved action | What `-f` does |
+| Setting | What happens on `cp-run main.cpp -f` |
 | --- | --- |
-| `macro` (factory) | Add `-DFILEO` when compiling C/C++; the program owns its I/O. Python and existing binaries cannot use this compilation action. |
-| `auto` | Redirect stdin/stdout using saved Input/Program output files, factory `in.txt`/`out.txt`. Works with sources and existing targets. |
+| `macro` (factory) | Add `-DFILEO` when compiling. Your C/C++ source opens the files. |
+| `auto` | Connect stdin to `in.txt` and stdout to `out.txt`. Works for C, C++, Python and existing executables. |
 
-The macro identifier is editable in the same menu. No `-f=auto`, `-f=manual`, `-f=in` or other attached value is accepted. `auto`/`macro` are **settings**, not positional mode keywords. Save the choice once; later invocations need only `-f`.
-
-With the factory macro setting:
+In auto mode, pass filenames immediately after the flag:
 
 ```sh
-cp-run main.cpp -f                    # Compile with -DFILEO, then run
-cp-run compile main.c --file-io       # Compile with -DFILEO without running
+cp-run main.py -f sample.in result.txt  # Choose both files
+cp-run main.py -f --cout                # Read the input file and print to terminal
+cp-run main.py -f --cin --out=mine.txt  # Type input and save the output
 ```
 
-**After choosing auto in configure:**
-
-```sh
-cp-run main.py -f                     # Read in.txt; write out.txt
-cp-run main.py -f data.in data.out    # Override both filenames
-cp-run run ./main.out --file-io       # Apply saved auto to an existing target
-cp-run main.py -f --cout              # Read input file; stdout goes to console
-cp-run main.py -f --cin                # Console stdin; save stdout to output file
-cp-run main.py -f --cin --out=chosen.txt
-```
-
-Auto accepts optional IN and OUT filenames directly after `-f`; another option or `--` ends these operands. One filename replaces IN; two replace IN and OUT. FILE precedes wrapper options or is discovered. A word such as `auto` after `-f` is a literal filename in saved-auto mode, never a mode selector.
-
-`--cin` and `--cout` may override **one** stream in auto. Both together with `-f` are an error. Either switch with macro is an error. Optional filenames keep their IN/OUT slots even when a side is overridden; that side's filename is unused. `--out=FILE` sets the output path without filling the unused input slot.
-
-Input redirection uses file descriptors, not source changes. A missing input is an execution/open error. Output cannot overwrite another protected file role. Test/stress own I/O and reject `-f`; their existing `--cin`/`--cout` meanings are described in [testing](TESTING.md#console-input).
+One filename overrides input, two override input and output. Only one stream can be switched back to the console. `--file-io` is an alias for `-f`. Test and stress commands manage their own streams; see [console tests](TESTING.md#console-input).
 
 ## Measurements and limits
 
@@ -195,22 +175,7 @@ A nominal violation produces TLE/MLE, even if execution finishes before the kill
 
 ## Pack and unpack
 
-**The folder contains individual tests. The two bundle files contain their inputs and answers.** Pack reads the folder; unpack writes it. No source file or compiler is needed.
-
-```sh
-cp-run pack                               # tests/ → saved in.txt and ans.txt
-cp-run pack samples.in samples.ans         # Override both bundle filenames
-cp-run unpack samples.in samples.ans --test-f=restored
-cp-run pack custom.in                      # Override IN only; ANS stays saved default
-cp-run pack=in inputs.bundle               # Inputs only
-cp-run unpack=ans answers.bundle --test-f=tests
-```
-
-Without a selector, process both streams: first operand is IN, second is ANS. Omitted operands use the saved **Input** and **Answer** filenames, including workspace prefixes. With `=in` or `=ans`, process only that stream and accept at most one filename, defaulting to that stream's saved filename. The command selector uses `=`; `pack in` means an input bundle literally named `in`, plus the default answer bundle.
-
-Both streams must have matching case IDs/counts. Sparse folder IDs are packed in numeric order and renumbered 1..N; the mapping is printed. Bundles use one lossless, count-first format. `--sep` changes its delimiter, not filenames. Existing identical outputs are accepted; conflicting outputs need `--overwrite`. Unpack refuses stale extra cases even with overwrite; choose a clean folder. Validation failures leave both streams unchanged. Writes are individually atomic with rollback for handled failures, not crash-atomic across several files.
-
-[Exact file contents and a complete round trip](TESTING.md#pack-and-unpack).
+`cp-run pack samples.in samples.ans` collects numbered tests into two counted bundles. `cp-run unpack samples.in samples.ans --test-f=restored` restores those bytes to numbered files. Both commands operate on data and run without compiling. See [bundle format and overwrite rules](TESTING.md#pack-and-unpack).
 
 ## Test and integration options
 
@@ -233,18 +198,18 @@ See the [testing guide](TESTING.md) for each file's contents, separators, report
 
 ## Preferences
 
-`cp-run configure` edits settings embedded in the installed script. Choose a group, a field, then its value. Preview changes; use undo/reset, then explicitly save or cancel. Profile flag edits toggle matching flags: the same value removes, a changed value replaces, a new flag adds. `add FLAGS` / `remove FLAGS` make intent explicit.
+Run `cp-run configure` and enter a section name.
 
-Run `cp-run configure` on its own; extra options/files are rejected before tools run.
+| Section | Use it to |
+| --- | --- |
+| `files` | Choose input, expected answer, output, numbered sample folder and what `-f` does. |
+| `profiles` | Edit a named build or create one from a template. Use **flags** for shared options, **advanced** for compiler/library specifics, **preview** for the resulting combinations. |
+| `tools` | Choose the preferred source language, C/C++ compiler or Python interpreter. |
+| `advanced` | Set workspace and build paths, adjust limits, tune measurements or configure sample imports. |
 
-Groups cover build defaults, files, limits, warnings, profiles, stress, measurements, language tools, the fixed test folder/integrations and artifact routing. Do not edit JSON to use the menu.
+**Saving.** Edits stay in memory. `back` keeps pending edits, `undo` reverses one edit, `save` reviews and writes them to the installed script. `cancel` discards them.
 
-```sh
-cp-run --export-settings preferences.json
-cp-run --import-settings preferences.json
-```
-
-Transfers are validated data-only JSON, without shell evaluation or automatic config loading. Current exports use schema 3; schema 1/2 imports retain supported settings and fill new defaults. Old explicit test directories become workspace-rooted folders; old per-case templates and test-subtree settings are discarded. Existing `1.in`/`1.ans` files are not renamed automatically: rename to `in1.txt`/`ans1.txt`. Export personal settings before replacing the installed script. Rebuilding from modules restores factory settings; export/import around a rebuild to retain personal choices.
+**Moving settings.** Use `cp-run --export prefs.json` before upgrading and `cp-run --import prefs.json` afterwards. The longer `--export-settings` and `--import-settings` aliases still work. Imports validate JSON before replacing the settings. Older exports retain the ordinary build destination; the former separate destination for `--save-relpath` is ignored.
 
 ## Formatting
 
@@ -257,7 +222,7 @@ cp-run main.py --make-prettier=check   # Check style without editing; stop
 
 Both operate only on selected source files and **never compile, run or compare answers**. Omitted FILE uses source discovery; stress selects MAIN, BRUTE and GEN once each. Binary-only modes cannot format. `--make-prettier check`, empty values and the former `only`/`before` values are not supported. This optional value intentionally requires `=check`.
 
-C/C++ use [clang-format](https://clang.llvm.org/docs/ClangFormat.html), honoring `.clang-format` or otherwise LLVM style with include sorting disabled. Python uses [Ruff](https://docs.astral.sh/ruff/installation/) (`ruff format`), honoring project settings. [Black](https://black.readthedocs.io/en/stable/getting_started.html#installation) can be selected in **Languages & tools → Interpreter/source/standard/tools → Python formatter**.
+C/C++ use [clang-format](https://clang.llvm.org/docs/ClangFormat.html), honoring `.clang-format` or otherwise LLVM style with include sorting disabled. Python uses [Ruff](https://docs.astral.sh/ruff/installation/) (`ruff format`), honoring project settings. [Black](https://black.readthedocs.io/en/stable/getting_started.html#installation) can be selected in **advanced → Language and formatter options → Interpreter/source/standard/tools → Python formatter**.
 
 All required formatters are located before editing starts. Missing tools produce an installation hint. A later formatter failure may leave earlier files formatted. Backend/runtime arguments, output options and execution/measurement controls are incompatible. Formatter diagnostics go to stderr; stdout stays empty. Check returns nonzero when changes are required. Formatting does not lint, fix algorithms, optimize code or inject pragmas.
 

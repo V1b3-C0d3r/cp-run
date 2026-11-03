@@ -8,7 +8,7 @@
 emulate -LR zsh
 setopt NO_UNSET PIPE_FAIL EXTENDED_GLOB
 unsetopt ALIASES
-typeset -r PROGRAM=cp-run VERSION=1.1.2
+typeset -r PROGRAM=cp-run VERSION=1.2.0
 typeset -r SCRIPT_PATH=${0:A} # Settings follow the real script when invoked through a symlink.
 
 # CP_RUN_SETTINGS_BEGIN
@@ -50,7 +50,6 @@ typeset -g DEFAULT_F_MODE=macro
 typeset -g DEFAULT_MACRO=FILEO
 typeset -g DEFAULT_WORKSPACE=.
 typeset -g DEFAULT_DESTINATION=.
-typeset -g DEFAULT_RELPATH_DESTINATION=.
 typeset -g DEFAULT_BRUTE=brute.cpp
 typeset -g DEFAULT_GENERATOR=gen.cpp
 typeset -g DEFAULT_ITERATIONS=1000
@@ -180,7 +179,7 @@ Measurements (program execution, excluding compilation):
 
 Information and preferences:
   --doctor                Check required/optional tools without installing anything
-  --export-settings=FILE, --import-settings=FILE Portable data-only preferences
+  --export FILE / --import FILE   Back up or restore settings as JSON
   --help, --version       Show help / cp-run and compiler versions
 
 Required values accept '=' or a separate operand: --wsp-dir DIR, -std 23.
@@ -340,10 +339,10 @@ parse_cli() {
                 select_operation_alias "$arg" ;;
             --set-default|--set-default=*|--set-defaults|--set-defaults=*) fail 'use cp-run configure' ;;
             --pack|--pack=*|--unpack|--unpack=*) fail 'use cp-run pack or cp-run unpack' ;;
-            --export-settings|--export-settings=*|--import-settings|--import-settings=*)
+            --export|--export=*|--import|--import=*|--export-settings|--export-settings=*|--import-settings|--import-settings=*)
                 [[ -z $transfer_action ]] || fail 'select one settings transfer action'
                 take_value "$@"; (( ! consumed )) || shift
-                transfer_path=$value; transfer_action=${arg#--}; transfer_action=${transfer_action%%-*} ;;
+                transfer_path=$value; transfer_action=${arg#--}; transfer_action=${transfer_action%%[-=]*} ;;
             --warm-up|--warm-up=*|--average|--average=*)
                 measurement_controls=1
                 if [[ $arg == *=* ]]; then value=${arg#*=}
@@ -779,9 +778,6 @@ resolve_action_defaults() {
         destination=${MODE_DEST_DIR[$profile]-${ACTION_DEST_DIR[$key]-${ACTION_DEST_DIR[$base]-${ACTION_DEST_DIR[$parent]-$DEFAULT_DESTINATION}}}}
     fi
     if (( ! relpath_given )); then save_relpath=${MODE_SAVE_RELPATH[$profile]-${ACTION_SAVE_RELPATH[$key]-${ACTION_SAVE_RELPATH[$base]-${ACTION_SAVE_RELPATH[$parent]-0}}}}; fi
-    if (( save_relpath && ! destination_given )) && [[ -z ${MODE_DEST_DIR[$profile]-}${ACTION_DEST_DIR[$key]-}${ACTION_DEST_DIR[$base]-}${ACTION_DEST_DIR[$parent]-} ]]; then
-        destination=$DEFAULT_RELPATH_DESTINATION
-    fi
 }
 
 # Omitted stress roles use a conventional stem, preferring the main language.
@@ -4124,7 +4120,7 @@ FACTORY_SETTINGS = {
     'MINIMIZE_ATTEMPTS': '200', 'MINIMIZE_SECONDS': '30', 'MAX_FAILURES': '10',
     'DEFAULT_LINE_LIMIT': '10000', 'DEFAULT_F_MODE': 'macro',
     'DEFAULT_MACRO': 'FILEO', 'DEFAULT_WORKSPACE': '.',
-    'DEFAULT_DESTINATION': '.', 'DEFAULT_RELPATH_DESTINATION': '.',
+    'DEFAULT_DESTINATION': '.',
     'DEFAULT_BRUTE': 'brute.cpp', 'DEFAULT_GENERATOR': 'gen.cpp',
     'DEFAULT_ITERATIONS': '1000', 'DEFAULT_SEED': '4',
     'CHECK_TIMEOUT': '1500', 'CHECK_MEMORY_LIMIT': '256',
@@ -4598,9 +4594,9 @@ def _settings_profile_preview(editor, name):
 def _settings_profile_menu(editor, name):
     while name in editor.data['MODE_NAMES']:
         print('\nProfile {} ({})'.format(name, editor.data['MODE_KIND'][name]))
-        print('  Native common: ' + (editor.data['MODE_FLAGS'].get(name, '') or '(none)'))
+        print('  flags     Edit shared compiler flags')
         print('  CPU: ' + editor.data['MODE_CPU'].get(name, 'default'))
-        print('  Compiler/library adaptations are retained; Python groups are under advanced.')
+        print('  preview   Inspect flags by compiler and library')
         choice = editor.ask('profile> [flags / preview / advanced / kind / cpu / delete / back]: ')
         if choice is None:
             continue
@@ -4733,19 +4729,12 @@ def _settings_finish(filename, original, initial, editor):
         return 0
     print('\nReview pending changes:')
     for key, before, after in changed:
-        print('  {}: {} -> {}'.format(key, repr(before), repr(after)))
-    print('Preferred omitted-source language: ' + editor.data['DEFAULT_LANGUAGE'])
-    # Preview each actual backend instead of showing a misleading C++ command
-    # when Python or C is the user's preferred language.
-    for language, standard_key in (('c++', 'DEFAULT_STANDARD'), ('c', 'C_STANDARD')):
-        compiler = editor.data['LANGUAGE_COMPILERS'].get(language, editor.data['DEFAULT_COMPILER'])
-        warnings = editor.data['WARNINGS_GCC' if compiler == 'GCC' else 'WARNINGS_CLANG']
-        standard = editor.data[standard_key]
-        if standard.isdecimal(): standard = language + standard
-        dialect = '[newest supported ISO ' + language + ']' if standard == 'auto' else '-std=' + standard
-        print('Result ({}): --compiler={} {} {}'.format(language, compiler, dialect,
-              shlex.join(editor.data['DEFAULT_FLAGS'] + warnings)))
-    print('Result (python): ' + shlex.join([editor.data['DEFAULT_INTERPRETER'], *editor.data['PYTHON_FLAGS']]))
+        if isinstance(after, dict):
+            for name in sorted(before.keys() | after.keys()):
+                if before.get(name) != after.get(name):
+                    print('  {} [{}]: {} -> {}'.format(key, name, before.get(name, '(unset)'), after.get(name, '(unset)')))
+        else:
+            print('  {}: {} -> {}'.format(key, repr(before), repr(after)))
     answer = input('Write these changes to this script? [y/N]: ').strip().lower()
     if answer not in ('y', 'yes'):
         print('Cancelled; nothing saved.')
@@ -4770,7 +4759,6 @@ def edit_settings(script_path):
         ('DEFAULT_REPORT', 'Test/stress report', _settings_file_path),
         ('DEFAULT_F_MODE', 'Bare -f action: macro (define FILEO) or auto (redirect files)', _settings_choice('macro', 'auto')),
         ('DEFAULT_MACRO', '-f macro identifier', _settings_macro),
-        ('DEFAULT_RELPATH_DESTINATION', 'Destination with --save-relpath', _settings_destination),
     ]
     checks = [
         ('DEFAULT_TIMEOUT', 'Time budget in ms', lambda v: _settings_positive(v, True)),
@@ -4801,19 +4789,46 @@ def edit_settings(script_path):
     ]
     try:
         while True:
-            print('\ncp-run defaults — changes stay pending until save')
-            print('  1. Build: {} / {} / {}'.format(editor.data['DEFAULT_COMPILER'],
-                editor.data['DEFAULT_STANDARD'], shlex.join(editor.data['DEFAULT_FLAGS']) or '(no flags)'))
-            print('  2. Files: {} / {} / {}'.format(editor.data['DEFAULT_SOURCE'],
-                editor.data['DEFAULT_INPUT'], editor.data['DEFAULT_ANSWER']))
-            print('  3. Warnings\n  4. Checking & limits: {} ms / {} MiB'.format(
-                editor.data['DEFAULT_TIMEOUT'], editor.data['DEFAULT_MEMORY_LIMIT']))
-            print('  5. Profiles: {}\n  6. Stress: up to {} cases, seed {}'.format(
-                ', '.join(editor.data['MODE_NAMES']) or '(none)', editor.data['DEFAULT_ITERATIONS'],
-                editor.data['DEFAULT_SEED']))
+            print('\ncp-run settings')
+            print('  files      Input, answers and sample folder')
+            print('  profiles   Create or edit build profiles')
+            print('  tools      Choose language, compiler and interpreter')
+            print('  advanced   Paths, build options, checks and measurements')
             try:
-                print('  7. Measurements\n  8. Languages & tools\n  9. Test files & integrations\n  10. Action/profile routing\n  export FILE / import FILE: portable preferences (data only)')
-                choice = editor.ask('defaults> [1–10 / export FILE / import FILE / show / undo / reset / help / save / cancel]: ')
+                choice = editor.ask('settings> [section / save / cancel / help]: ')
+                if choice == 'advanced':
+                    print('\nAdvanced settings')
+                    sections = [
+                        ('Build flags', '1'), ('File paths', '2'), ('Warnings', '3'),
+                        ('Time, memory and comparison limits', '4'), ('Stress testing', '6'),
+                        ('Measurements', '7'), ('Language and formatter options', '8'),
+                        ('Sample imports and failure reports', '9'), ('Build destinations', '10'),
+                    ]
+                    for number, (label, _) in enumerate(sections, 1):
+                        print('  {}. {}'.format(number, label))
+                    print('  export FILE / import FILE / show')
+                    choice = editor.ask('advanced> [number / command / back]: ')
+                    if choice and choice.isdecimal():
+                        if not 1 <= int(choice) <= len(sections):
+                            raise ValueError('choose a displayed number')
+                        choice = sections[int(choice) - 1][1]
+                    if choice in ('', 'back'):
+                        continue
+                elif choice == 'files':
+                    _settings_fields(editor, 'Files', [
+                        ('DEFAULT_INPUT', 'Read input from', _settings_file_path),
+                        ('DEFAULT_ANSWER', 'Compare with', _settings_file_path),
+                        ('DEFAULT_OUTPUT', 'Write output to', _settings_file_path),
+                        ('DEFAULT_TEST_FOLDER', 'Numbered sample folder', _settings_test_folder),
+                        ('DEFAULT_F_MODE', 'File I/O (-f): auto redirects files; macro defines a C/C++ macro', _settings_choice('macro', 'auto')),
+                    ])
+                    continue
+                elif choice == 'tools':
+                    with editor.scope(['DEFAULT_LANGUAGE', 'LANGUAGE_COMPILERS', 'DEFAULT_INTERPRETER']):
+                        _settings_language_defaults(editor)
+                    continue
+                elif choice == 'profiles':
+                    choice = '5'
                 if choice is None:
                     continue
                 if choice == '1':
@@ -4849,15 +4864,13 @@ def edit_settings(script_path):
                     print('Exported pending preferences.')
                 elif choice.startswith('import '):
                     updated = load_preferences(choice[7:].strip())
-                    for key, value in updated.items():
-                        if editor.data.get(key) != value: print('{}: {} -> {}'.format(key, repr(editor.data.get(key)), repr(value)))
                     editor.replace(updated)
                     print('Imported into pending edits; save to apply.')
                 elif choice == 'show':
                     for key, value in editor.data.items():
                         print('{}: {}'.format(key, repr(value)))
                 else:
-                    print('Choose a displayed number; help explains editing.')
+                    print('Choose files, profiles, tools or advanced. Type help for editing commands.')
             except ValueError as error:
                 print('Not changed: ' + str(error))
     except _SettingsSave:
@@ -4976,7 +4989,7 @@ def validate_preferences(values):
     if old_folder and 'DEFAULT_TEST_FOLDER' not in values:
         values['DEFAULT_TEST_FOLDER'] = old_folder if old_folder.startswith('{wsp-dir}') else '{wsp-dir}/' + old_folder
     for key in ('DEFAULT_INPUT_TEMPLATE', 'DEFAULT_ANSWER_TEMPLATE', 'MANUAL_SEPARATOR',
-                'ACTION_SAVE_TEST_RELPATH', 'MODE_SAVE_TEST_RELPATH'):
+                'ACTION_SAVE_TEST_RELPATH', 'MODE_SAVE_TEST_RELPATH', 'DEFAULT_RELPATH_DESTINATION'):
         values.pop(key, None)
     if set(values) - set(FACTORY_SETTINGS):
         raise ValueError('unknown settings keys or invalid settings object')
@@ -5016,9 +5029,8 @@ def validate_preferences(values):
     data['DEFAULT_AVERAGE'] = str(repetition_count(data['DEFAULT_AVERAGE']))
     _settings_choice('s', 'ms')(data['DEFAULT_TIME_UNIT'])
     _settings_choice('B', 'KB', 'KiB', 'MB', 'MiB')(data['DEFAULT_MEMORY_UNIT'])
-    for key in ('DEFAULT_DESTINATION', 'DEFAULT_RELPATH_DESTINATION'):
-        if not data[key]: raise ValueError('empty destination')
-        _settings_destination(data[key])
+    if not data['DEFAULT_DESTINATION']: raise ValueError('empty destination')
+    _settings_destination(data['DEFAULT_DESTINATION'])
     for key in ('DEFAULT_WORKSPACE', 'DEFAULT_INPUT', 'DEFAULT_OUTPUT', 'DEFAULT_ANSWER', 'DEFAULT_REPORT'):
         if not data[key]: raise ValueError('empty setting: ' + key)
     for key in ('DEFAULT_INPUT', 'DEFAULT_OUTPUT', 'DEFAULT_ANSWER', 'DEFAULT_REPORT'):

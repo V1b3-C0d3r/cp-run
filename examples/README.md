@@ -81,7 +81,7 @@ In `file-io/`, with the factory macro action:
 cp-run main.cpp -f
 ```
 
-Expected answer: 42 in `out.txt`; the source uses FILEO to open its files. Now run **`cp-run configure` → Files → Bare -f action → auto**, then save. The same flag now redirects streams instead:
+Expected answer: 42 in `out.txt`; the source uses FILEO to open its files. Now run **`cp-run configure` → files → File I/O → auto**, then save. The same flag now redirects streams instead:
 
 ```sh
 cp-run main.cpp -f in.txt result.txt

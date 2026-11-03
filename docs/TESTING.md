@@ -2,76 +2,35 @@
 
 [Quick start](../README.md) · [CLI options](CLI.md) · [Runnable examples](../examples/README.md)
 
-**Start with ordinary `test`.** Use `test=mult` for separate sample files; use `test=auto` only when you want several tests inside a bundle. Every independent test is a separate program launch. Python examples use the saved interpreter (factory **PyPy 3**); add `--interpreter=python3` to use CPython.
+| Your test data | Command | Unit of comparison |
+| --- | --- | --- |
+| One input and expected output | `cp-run test --cout` | The complete output of one launch |
+| Several numbered sample files | `cp-run test=mult --cout` | Each input/answer pair |
+| Multiple records inside two files | `cp-run test=auto --cout` | Each delimited record |
 
 ## One complete input: `test`
 
-Create `main.py`:
+For a solution that sums two numbers, put `2 3` in `in.txt` and `5` in `ans.txt`. Run `cp-run test --cout`. The runner feeds the input to the program, saves its stdout in `out.txt` and compares it with the answer.
 
-```python
-import sys
-numbers = list(map(int, sys.stdin.read().split()))
-print(sum(numbers))
-```
+| Report item | Meaning |
+| --- | --- |
+| `AC` / `WA` | Output matches / differs |
+| `!` | A differing line, with actual and expected line numbers |
+| Time and memory | Elapsed time and peak memory of the child process |
 
-Save these two files beside `main.py` (each ends with a newline):
-
-**`in.txt`** — bytes sent to the program's stdin:
-
-```text
-2 3
-```
-
-**`ans.txt`** — the stdout you expect:
-
-```text
-5
-```
+Comparison preserves spaces and blank lines, normalizes CRLF and tolerates one optional final newline. A count inside the input belongs to your program. Use separate samples for independent verdicts and limits.
 
 ```sh
-cp-run test --cout
+cp-run test main.py samples.in expected.ans --cout  # Custom filenames
+cp-run test run ./solution.out --cout               # Existing program
+cp-run test --out=actual.txt                        # Save raw output here
 ```
 
-This is **one test**, even if input contains blank lines or an internal testcase count. Program output is kept in `out.txt`; the protocol goes to `test_out`, or stdout with `--cout`. Console mode never prints a separate raw copy of `out.txt`: its output appears only as numbered report lines.
-
-```text
-TEST 1
-input:
-    input:1 | "2 3"
-out.txt:
-    out.txt:1 | "5"
-ans:
-    ans:1 | "5"
-Test 1: AC
-  TIME: ...    MEMORY: ...
-FINAL VERDICT: AC
-```
-
-**Reading the report:** `input:1` means input line 1; `out.txt:1` means the first actual output line; `ans:1` means answer line 1. The `|` separates the line number from quoted content; the quotes are report notation, not bytes added to the files. `AC` means the output matches. Actual time and memory replace `...`.
-
-Each section has its own line numbering. `!` marks differing output/answer lines. An inserted/deleted line has an explicit missing counterpart; empty files and a missing final newline are labeled. Comparisons preserve spaces and blank rows, normalize CRLF, and tolerate one optional final newline. Input is displayed, not compared to the answer.
-
-```sh
-cp-run test main.py samples.in correct.ans report.txt
-cp-run test "" samples.in correct.ans       # Discover FILE; retain positional slots
-cp-run test run ./solution.out --cout
-cp-run test main.cpp -- -DTESTING -- --verbose
-```
-
-`FILE`, `IN`, `ANS`, `REPORT` are positional slots. Use `""` to leave one at its default. The first `--` starts backend options; the second starts program arguments. For `test run`, one `--` starts program arguments.
-
-Change the result filename with **`--out=FILE`** (or `--out FILE`), independently of REPORT:
-
-```sh
-cp-run test main.py --out=results.txt --cout
-cp-run test main.py --wsp-dir=/projects/contest --out='{wsp-dir}/results/actual.txt'
-```
-
-The first command keeps raw stdout in `results.txt` and prints the protocol, with lines such as `results.txt:1`. The second stores it at `/projects/contest/results/actual.txt`; create `results/` first. Under **`cp-run configure` → Files → Program output**, save this filename or workspace-prefixed path for all checks and ordinary `-f=auto/out` redirection. Factory files are **`in.txt`, `out.txt`, `ans.txt`, `test_out`**. Imported preferences retain their saved filenames.
+Without `--cout`, the report goes to `test_out`. Change default input, output and answer paths in `configure → files`.
 
 ## Separate files: `test=mult`
 
-Keep the same `main.py`. One task folder contains fixed filenames:
+For a Python solution such as `print(sum(map(int, input().split())))`, create numbered pairs:
 
 ```text
 tests/

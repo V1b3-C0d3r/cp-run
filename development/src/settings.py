@@ -361,9 +361,9 @@ def _settings_profile_preview(editor, name):
 def _settings_profile_menu(editor, name):
     while name in editor.data['MODE_NAMES']:
         print('\nProfile {} ({})'.format(name, editor.data['MODE_KIND'][name]))
-        print('  Native common: ' + (editor.data['MODE_FLAGS'].get(name, '') or '(none)'))
+        print('  flags     Edit shared compiler flags')
         print('  CPU: ' + editor.data['MODE_CPU'].get(name, 'default'))
-        print('  Compiler/library adaptations are retained; Python groups are under advanced.')
+        print('  preview   Inspect flags by compiler and library')
         choice = editor.ask('profile> [flags / preview / advanced / kind / cpu / delete / back]: ')
         if choice is None:
             continue
@@ -496,19 +496,12 @@ def _settings_finish(filename, original, initial, editor):
         return 0
     print('\nReview pending changes:')
     for key, before, after in changed:
-        print('  {}: {} -> {}'.format(key, repr(before), repr(after)))
-    print('Preferred omitted-source language: ' + editor.data['DEFAULT_LANGUAGE'])
-    # Preview each actual backend instead of showing a misleading C++ command
-    # when Python or C is the user's preferred language.
-    for language, standard_key in (('c++', 'DEFAULT_STANDARD'), ('c', 'C_STANDARD')):
-        compiler = editor.data['LANGUAGE_COMPILERS'].get(language, editor.data['DEFAULT_COMPILER'])
-        warnings = editor.data['WARNINGS_GCC' if compiler == 'GCC' else 'WARNINGS_CLANG']
-        standard = editor.data[standard_key]
-        if standard.isdecimal(): standard = language + standard
-        dialect = '[newest supported ISO ' + language + ']' if standard == 'auto' else '-std=' + standard
-        print('Result ({}): --compiler={} {} {}'.format(language, compiler, dialect,
-              shlex.join(editor.data['DEFAULT_FLAGS'] + warnings)))
-    print('Result (python): ' + shlex.join([editor.data['DEFAULT_INTERPRETER'], *editor.data['PYTHON_FLAGS']]))
+        if isinstance(after, dict):
+            for name in sorted(before.keys() | after.keys()):
+                if before.get(name) != after.get(name):
+                    print('  {} [{}]: {} -> {}'.format(key, name, before.get(name, '(unset)'), after.get(name, '(unset)')))
+        else:
+            print('  {}: {} -> {}'.format(key, repr(before), repr(after)))
     answer = input('Write these changes to this script? [y/N]: ').strip().lower()
     if answer not in ('y', 'yes'):
         print('Cancelled; nothing saved.')
@@ -533,7 +526,6 @@ def edit_settings(script_path):
         ('DEFAULT_REPORT', 'Test/stress report', _settings_file_path),
         ('DEFAULT_F_MODE', 'Bare -f action: macro (define FILEO) or auto (redirect files)', _settings_choice('macro', 'auto')),
         ('DEFAULT_MACRO', '-f macro identifier', _settings_macro),
-        ('DEFAULT_RELPATH_DESTINATION', 'Destination with --save-relpath', _settings_destination),
     ]
     checks = [
         ('DEFAULT_TIMEOUT', 'Time budget in ms', lambda v: _settings_positive(v, True)),
@@ -564,19 +556,46 @@ def edit_settings(script_path):
     ]
     try:
         while True:
-            print('\ncp-run defaults — changes stay pending until save')
-            print('  1. Build: {} / {} / {}'.format(editor.data['DEFAULT_COMPILER'],
-                editor.data['DEFAULT_STANDARD'], shlex.join(editor.data['DEFAULT_FLAGS']) or '(no flags)'))
-            print('  2. Files: {} / {} / {}'.format(editor.data['DEFAULT_SOURCE'],
-                editor.data['DEFAULT_INPUT'], editor.data['DEFAULT_ANSWER']))
-            print('  3. Warnings\n  4. Checking & limits: {} ms / {} MiB'.format(
-                editor.data['DEFAULT_TIMEOUT'], editor.data['DEFAULT_MEMORY_LIMIT']))
-            print('  5. Profiles: {}\n  6. Stress: up to {} cases, seed {}'.format(
-                ', '.join(editor.data['MODE_NAMES']) or '(none)', editor.data['DEFAULT_ITERATIONS'],
-                editor.data['DEFAULT_SEED']))
+            print('\ncp-run settings')
+            print('  files      Input, answers and sample folder')
+            print('  profiles   Create or edit build profiles')
+            print('  tools      Choose language, compiler and interpreter')
+            print('  advanced   Paths, build options, checks and measurements')
             try:
-                print('  7. Measurements\n  8. Languages & tools\n  9. Test files & integrations\n  10. Action/profile routing\n  export FILE / import FILE: portable preferences (data only)')
-                choice = editor.ask('defaults> [1–10 / export FILE / import FILE / show / undo / reset / help / save / cancel]: ')
+                choice = editor.ask('settings> [section / save / cancel / help]: ')
+                if choice == 'advanced':
+                    print('\nAdvanced settings')
+                    sections = [
+                        ('Build flags', '1'), ('File paths', '2'), ('Warnings', '3'),
+                        ('Time, memory and comparison limits', '4'), ('Stress testing', '6'),
+                        ('Measurements', '7'), ('Language and formatter options', '8'),
+                        ('Sample imports and failure reports', '9'), ('Build destinations', '10'),
+                    ]
+                    for number, (label, _) in enumerate(sections, 1):
+                        print('  {}. {}'.format(number, label))
+                    print('  export FILE / import FILE / show')
+                    choice = editor.ask('advanced> [number / command / back]: ')
+                    if choice and choice.isdecimal():
+                        if not 1 <= int(choice) <= len(sections):
+                            raise ValueError('choose a displayed number')
+                        choice = sections[int(choice) - 1][1]
+                    if choice in ('', 'back'):
+                        continue
+                elif choice == 'files':
+                    _settings_fields(editor, 'Files', [
+                        ('DEFAULT_INPUT', 'Read input from', _settings_file_path),
+                        ('DEFAULT_ANSWER', 'Compare with', _settings_file_path),
+                        ('DEFAULT_OUTPUT', 'Write output to', _settings_file_path),
+                        ('DEFAULT_TEST_FOLDER', 'Numbered sample folder', _settings_test_folder),
+                        ('DEFAULT_F_MODE', 'File I/O (-f): auto redirects files; macro defines a C/C++ macro', _settings_choice('macro', 'auto')),
+                    ])
+                    continue
+                elif choice == 'tools':
+                    with editor.scope(['DEFAULT_LANGUAGE', 'LANGUAGE_COMPILERS', 'DEFAULT_INTERPRETER']):
+                        _settings_language_defaults(editor)
+                    continue
+                elif choice == 'profiles':
+                    choice = '5'
                 if choice is None:
                     continue
                 if choice == '1':
@@ -612,15 +631,13 @@ def edit_settings(script_path):
                     print('Exported pending preferences.')
                 elif choice.startswith('import '):
                     updated = load_preferences(choice[7:].strip())
-                    for key, value in updated.items():
-                        if editor.data.get(key) != value: print('{}: {} -> {}'.format(key, repr(editor.data.get(key)), repr(value)))
                     editor.replace(updated)
                     print('Imported into pending edits; save to apply.')
                 elif choice == 'show':
                     for key, value in editor.data.items():
                         print('{}: {}'.format(key, repr(value)))
                 else:
-                    print('Choose a displayed number; help explains editing.')
+                    print('Choose files, profiles, tools or advanced. Type help for editing commands.')
             except ValueError as error:
                 print('Not changed: ' + str(error))
     except _SettingsSave:

@@ -14,7 +14,7 @@ def validate_preferences(values):
     if old_folder and 'DEFAULT_TEST_FOLDER' not in values:
         values['DEFAULT_TEST_FOLDER'] = old_folder if old_folder.startswith('{wsp-dir}') else '{wsp-dir}/' + old_folder
     for key in ('DEFAULT_INPUT_TEMPLATE', 'DEFAULT_ANSWER_TEMPLATE', 'MANUAL_SEPARATOR',
-                'ACTION_SAVE_TEST_RELPATH', 'MODE_SAVE_TEST_RELPATH'):
+                'ACTION_SAVE_TEST_RELPATH', 'MODE_SAVE_TEST_RELPATH', 'DEFAULT_RELPATH_DESTINATION'):
         values.pop(key, None)
     if set(values) - set(FACTORY_SETTINGS):
         raise ValueError('unknown settings keys or invalid settings object')
@@ -54,9 +54,8 @@ def validate_preferences(values):
     data['DEFAULT_AVERAGE'] = str(repetition_count(data['DEFAULT_AVERAGE']))
     _settings_choice('s', 'ms')(data['DEFAULT_TIME_UNIT'])
     _settings_choice('B', 'KB', 'KiB', 'MB', 'MiB')(data['DEFAULT_MEMORY_UNIT'])
-    for key in ('DEFAULT_DESTINATION', 'DEFAULT_RELPATH_DESTINATION'):
-        if not data[key]: raise ValueError('empty destination')
-        _settings_destination(data[key])
+    if not data['DEFAULT_DESTINATION']: raise ValueError('empty destination')
+    _settings_destination(data['DEFAULT_DESTINATION'])
     for key in ('DEFAULT_WORKSPACE', 'DEFAULT_INPUT', 'DEFAULT_OUTPUT', 'DEFAULT_ANSWER', 'DEFAULT_REPORT'):
         if not data[key]: raise ValueError('empty setting: ' + key)
     for key in ('DEFAULT_INPUT', 'DEFAULT_OUTPUT', 'DEFAULT_ANSWER', 'DEFAULT_REPORT'):
