@@ -125,16 +125,25 @@ def supervise(config):
         sink = stack.enter_context(open(os.devnull, 'wb'))
         errors = stack.enter_context(tempfile.TemporaryFile())
         replay, replay_offset, captured_terminal = None, 0, False
-        if count > 1 or (observed and config.get('warmup')):
+        if observed or count > 1:
             maximum = positive_setting(config.get('max_spool', 268435456), 'spool limit')
             if os.isatty(0):
                 replay = stack.enter_context(tempfile.TemporaryFile())
                 if config.get('show_command'):
                     print(shlex.join(argv), file=sys.stderr, flush=True)
                 runner.on_launch = lambda: remember_launch(config)
-                # This visible capture is not a measurement: human typing must
-                # not contaminate the median. Its errors still stop the job.
-                initial = record_terminal_input(runner, argv, replay, maximum)
+                print('cp-run: enter all input, then press Ctrl-D on an empty line to start timing.', file=sys.stderr, flush=True)
+                copied = 0
+                while True:
+                    block = os.read(0, 65536)
+                    if not block:
+                        break
+                    copied += len(block)
+                    if copied > maximum:
+                        raise CheckSetupError('replayed input exceeds spool byte limit')
+                    replay.write(block)
+                replay.seek(0)
+                initial = runner.run(argv, stdin=replay, report=False)
                 if initial.status:
                     runner.diagnostic(initial)
                     return initial.status

@@ -170,7 +170,7 @@ One filename overrides input, two override input and output. Only one stream can
 
 Warm-up/repetition controls require `-t` or `-m`; neither is available in build-only commands. Prepare once, optionally warm up, then measure. Only the first measured stdout is canonical. Test/stress verify repeated results and retain separate evidence for a failed repeat.
 
-For ordinary repeated runs with **terminal stdin**, cp-run first runs visibly while recording input, then replays it to hidden warm-up/measurement launches. That visible capture is outside statistics; no-input programs need no EOF. Only its stdout is shown. A failed launch stops the series; failed hidden stderr is replayed completely. Redirected input is replayed from a file or bounded spool. A single terminal measurement without warm-up remains direct.
+With terminal stdin and measurements, cp-run collects complete input through EOF before launching any child. Press Ctrl-D on an empty line, including for an empty input. Typing time is outside all execution limits. The same bounded snapshot feeds the visible run and hidden warm-up/measurement launches. A failed launch stops the series. Redirected input is replayed from a file or bounded spool.
 
 Measurements exclude compilation, history callbacks, checking and report rendering. Python includes interpreter startup/imports; JIT state does not survive fresh PyPy processes. Peak RSS is resident memory, not virtual address space or a promise of judge-equivalent accounting.
 
@@ -238,3 +238,5 @@ All required formatters are located before editing starts. Missing tools produce
 - Compiler diagnostics remain live on stderr. Ordinary runtime stderr is direct; tests put runtime stderr in their protocols. Commands appear only with `--show-command`.
 
 Exit codes: 0 success; 2 wrapper usage error; 3 WA; 4 unfinished comparison; 124 TLE; 125 MLE; 130/143 interruption. Compiler/runtime failures retain meaningful nonzero statuses. A program's own exit 3 means RE, not WA: read the verdict rather than inferring it from the number alone.
+
+With terminal input and timing or memory measurements, enter the complete input first and press Ctrl-D on an empty line. Execution and its limits start afterward. For empty input, press Ctrl-D immediately. Pipes and files supply EOF automatically.

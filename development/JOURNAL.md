@@ -129,3 +129,7 @@ The first screen groups everyday file, profile and tool settings and keeps detai
 ## 1.3.0 — Multiple workspaces
 
 Settings can store additional workspace roots. Compilation selects the nearest saved ancestor of the source; `--main-wsp[=DIR]` selects a saved root explicitly. Existing single-root settings retain their fixed destination.
+
+## 1.3.1 — Complete input before terminal measurements
+
+Measured terminal runs collect bounded stdin through EOF before launching a child. Typing cannot consume execution limits. Added a PTY regression that waits past the hard deadline before submitting EOF.

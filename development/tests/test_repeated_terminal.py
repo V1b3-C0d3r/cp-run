@@ -47,7 +47,7 @@ class RepeatedTerminalTest(unittest.TestCase):
             process = subprocess.Popen(self.args(average, warmup), cwd=self.root, env=self.env,
                                        stdin=slave, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                        text=True)
-            if data is not None: os.write(master, data)
+            os.write(master, (data or b'') + b'\x04')
             stdout, stderr = process.communicate(timeout=15)
             return process.returncode, stdout, stderr
         finally:
@@ -55,7 +55,7 @@ class RepeatedTerminalTest(unittest.TestCase):
             if process is not None and process.poll() is None:
                 process.kill(); process.communicate()
 
-    def test_terminal_input_is_replayed_without_waiting_for_eof(self):
+    def test_terminal_input_is_replayed_after_eof(self):
         self.program()
         status, stdout, stderr = self.terminal(b'hello world\n')
         self.assertEqual((status, stdout), (0, 'stdout 1: hello world\n'), stderr)
@@ -64,7 +64,31 @@ class RepeatedTerminalTest(unittest.TestCase):
         for number in range(2, 6): self.assertNotIn('stderr ' + str(number), stderr)
         self.assertIn('3 measured runs', stderr)
 
-    def test_no_input_program_finishes_with_an_open_terminal(self):
+    def test_single_timed_run_waits_for_complete_input_without_starting_child(self):
+        self.program()
+        master, slave = pty.openpty()
+        process = subprocess.Popen(self.args(1, 0) + ['--TLE=100'],
+            cwd=self.root, env=self.env, stdin=slave, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, text=True)
+        try:
+            self.assertIn('Ctrl-D', process.stderr.readline())
+            os.write(master, b'complete input\n')
+            # Wait beyond the hard execution deadline while the input is open.
+            self.assertFalse(select.select([process.stdout], [], [], 0.5)[0])
+            self.assertIsNone(process.poll())
+            self.assertFalse((self.root / 'count').exists())
+            os.write(master, b'\x04')
+            stdout, stderr = process.communicate(timeout=15)
+            self.assertEqual(process.returncode, 0, stderr)
+            self.assertIn('complete input', stdout)
+        finally:
+            os.close(master)
+            os.close(slave)
+            if process.poll() is None:
+                process.kill()
+                process.communicate()
+
+    def test_no_input_program_finishes_after_empty_eof(self):
         self.program(reads=False)
         status, stdout, stderr = self.terminal()
         self.assertEqual((status, stdout), (0, 'stdout 1: no input\n'), stderr)
@@ -126,19 +150,19 @@ class RepeatedTerminalTest(unittest.TestCase):
         status, stdout, stderr = self.terminal(b'too much input\n', warmup=0)
         self.assertEqual(status, 1, stderr)
         self.assertIn('spool byte limit', stderr)
-        self.assertEqual((self.root / 'count').read_text(), '1')
+        self.assertFalse((self.root / 'count').exists())
 
     def test_terminal_capture_is_outside_the_reported_median(self):
         initial = engine.Result(0, 9_000_000_000, 100, 'OK')
         runner = mock.Mock()
-        runner.run.side_effect = [engine.Result(0, n, 10, 'OK') for n in (10, 30, 20)]
+        runner.run.side_effect = [engine.Result(0, n, 10, 'OK') for n in (9000000000, 10, 30, 20)]
         config = {'executable': '/controlled/program', 'average': 3, 'warmup': False,
                   'show_time': True, 'show_memory': False, 'runtime_args': []}
         with mock.patch.object(engine, '_runner', return_value=runner), \
                 mock.patch.object(engine.os, 'isatty', return_value=True), \
-                mock.patch.object(engine, 'record_terminal_input', return_value=initial):
+                mock.patch.object(engine.os, 'read', return_value=b''):
             self.assertEqual(engine.supervise(config), 0)
-        self.assertEqual(runner.run.call_count, 3)
+        self.assertEqual(runner.run.call_count, 4)
         shown = runner.display.call_args[0][0]
         self.assertEqual(shown.elapsed_ns, 20)
 
@@ -149,9 +173,10 @@ class RepeatedTerminalTest(unittest.TestCase):
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                                    start_new_session=True)
         try:
-            ready, _, _ = select.select([process.stdout], [], [], 10)
+            ready, _, _ = select.select([process.stderr], [], [], 10)
             self.assertTrue(ready)
-            self.assertEqual(process.stdout.readline(), 'ready\n')
+            self.assertIn('Ctrl-D', process.stderr.readline())
+            self.assertFalse((self.root / 'started').exists())
             os.killpg(process.pid, signal.SIGTERM)
             stdout, stderr = process.communicate(timeout=5)
             self.assertIn(process.returncode, (143, -signal.SIGTERM), stderr)

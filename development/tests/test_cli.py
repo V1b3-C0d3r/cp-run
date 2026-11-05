@@ -964,7 +964,7 @@ class CliTest(unittest.TestCase):
                 env=self.environment({'FAKE_PROGRAM_COUNTER': str(counter), 'FAKE_PROGRAM_STDIN': '1'}),
                 stdin=slave, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             os.close(slave); slave = -1
-            os.write(master, b'terminal input\n')
+            os.write(master, b'terminal input\n\x04')
             stdout, stderr = process.communicate(timeout=20)
             self.assertEqual(process.returncode, 0, stderr)
             self.assertEqual(counter.read_text(), '3')
