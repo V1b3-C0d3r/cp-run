@@ -119,6 +119,12 @@ class TerminalTypeaheadTest(unittest.TestCase):
             else:
                 os.write(gate_fd, b'!\n')
                 if not fail:
+                    if '-t' in args:
+                        until(b'Ctrl-D')
+                        if late:
+                            os.write(master, late)
+                            late = b''
+                        os.write(master, b'\x04')
                     until(b'READY\r\n')
                     if late:
                         os.write(master, late)
@@ -172,7 +178,7 @@ class TerminalTypeaheadTest(unittest.TestCase):
         self.assertEqual(status, 0, output)
         self.assertEqual(output.count(b'27491\n'), 1, output)
         self.assertEqual((self.root / 'received').read_bytes(), b'27491\n')
-        self.assertEqual((self.root / 'runs').read_bytes(), b'run\n')
+        self.assertEqual((self.root / 'runs').read_bytes(), b'run\n' * 2)
 
     def test_repeated_runs_replay_input_with_one_visible_echo(self):
         status, output = self.terminal(('-t', '--average=3', '--warm-up=1'))

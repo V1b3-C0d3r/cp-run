@@ -133,3 +133,7 @@ Settings can store additional workspace roots. Compilation selects the nearest s
 ## 1.3.1 — Complete input before terminal measurements
 
 Measured terminal runs collect bounded stdin through EOF before launching a child. Typing cannot consume execution limits. Added a PTY regression that waits past the hard deadline before submitting EOF.
+
+## 1.3.2 — PTY tests follow input completion
+
+Updated both terminal typeahead measurement tests to submit EOF before expecting program startup. Retained byte-for-byte input, single echo, terminal-mode restoration and launch-count assertions. The 1.3.1 CI failures were stale test synchronization.
