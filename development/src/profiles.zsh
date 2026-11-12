@@ -83,11 +83,15 @@ build_flags() {
     [[ $profile != none ]] || return 0
 
     append_flags "${MODE_FLAGS[$profile]-}"
+    if [[ $language == c++ ]]; then append_flags "${MODE_CPP_FLAGS[$profile]-}"; fi
+    if [[ $language == c ]]; then append_flags "${MODE_C_FLAGS[$profile]-}"; fi
     if [[ $family == gcc ]]; then
-        append_flags "${MODE_GCC[$profile]-}"
+        if [[ $language == c && -n ${MODE_C_GCC[$profile]+set} ]]; then append_flags "${MODE_C_GCC[$profile]}"
+        else append_flags "${MODE_GCC[$profile]-}"; fi
         if (( ! no_warnings )); then append_flags "${MODE_WARNINGS_GCC[$profile]-}"; fi
     else
-        append_flags "${MODE_CLANG[$profile]-}"
+        if [[ $language == c && -n ${MODE_C_CLANG[$profile]+set} ]]; then append_flags "${MODE_C_CLANG[$profile]}"
+        else append_flags "${MODE_CLANG[$profile]-}"; fi
         if (( ! no_warnings )); then append_flags "${MODE_WARNINGS_CLANG[$profile]-}"; fi
     fi
     append_native_cpu

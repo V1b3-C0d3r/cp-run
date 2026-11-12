@@ -21,6 +21,7 @@ SETTINGS_GROUPS = {
     'common': 'MODE_FLAGS', 'gcc': 'MODE_GCC', 'clang': 'MODE_CLANG',
     'libstdc++': 'MODE_LIBSTDCXX', 'libc++': 'MODE_LIBCPP',
     'warnings-gcc': 'MODE_WARNINGS_GCC', 'warnings-clang': 'MODE_WARNINGS_CLANG',
+    'cpp-common': 'MODE_CPP_FLAGS', 'c-common': 'MODE_C_FLAGS', 'c-gcc': 'MODE_C_GCC', 'c-clang': 'MODE_C_CLANG',
     'cpython': 'MODE_CPYTHON', 'pypy': 'MODE_PYPY',
 }
 # Keep metadata in the same copy/reset/delete transaction as compiler flags.
@@ -31,6 +32,7 @@ PROFILE_DEFAULTS = {'MODE_KIND': 'flags', 'MODE_CPU': 'default'}
 # These defaults mirror the native block. A regression test checks equality so
 # reset cannot quietly diverge from a freshly downloaded script.
 FACTORY_SETTINGS = {
+    'MODE_CPP_FLAGS': {}, 'MODE_C_FLAGS': {}, 'MODE_C_GCC': {}, 'MODE_C_CLANG': {},
     'DEFAULT_COMPILER': 'GCC', 'DEFAULT_STANDARD': 'auto',
     'DEFAULT_LANGUAGE': 'c++', 'LANGUAGE_COMPILERS': {},
     'DEFAULT_SOURCE': 'main.cpp', 'DEFAULT_TIMEOUT': 'inf',

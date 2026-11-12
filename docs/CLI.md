@@ -240,3 +240,5 @@ All required formatters are located before editing starts. Missing tools produce
 Exit codes: 0 success; 2 wrapper usage error; 3 WA; 4 unfinished comparison; 124 TLE; 125 MLE; 130/143 interruption. Compiler/runtime failures retain meaningful nonzero statuses. A program's own exit 3 means RE, not WA: read the verdict rather than inferring it from the number alone.
 
 With terminal input and timing or memory measurements, enter the complete input first and press Ctrl-D on an empty line. Execution and its limits start afterward. For empty input, press Ctrl-D immediately. Pipes and files supply EOF automatically.
+
+In configure, **paths** opens source/workspace/output paths directly. The workspace prefix is explained once at the top. Profile **flags** selects a language and backend. Existing shared groups remain in profile advanced settings. C-specific backend entries override legacy shared backend flags. **preview** lists language → backend; **preview --lib** adds C++ library details.

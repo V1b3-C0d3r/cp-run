@@ -8,11 +8,15 @@
 emulate -LR zsh
 setopt NO_UNSET PIPE_FAIL EXTENDED_GLOB
 unsetopt ALIASES
-typeset -r PROGRAM=cp-run VERSION=1.3.2
+typeset -r PROGRAM=cp-run VERSION=1.4.0
 typeset -r SCRIPT_PATH=${0:A} # Settings follow the real script when invoked through a symlink.
 
 # CP_RUN_SETTINGS_BEGIN
 # Managed by cp-run configure; ordinary launches read these native values directly.
+typeset -gA MODE_CPP_FLAGS=()
+typeset -gA MODE_C_FLAGS=()
+typeset -gA MODE_C_GCC=()
+typeset -gA MODE_C_CLANG=()
 typeset -g DEFAULT_COMPILER=GCC
 typeset -g DEFAULT_STANDARD=auto
 typeset -g DEFAULT_LANGUAGE=c++
@@ -1116,11 +1120,15 @@ build_flags() {
     [[ $profile != none ]] || return 0
 
     append_flags "${MODE_FLAGS[$profile]-}"
+    if [[ $language == c++ ]]; then append_flags "${MODE_CPP_FLAGS[$profile]-}"; fi
+    if [[ $language == c ]]; then append_flags "${MODE_C_FLAGS[$profile]-}"; fi
     if [[ $family == gcc ]]; then
-        append_flags "${MODE_GCC[$profile]-}"
+        if [[ $language == c && -n ${MODE_C_GCC[$profile]+set} ]]; then append_flags "${MODE_C_GCC[$profile]}"
+        else append_flags "${MODE_GCC[$profile]-}"; fi
         if (( ! no_warnings )); then append_flags "${MODE_WARNINGS_GCC[$profile]-}"; fi
     else
-        append_flags "${MODE_CLANG[$profile]-}"
+        if [[ $language == c && -n ${MODE_C_CLANG[$profile]+set} ]]; then append_flags "${MODE_C_CLANG[$profile]}"
+        else append_flags "${MODE_CLANG[$profile]-}"; fi
         if (( ! no_warnings )); then append_flags "${MODE_WARNINGS_CLANG[$profile]-}"; fi
     fi
     append_native_cpu
@@ -4142,6 +4150,7 @@ SETTINGS_GROUPS = {
     'common': 'MODE_FLAGS', 'gcc': 'MODE_GCC', 'clang': 'MODE_CLANG',
     'libstdc++': 'MODE_LIBSTDCXX', 'libc++': 'MODE_LIBCPP',
     'warnings-gcc': 'MODE_WARNINGS_GCC', 'warnings-clang': 'MODE_WARNINGS_CLANG',
+    'cpp-common': 'MODE_CPP_FLAGS', 'c-common': 'MODE_C_FLAGS', 'c-gcc': 'MODE_C_GCC', 'c-clang': 'MODE_C_CLANG',
     'cpython': 'MODE_CPYTHON', 'pypy': 'MODE_PYPY',
 }
 # Keep metadata in the same copy/reset/delete transaction as compiler flags.
@@ -4152,6 +4161,7 @@ PROFILE_DEFAULTS = {'MODE_KIND': 'flags', 'MODE_CPU': 'default'}
 # These defaults mirror the native block. A regression test checks equality so
 # reset cannot quietly diverge from a freshly downloaded script.
 FACTORY_SETTINGS = {
+    'MODE_CPP_FLAGS': {}, 'MODE_C_FLAGS': {}, 'MODE_C_GCC': {}, 'MODE_C_CLANG': {},
     'DEFAULT_COMPILER': 'GCC', 'DEFAULT_STANDARD': 'auto',
     'DEFAULT_LANGUAGE': 'c++', 'LANGUAGE_COMPILERS': {},
     'DEFAULT_SOURCE': 'main.cpp', 'DEFAULT_TIMEOUT': 'inf',
@@ -4623,40 +4633,79 @@ def _settings_profile(editor, name):
         _settings_profile_menu(editor, name)
 
 
-def _settings_profile_preview(editor, name):
-    """Expand platform groups on request; the everyday menu stays compact."""
-    print('Configured combinations; compiler/library support is checked at build time:')
+def _settings_profile_preview(editor, name, libraries=False):
+    print('Configured flags; backend support is checked at build time.')
     print('CPU: {}; native selection is resolved at build time.'.format(
         editor.data['MODE_CPU'].get(name, 'default')))
     if not any(editor.data[key].get(name, '') for key in ('MODE_LIBSTDCXX', 'MODE_LIBCPP')):
         print('No standard-library-specific flags in this profile.')
-    for family in ('gcc', 'clang'):
-        base = editor.data['WARNINGS_GCC' if family == 'gcc' else 'WARNINGS_CLANG']
-        for library in ('libstdc++', 'libc++'):
-            groups = ('common', family, library, 'warnings-' + family)
-            words = list(editor.data['DEFAULT_FLAGS']) + list(base)
-            for group in groups:
-                words.extend(shlex.split(editor.data[SETTINGS_GROUPS[group]].get(name, '')))
-            print('  {} + {}: {}'.format(family, library, shlex.join(words) or '(none)'))
+    for language in ('c', 'c++', 'python'):
+        print(language)
+        backends = ('cpython', 'pypy') if language == 'python' else ('gcc', 'clang')
+        for backend in backends:
+            if language == 'python':
+                words = list(editor.data['PYTHON_FLAGS'])
+                words += shlex.split(editor.data[SETTINGS_GROUPS[backend]].get(name, ''))
+            else:
+                words = list(editor.data['DEFAULT_FLAGS'])
+                words += list(editor.data['WARNINGS_GCC' if backend == 'gcc' else 'WARNINGS_CLANG'])
+                groups = ['common', 'cpp-common', backend, 'warnings-' + backend]
+                if language == 'c':
+                    groups = ['common', 'c-common', 'c-' + backend, 'warnings-' + backend]
+                for group in groups:
+                    mapping = editor.data[SETTINGS_GROUPS[group]]
+                    text = mapping.get(name, editor.data[SETTINGS_GROUPS[backend]].get(name, '')
+                                       if group == 'c-' + backend else '')
+                    words += shlex.split(text)
+            print('  {}: {}'.format(backend, shlex.join(words) or '(none)'))
+            if libraries and language == 'c++':
+                for library in ('libstdc++', 'libc++'):
+                    extra = shlex.split(editor.data[SETTINGS_GROUPS[library]].get(name, ''))
+                    print('    {}: {}'.format(library, shlex.join(words + extra) or '(none)'))
+
+
+def _settings_profile_languages(editor, name):
+    while True:
+        language = editor.ask('Language [c / c++ / python / back]: ')
+        if language in ('', 'back'):
+            return
+        if language is None:
+            continue
+        backends = {'c': {'common': 'MODE_C_FLAGS', 'gcc': 'MODE_C_GCC', 'clang': 'MODE_C_CLANG'},
+                    'c++': {'common': 'MODE_CPP_FLAGS', 'gcc': 'MODE_GCC', 'clang': 'MODE_CLANG'},
+                    'python': {'cpython': 'MODE_CPYTHON', 'pypy': 'MODE_PYPY'}}
+        if language not in backends:
+            raise ValueError('choose c, c++ or python')
+        for backend_name, key in backends[language].items():
+            value = editor.data[key].get(name)
+            if value is None and key in ('MODE_C_GCC', 'MODE_C_CLANG'):
+                legacy = 'MODE_GCC' if key == 'MODE_C_GCC' else 'MODE_CLANG'
+                value = editor.data[legacy].get(name, '')
+                value = '(inherited) ' + (value or '(none)')
+            print('  {}: {}'.format(backend_name, value or '(none)'))
+        backend = editor.ask('Backend [{} / back]: '.format(' / '.join(backends[language])))
+        if backend in backends[language]:
+            _settings_flags(editor, backends[language][backend], name)
 
 
 def _settings_profile_menu(editor, name):
     while name in editor.data['MODE_NAMES']:
         print('\nProfile {} ({})'.format(name, editor.data['MODE_KIND'][name]))
-        print('  flags     Edit shared compiler flags')
-        print('  CPU: ' + editor.data['MODE_CPU'].get(name, 'default'))
-        print('  preview   Inspect flags by compiler and library')
+        print('  flags     Edit flags by language and backend')
+        print('  advanced  Shared defaults, warnings, libraries and CPU')
+        print('  preview   Language → backend; --lib library details')
         choice = editor.ask('profile> [flags / preview / advanced / kind / cpu / delete / back]: ')
         if choice is None:
             continue
         if choice in ('', 'back'):
             return
         if choice == 'flags':
-            _settings_flags(editor, 'MODE_FLAGS', name)
-        elif choice == 'preview':
-            _settings_profile_preview(editor, name)
+            _settings_profile_languages(editor, name)
+        elif choice in ('preview', 'preview --lib'):
+            _settings_profile_preview(editor, name, choice.endswith('--lib'))
         elif choice == 'advanced':
-            groups = list(SETTINGS_GROUPS)
+            groups = [group for group in SETTINGS_GROUPS if not group.startswith(('c-', 'cpp-'))]
+            print('  cpu. Target CPU')
             for i, group in enumerate(groups, 1):
                 print('  {}. {}: {}'.format(i, group, editor.data[SETTINGS_GROUPS[group]].get(name, '') or '(none)'))
             group = editor.ask('Group number/name, or back: ')
@@ -4664,7 +4713,13 @@ def _settings_profile_menu(editor, name):
                 continue
             if group.isdecimal() and 1 <= int(group) <= len(groups):
                 group = groups[int(group) - 1]
-            if group in SETTINGS_GROUPS:
+            if group == 'cpu':
+                cpu = editor.ask('default or native: ')
+                if cpu not in (None, ''):
+                    changed = dict(editor.data['MODE_CPU'])
+                    changed[name] = _settings_choice('default', 'native')(cpu)
+                    editor.set('MODE_CPU', changed)
+            elif group in SETTINGS_GROUPS:
                 _settings_flags(editor, SETTINGS_GROUPS[group], name)
             elif group not in ('', 'back'):
                 print('Choose a displayed group.')
@@ -4731,6 +4786,9 @@ def _settings_profiles(editor):
                 updated['MODE_NAMES'].append(name)
                 for key in PROFILE_KEYS:
                     fallback = PROFILE_DEFAULTS.get(key, '')
+                    if template != 'plain' and key in ('MODE_C_GCC', 'MODE_C_CLANG'):
+                        if template not in updated[key]:
+                            continue
                     updated[key][name] = updated[key].get(template, fallback) if template != 'plain' else fallback
                 editor.replace(updated)
                 _settings_profile(editor, name)
@@ -4831,8 +4889,8 @@ def edit_settings(script_path):
         ('DEFAULT_SOURCE', 'Fallback source', _settings_filename),
         ('DEFAULT_WORKSPACE', 'Workspace path', None),
         ('DEFAULT_DESTINATION', 'Workspace-relative destination', _settings_destination),
-        ('DEFAULT_INPUT', 'Input file ({wsp-dir}/PATH supported)', _settings_file_path), ('DEFAULT_ANSWER', 'Answer file ({wsp-dir}/PATH supported)', _settings_file_path),
-        ('DEFAULT_OUTPUT', 'Program output: checks and -f auto/out ({wsp-dir}/PATH supported)', _settings_file_path),
+        ('DEFAULT_INPUT', 'Input file', _settings_file_path), ('DEFAULT_ANSWER', 'Answer file', _settings_file_path),
+        ('DEFAULT_OUTPUT', 'Program output: checks and -f auto/out', _settings_file_path),
         ('DEFAULT_REPORT', 'Test/stress report', _settings_file_path),
         ('DEFAULT_F_MODE', 'Bare -f action: macro (define FILEO) or auto (redirect files)', _settings_choice('macro', 'auto')),
         ('DEFAULT_MACRO', '-f macro identifier', _settings_macro),
@@ -4871,13 +4929,14 @@ def edit_settings(script_path):
             print('  workspaces Choose the main workspace and add other roots')
             print('  profiles   Create or edit build profiles')
             print('  tools      Choose language, compiler and interpreter')
-            print('  advanced   Paths, build options, checks and measurements')
+            print('  paths      Source, workspace and output paths')
+            print('  advanced   Build options, checks and measurements')
             try:
                 choice = editor.ask('settings> [section / save / cancel / help]: ')
                 if choice == 'advanced':
                     print('\nAdvanced settings')
                     sections = [
-                        ('Build flags', '1'), ('File paths', '2'), ('Warnings', '3'),
+                        ('Build flags', '1'), ('Warnings', '3'),
                         ('Time, memory and comparison limits', '4'), ('Stress testing', '6'),
                         ('Measurements', '7'), ('Language and formatter options', '8'),
                         ('Sample imports and failure reports', '9'), ('Build destinations', '10'),
@@ -4892,6 +4951,8 @@ def edit_settings(script_path):
                         choice = sections[int(choice) - 1][1]
                     if choice in ('', 'back'):
                         continue
+                elif choice == 'paths':
+                    choice = '2'
                 elif choice == 'workspaces':
                     _settings_workspaces(editor)
                     continue
@@ -4915,7 +4976,7 @@ def edit_settings(script_path):
                 if choice == '1':
                     _settings_build(editor)
                 elif choice == '2':
-                    _settings_fields(editor, 'Files (paths may start with {wsp-dir}/)', files)
+                    _settings_fields(editor, 'Paths · {wsp-dir}/PATH starts at the selected workspace', files)
                 elif choice == '3':
                     _settings_warnings(editor)
                 elif choice == '4':

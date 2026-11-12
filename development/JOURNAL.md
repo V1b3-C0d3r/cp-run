@@ -137,3 +137,7 @@ Measured terminal runs collect bounded stdin through EOF before launching a chil
 ## 1.3.2 — PTY tests follow input completion
 
 Updated both terminal typeahead measurement tests to submit EOF before expecting program startup. Retained byte-for-byte input, single echo, terminal-mode restoration and launch-count assertions. The 1.3.1 CI failures were stale test synchronization.
+
+## 1.4.0 — Language-specific profile editing
+
+Paths are a top-level settings section. Profile flags select language then backend, with independent C and C++ common flags and separate C backend overrides. Existing profile data retains its prior behavior. Preview groups languages and backends; --lib adds C++ library combinations. Personal contest presets are kept outside the repository.

@@ -21,8 +21,8 @@ COMPILER = r'''import json, os, pathlib, sys
 args = sys.argv[1:]
 if args == ['--version']:
     print('g++ (GNU GCC settings fixture) 16.2.0'); raise SystemExit(0)
-if args == ['--help=c++']:
-    print('  -std=c++20  C++20\n  -std=c++26  C++26'); raise SystemExit(0)
+if args in (['--help=c++'], ['--help=c']):
+    print('  -std=c++20  C++20\n  -std=c++26  C++26\n  -std=c99  C99\n  -std=gnu99  GNU99'); raise SystemExit(0)
 if '-dM' in args:
     print('#define __GLIBCXX__ 20261001\n#define _GLIBCXX_RELEASE 16'); raise SystemExit(0)
 with open(os.environ['SETTINGS_COMPILER_LOG'], 'a') as stream:
@@ -211,7 +211,7 @@ class SettingsTest(unittest.TestCase):
             self.assertEqual(self.script.read_bytes(), original)
 
     def test_saved_destinations_apply_to_their_routes_and_explicit_dest_wins(self):
-        self.configure('advanced\n2\n3\nflat\nsave\ny\n')
+        self.configure('paths\n3\nflat\nsave\ny\n')
         for flags, destination in (((), 'flat'), (('--save-relpath',), 'flat'),
                                    (('--save-relpath', '--dest-dir=chosen'), 'chosen')):
             result = self.invoke('compile', *flags)
@@ -221,12 +221,12 @@ class SettingsTest(unittest.TestCase):
     def test_destination_editor_rejects_invalid_relative_paths(self):
         original = self.script.read_bytes()
         for path in ('/absolute', '../outside', 'a/../b'):
-            result = self.configure('advanced\n2\n3\n' + path + '\ncancel\n')
+            result = self.configure('paths\n3\n' + path + '\ncancel\n')
             self.assertIn('Not changed', result.stdout)
             self.assertEqual(self.script.read_bytes(), original)
 
     def test_create_guarded_profile_copy_and_remove_it(self):
-        self.configure('5\nnew contest debug\nflags\n-O0\nsave\ny\n')
+        self.configure('5\nnew contest debug\nadvanced\ncommon\n-O0\nsave\ny\n')
         argv = self.build('--profile=contest')
         self.assertIn('-O0', argv)
         self.assertIn('-D_GLIBCXX_ASSERTIONS', argv)
@@ -237,7 +237,7 @@ class SettingsTest(unittest.TestCase):
         self.assertEqual(self.invoke('debug=contest').returncode, 2)
 
     def test_flags_profile_is_available_only_through_profile_option(self):
-        self.configure('5\nnew release plain\nflags\n-O3\nsave\ny\n')
+        self.configure('5\nnew release plain\nadvanced\ncommon\n-O3\nsave\ny\n')
         self.assertEqual(self.data()['MODE_KIND']['release'], 'flags')
         argv = self.build('--profile=release')
         self.assertIn('-O3', argv)
@@ -286,6 +286,24 @@ class SettingsTest(unittest.TestCase):
         self.assertNotIn('local-fast', deleted['MODE_NAMES'])
         for key in settings.PROFILE_KEYS:
             self.assertNotIn('local-fast', deleted[key])
+
+    def test_profile_language_flags_and_library_preview(self):
+        self.configure('profiles\nnew perlang plain\nflags\nc\ngcc\n-DC_ONLY -std=gnu99\nback\nc++\ngcc\n-DCPP_ONLY\nback\npython\ncpython\n-X dev\nback\nback\npreview\npreview --lib\nsave\ny\n')
+        data = self.data()
+        self.assertEqual(data['MODE_C_GCC']['perlang'], '-DC_ONLY -std=gnu99')
+        self.assertEqual(data['MODE_GCC']['perlang'], '-DCPP_ONLY')
+        self.assertEqual(data['MODE_CPYTHON']['perlang'], '-X dev')
+        cpp = self.build('--profile=perlang')
+        self.assertIn('-DCPP_ONLY', cpp)
+        self.assertNotIn('-DC_ONLY', cpp)
+        source = self.cwd / 'one.c'
+        source.write_text('int main(void) {return 0;}')
+        self.env['CC'] = str(self.compiler)
+        result = self.invoke('compile', source, '--profile=perlang', '-std=c99')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        argv = json.loads(self.log.read_text().splitlines()[-1])
+        self.assertIn('-DC_ONLY', argv)
+        self.assertNotIn('-DCPP_ONLY', argv)
 
     def test_plain_profile_cpu_default_preview_and_invalid_edit(self):
         result = self.configure('5\nnew baseline plain\npreview\ncpu\nunsupported\n5\nbaseline\ncpu\n\nsave\ny\n')
