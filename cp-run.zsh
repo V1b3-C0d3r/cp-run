@@ -8,7 +8,7 @@
 emulate -LR zsh
 setopt NO_UNSET PIPE_FAIL EXTENDED_GLOB
 unsetopt ALIASES
-typeset -r PROGRAM=cp-run VERSION=1.4.0
+typeset -r PROGRAM=cp-run VERSION=1.4.1
 typeset -r SCRIPT_PATH=${0:A} # Settings follow the real script when invoked through a symlink.
 
 # CP_RUN_SETTINGS_BEGIN
@@ -22,8 +22,6 @@ typeset -g DEFAULT_STANDARD=auto
 typeset -g DEFAULT_LANGUAGE=c++
 typeset -gA LANGUAGE_COMPILERS=()
 typeset -g DEFAULT_SOURCE=main.cpp
-typeset -g DEFAULT_TIMEOUT=inf
-typeset -g DEFAULT_MEMORY_LIMIT=inf
 typeset -g DEFAULT_INPUT=in.txt
 typeset -g DEFAULT_OUTPUT=out.txt
 typeset -g DEFAULT_ANSWER=ans.txt
@@ -59,8 +57,6 @@ typeset -g DEFAULT_BRUTE=brute.cpp
 typeset -g DEFAULT_GENERATOR=gen.cpp
 typeset -g DEFAULT_ITERATIONS=1000
 typeset -g DEFAULT_SEED=4
-typeset -g CHECK_TIMEOUT=1500
-typeset -g CHECK_MEMORY_LIMIT=256
 typeset -g TIME_KILL_FACTOR=2
 typeset -g MEMORY_KILL_FACTOR=2
 typeset -g DEFAULT_WARMUP=1
@@ -1343,7 +1339,7 @@ main() {
     local output= output_dir= output_name= output_abs= planned_source= planned_output= resolved_binary= auto_standard=
     local input_file=$DEFAULT_INPUT result_file=$DEFAULT_OUTPUT answer_file=$DEFAULT_ANSWER report_file=$DEFAULT_REPORT
     local brute_file=$DEFAULT_BRUTE generator_file=$DEFAULT_GENERATOR find_name= f_mode=none separator=$DEFAULT_SEPARATOR
-    local timeout_ms=$DEFAULT_TIMEOUT memory_mib=$DEFAULT_MEMORY_LIMIT num_test= seed= python= cwd=$PWD
+    local timeout_ms=inf memory_mib=inf num_test= seed= python= cwd=$PWD
     local warmup=$DEFAULT_WARMUP average=$DEFAULT_AVERAGE time_unit=$DEFAULT_TIME_UNIT memory_unit=$DEFAULT_MEMORY_UNIT
     local transfer_action= transfer_path= history_directory= history_warning=0
     local value option_name arg index previous role base_profile=none temporary= current_profile previous_profile
@@ -1447,10 +1443,6 @@ main() {
         fail "profile '$profile' is a flags set; select it with --profile=$profile"
     fi
     if [[ $action == test || $action == stress ]]; then [[ $f_mode == none ]] || fail '-f is unavailable in test/stress'; fi
-    if [[ $action == test || $action == stress ]]; then
-        (( timeout_given )) || timeout_ms=$CHECK_TIMEOUT
-        (( memory_given )) || memory_mib=$CHECK_MEMORY_LIMIT
-    fi
     (( ! measurement_controls || measure_time || measure_memory )) || fail '--warm-up/--average require -t or -m'
     # In ordinary/run execution, override one side of auto redirection. Reuse
     # the existing in/out paths so direct and measured launches stay identical;
@@ -2350,7 +2342,7 @@ def supervise(config):
         sink = stack.enter_context(open(os.devnull, 'wb'))
         errors = stack.enter_context(tempfile.TemporaryFile())
         replay, replay_offset, captured_terminal = None, 0, False
-        if observed or count > 1:
+        if observed or count > 1 or str(config.get('timeout_ms', 'inf')) != 'inf' or str(config.get('memory_mib', 'inf')) != 'inf':
             maximum = positive_setting(config.get('max_spool', 268435456), 'spool limit')
             if os.isatty(0):
                 replay = stack.enter_context(tempfile.TemporaryFile())
@@ -2368,11 +2360,12 @@ def supervise(config):
                         raise CheckSetupError('replayed input exceeds spool byte limit')
                     replay.write(block)
                 replay.seek(0)
-                initial = runner.run(argv, stdin=replay, report=False)
-                if initial.status:
-                    runner.diagnostic(initial)
-                    return initial.status
-                captured_terminal = True
+                if observed:
+                    initial = runner.run(argv, stdin=replay, report=False)
+                    if initial.status:
+                        runner.diagnostic(initial)
+                        return initial.status
+                    captured_terminal = True
             else:
                 source = stack.enter_context(os.fdopen(os.dup(0), 'rb'))
                 if stat.S_ISREG(os.fstat(0).st_mode):
@@ -4164,8 +4157,8 @@ FACTORY_SETTINGS = {
     'MODE_CPP_FLAGS': {}, 'MODE_C_FLAGS': {}, 'MODE_C_GCC': {}, 'MODE_C_CLANG': {},
     'DEFAULT_COMPILER': 'GCC', 'DEFAULT_STANDARD': 'auto',
     'DEFAULT_LANGUAGE': 'c++', 'LANGUAGE_COMPILERS': {},
-    'DEFAULT_SOURCE': 'main.cpp', 'DEFAULT_TIMEOUT': 'inf',
-    'DEFAULT_MEMORY_LIMIT': 'inf', 'DEFAULT_INPUT': 'in.txt',
+    'DEFAULT_SOURCE': 'main.cpp',
+    'DEFAULT_INPUT': 'in.txt',
     'DEFAULT_OUTPUT': 'out.txt', 'DEFAULT_ANSWER': 'ans.txt',
     'DEFAULT_REPORT': 'test_out', 'DEFAULT_SEPARATOR': r'\n\x1e\n',
     'DEFAULT_INTERPRETER': 'pypy3',
@@ -4182,7 +4175,7 @@ FACTORY_SETTINGS = {
     'DEFAULT_DESTINATION': '.',
     'DEFAULT_BRUTE': 'brute.cpp', 'DEFAULT_GENERATOR': 'gen.cpp',
     'DEFAULT_ITERATIONS': '1000', 'DEFAULT_SEED': '4',
-    'CHECK_TIMEOUT': '1500', 'CHECK_MEMORY_LIMIT': '256',
+
     'TIME_KILL_FACTOR': '2', 'MEMORY_KILL_FACTOR': '2',
     'DEFAULT_WARMUP': '1', 'DEFAULT_AVERAGE': '1',
     'DEFAULT_TIME_UNIT': 'ms', 'DEFAULT_MEMORY_UNIT': 'KiB',
@@ -4896,12 +4889,8 @@ def edit_settings(script_path):
         ('DEFAULT_MACRO', '-f macro identifier', _settings_macro),
     ]
     checks = [
-        ('DEFAULT_TIMEOUT', 'Time budget in ms', lambda v: _settings_positive(v, True)),
-        ('DEFAULT_MEMORY_LIMIT', 'Memory budget in MiB', lambda v: _settings_positive(v, True)),
         ('DEFAULT_SEPARATOR', r'Auto-test separator (visible \n)', lambda v: (_settings_separator(v), v)[1]),
         ('DEFAULT_LINE_LIMIT', 'Comparison row budget', _settings_positive),
-        ('CHECK_TIMEOUT', 'Test/stress time budget in ms', lambda v: _settings_positive(v, True)),
-        ('CHECK_MEMORY_LIMIT', 'Test/stress memory budget in MiB', lambda v: _settings_positive(v, True)),
         ('TIME_KILL_FACTOR', 'Time kill multiplier (>= 1)', lambda v: (_factor(v), v)[1]),
         ('MEMORY_KILL_FACTOR', 'Memory kill multiplier (>= 1)', lambda v: (_factor(v), v)[1]),
         ('MAX_LINE_BYTES', 'Maximum compared row bytes', _settings_positive),
@@ -5125,6 +5114,8 @@ def validate_preferences(values):
     values = copy.deepcopy(values)
     # Old exports may carry templates and inherited routing. Keep an explicit
     # old folder, but fixed filenames replace all per-case path expressions.
+    for retired in ('DEFAULT_TIMEOUT', 'DEFAULT_MEMORY_LIMIT', 'CHECK_TIMEOUT', 'CHECK_MEMORY_LIMIT'):
+        values.pop(retired, None)
     old_folder = values.pop('DEFAULT_TEST_DIR', '')
     if not isinstance(old_folder, str):
         raise ValueError('invalid legacy test folder')
@@ -5156,8 +5147,6 @@ def validate_preferences(values):
     _settings_filename(data['DEFAULT_SOURCE'])
     for key in ('DEFAULT_BRUTE', 'DEFAULT_GENERATOR'):
         _settings_filename(data[key])
-    for key in ('DEFAULT_TIMEOUT', 'DEFAULT_MEMORY_LIMIT', 'CHECK_TIMEOUT', 'CHECK_MEMORY_LIMIT'):
-        data[key] = _settings_positive(data[key], True)
     for key in ('DEFAULT_LINE_LIMIT', 'DEFAULT_ITERATIONS', 'MAX_LINE_BYTES', 'MAX_CHECK_BYTES',
                 'MAX_REPORT_BYTES', 'MAX_REPORT_LINES', 'MAX_SPOOL_BYTES'):
         data[key] = _settings_positive(data[key])

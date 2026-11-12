@@ -166,7 +166,7 @@ One filename overrides input, two override input and output. Only one stream can
 | `--average[=N]` | Median time and maximum RSS across N measurements; saved default 1. Bare uses saved N; 0 means 1. Maximum 100000. |
 | `--time-unit=UNIT` | `s` or `ms` (factory). |
 | `--memory-unit=UNIT` | `B`, `KB`, `KiB` (factory), `MB` or `MiB`; an equivalent larger unit is added when useful. |
-| `--TLE=MS`, `--MLE=MiB` | Positive integers or `inf`. Factory ordinary/run limits: unlimited; test/stress: 1500 ms / 256 MiB per process. |
+| `--TLE=MS`, `--MLE=MiB` | Positive integers or `inf`. All commands are unlimited by default. Limits are enabled only by explicit CLI flags; they cannot be saved in settings or profiles. |
 
 Warm-up/repetition controls require `-t` or `-m`; neither is available in build-only commands. Prepare once, optionally warm up, then measure. Only the first measured stdout is canonical. Test/stress verify repeated results and retain separate evidence for a failed repeat.
 

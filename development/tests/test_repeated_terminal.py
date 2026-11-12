@@ -88,6 +88,27 @@ class RepeatedTerminalTest(unittest.TestCase):
                 process.kill()
                 process.communicate()
 
+    def test_limit_without_measurement_waits_for_eof(self):
+        self.program()
+        master, slave = pty.openpty()
+        args = [str(self.script), 'run', str(self.source),
+                '--interpreter=' + sys.executable, '--TLE=500']
+        process = subprocess.Popen(args, cwd=self.root, env=self.env,
+            stdin=slave, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            self.assertIn('Ctrl-D', process.stderr.readline())
+            self.assertFalse((self.root / 'count').exists())
+            os.write(master, b'input\n\x04')
+            stdout, stderr = process.communicate(timeout=15)
+            self.assertEqual(process.returncode, 0, stderr)
+            self.assertIn('input', stdout)
+        finally:
+            os.close(master)
+            os.close(slave)
+            if process.poll() is None:
+                process.kill()
+                process.communicate()
+
     def test_no_input_program_finishes_after_empty_eof(self):
         self.program(reads=False)
         status, stdout, stderr = self.terminal()

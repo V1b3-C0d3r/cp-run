@@ -174,7 +174,7 @@ class SettingsTest(unittest.TestCase):
         self.assertFalse((self.cwd / 'out.txt').exists())
 
     def test_global_separator_and_comparison_budget_apply_to_checks(self):
-        self.configure('4\n3\n\\n###\\n\n4\n1\nsave\ny\n')
+        self.configure('4\n1\n\\n###\\n\n2\n1\nsave\ny\n')
         self.binary()
         (self.cwd / 'in.txt').write_text('one\n###\ntwo\n')
         (self.cwd / 'ans.txt').write_text('one\n###\ntwo\n')
@@ -183,10 +183,11 @@ class SettingsTest(unittest.TestCase):
         self.assertIn('PASS', (self.cwd / 'test_out').read_text())
         self.assertEqual(self.data()['DEFAULT_SEPARATOR'], r'\n###\n')
 
-    def test_default_timeout_applies_to_existing_binary(self):
-        self.configure('4\n1\n30\nsave\ny\n')
-        self.binary(body='sleep 2\n')
+    def test_timeout_requires_explicit_flag(self):
+        self.binary(body='sleep 0.2\n')
         result = self.invoke('run', './runner.out')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        result = self.invoke('run', './runner.out', '--TLE=30')
         self.assertEqual(result.returncode, 124, result.stderr)
         self.assertIn('30 ms', result.stderr)
 
@@ -286,6 +287,14 @@ class SettingsTest(unittest.TestCase):
         self.assertNotIn('local-fast', deleted['MODE_NAMES'])
         for key in settings.PROFILE_KEYS:
             self.assertNotIn('local-fast', deleted[key])
+
+    def test_old_saved_limits_are_discarded_on_import(self):
+        data = self.data()
+        data.update(DEFAULT_TIMEOUT='1', DEFAULT_MEMORY_LIMIT='1',
+                    CHECK_TIMEOUT='1', CHECK_MEMORY_LIMIT='1')
+        migrated = settings.validate_preferences(data)
+        for key in ('DEFAULT_TIMEOUT', 'DEFAULT_MEMORY_LIMIT', 'CHECK_TIMEOUT', 'CHECK_MEMORY_LIMIT'):
+            self.assertNotIn(key, migrated)
 
     def test_profile_language_flags_and_library_preview(self):
         self.configure('profiles\nnew perlang plain\nflags\nc\ngcc\n-DC_ONLY -std=gnu99\nback\nc++\ngcc\n-DCPP_ONLY\nback\npython\ncpython\n-X dev\nback\nback\npreview\npreview --lib\nsave\ny\n')

@@ -302,8 +302,10 @@ class ReleaseEngineTest(unittest.TestCase):
 
     def test_factory_budget_policy_preserves_native_ordinary_path(self):
         settings = engine.FACTORY_SETTINGS
-        self.assertEqual((settings['DEFAULT_TIMEOUT'], settings['DEFAULT_MEMORY_LIMIT']), ('inf', 'inf'))
-        self.assertEqual((settings['CHECK_TIMEOUT'], settings['CHECK_MEMORY_LIMIT']), ('1500', '256'))
+        self.assertNotIn('DEFAULT_TIMEOUT', settings)
+        self.assertNotIn('DEFAULT_MEMORY_LIMIT', settings)
+        self.assertNotIn('CHECK_TIMEOUT', settings)
+        self.assertNotIn('CHECK_MEMORY_LIMIT', settings)
 
     def test_stress_survives_thousand_successes_over_old_global_budget(self):
         import tempfile

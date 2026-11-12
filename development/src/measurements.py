@@ -125,7 +125,7 @@ def supervise(config):
         sink = stack.enter_context(open(os.devnull, 'wb'))
         errors = stack.enter_context(tempfile.TemporaryFile())
         replay, replay_offset, captured_terminal = None, 0, False
-        if observed or count > 1:
+        if observed or count > 1 or str(config.get('timeout_ms', 'inf')) != 'inf' or str(config.get('memory_mib', 'inf')) != 'inf':
             maximum = positive_setting(config.get('max_spool', 268435456), 'spool limit')
             if os.isatty(0):
                 replay = stack.enter_context(tempfile.TemporaryFile())
@@ -143,11 +143,12 @@ def supervise(config):
                         raise CheckSetupError('replayed input exceeds spool byte limit')
                     replay.write(block)
                 replay.seek(0)
-                initial = runner.run(argv, stdin=replay, report=False)
-                if initial.status:
-                    runner.diagnostic(initial)
-                    return initial.status
-                captured_terminal = True
+                if observed:
+                    initial = runner.run(argv, stdin=replay, report=False)
+                    if initial.status:
+                        runner.diagnostic(initial)
+                        return initial.status
+                    captured_terminal = True
             else:
                 source = stack.enter_context(os.fdopen(os.dup(0), 'rb'))
                 if stat.S_ISREG(os.fstat(0).st_mode):

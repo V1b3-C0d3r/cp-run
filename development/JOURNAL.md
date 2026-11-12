@@ -141,3 +141,7 @@ Updated both terminal typeahead measurement tests to submit EOF before expecting
 ## 1.4.0 — Language-specific profile editing
 
 Paths are a top-level settings section. Profile flags select language then backend, with independent C and C++ common flags and separate C backend overrides. Existing profile data retains its prior behavior. Preview groups languages and backends; --lib adds C++ library combinations. Personal contest presets are kept outside the repository.
+
+## 1.4.1 — Explicit resource limits
+
+Time and memory limits are CLI-only and default to unlimited for all operations. Imports discard legacy saved limits. Measurements and explicit limits collect complete terminal stdin before any execution.

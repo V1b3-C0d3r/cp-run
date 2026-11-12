@@ -8,6 +8,8 @@ def validate_preferences(values):
     values = copy.deepcopy(values)
     # Old exports may carry templates and inherited routing. Keep an explicit
     # old folder, but fixed filenames replace all per-case path expressions.
+    for retired in ('DEFAULT_TIMEOUT', 'DEFAULT_MEMORY_LIMIT', 'CHECK_TIMEOUT', 'CHECK_MEMORY_LIMIT'):
+        values.pop(retired, None)
     old_folder = values.pop('DEFAULT_TEST_DIR', '')
     if not isinstance(old_folder, str):
         raise ValueError('invalid legacy test folder')
@@ -39,8 +41,6 @@ def validate_preferences(values):
     _settings_filename(data['DEFAULT_SOURCE'])
     for key in ('DEFAULT_BRUTE', 'DEFAULT_GENERATOR'):
         _settings_filename(data[key])
-    for key in ('DEFAULT_TIMEOUT', 'DEFAULT_MEMORY_LIMIT', 'CHECK_TIMEOUT', 'CHECK_MEMORY_LIMIT'):
-        data[key] = _settings_positive(data[key], True)
     for key in ('DEFAULT_LINE_LIMIT', 'DEFAULT_ITERATIONS', 'MAX_LINE_BYTES', 'MAX_CHECK_BYTES',
                 'MAX_REPORT_BYTES', 'MAX_REPORT_LINES', 'MAX_SPOOL_BYTES'):
         data[key] = _settings_positive(data[key])

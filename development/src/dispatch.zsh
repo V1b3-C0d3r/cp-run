@@ -23,7 +23,7 @@ main() {
     local output= output_dir= output_name= output_abs= planned_source= planned_output= resolved_binary= auto_standard=
     local input_file=$DEFAULT_INPUT result_file=$DEFAULT_OUTPUT answer_file=$DEFAULT_ANSWER report_file=$DEFAULT_REPORT
     local brute_file=$DEFAULT_BRUTE generator_file=$DEFAULT_GENERATOR find_name= f_mode=none separator=$DEFAULT_SEPARATOR
-    local timeout_ms=$DEFAULT_TIMEOUT memory_mib=$DEFAULT_MEMORY_LIMIT num_test= seed= python= cwd=$PWD
+    local timeout_ms=inf memory_mib=inf num_test= seed= python= cwd=$PWD
     local warmup=$DEFAULT_WARMUP average=$DEFAULT_AVERAGE time_unit=$DEFAULT_TIME_UNIT memory_unit=$DEFAULT_MEMORY_UNIT
     local transfer_action= transfer_path= history_directory= history_warning=0
     local value option_name arg index previous role base_profile=none temporary= current_profile previous_profile
@@ -127,10 +127,6 @@ main() {
         fail "profile '$profile' is a flags set; select it with --profile=$profile"
     fi
     if [[ $action == test || $action == stress ]]; then [[ $f_mode == none ]] || fail '-f is unavailable in test/stress'; fi
-    if [[ $action == test || $action == stress ]]; then
-        (( timeout_given )) || timeout_ms=$CHECK_TIMEOUT
-        (( memory_given )) || memory_mib=$CHECK_MEMORY_LIMIT
-    fi
     (( ! measurement_controls || measure_time || measure_memory )) || fail '--warm-up/--average require -t or -m'
     # In ordinary/run execution, override one side of auto redirection. Reuse
     # the existing in/out paths so direct and measured launches stay identical;
