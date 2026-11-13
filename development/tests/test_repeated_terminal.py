@@ -67,14 +67,14 @@ class RepeatedTerminalTest(unittest.TestCase):
     def test_single_timed_run_waits_for_complete_input_without_starting_child(self):
         self.program()
         master, slave = pty.openpty()
-        process = subprocess.Popen(self.args(1, 0) + ['--TLE=100'],
+        process = subprocess.Popen(self.args(1, 0) + ['--TLE=1000'],
             cwd=self.root, env=self.env, stdin=slave, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, text=True)
         try:
             self.assertIn('Ctrl-D', process.stderr.readline())
             os.write(master, b'complete input\n')
             # Wait beyond the hard execution deadline while the input is open.
-            self.assertFalse(select.select([process.stdout], [], [], 0.5)[0])
+            self.assertFalse(select.select([process.stdout], [], [], 2.5)[0])
             self.assertIsNone(process.poll())
             self.assertFalse((self.root / 'count').exists())
             os.write(master, b'\x04')
