@@ -122,7 +122,7 @@ class FormattingTest(unittest.TestCase):
         prepared = self.invoke('compile', self.source)
         self.assertEqual(prepared.returncode, 0, prepared.stderr)
         before = self.calls(include_probes=True)
-        result = self.invoke('-', '--make-prettier')
+        result = self.invoke('format', '--clang', '-')
         self.assertEqual((result.returncode, result.stdout), (0, ''), result.stderr)
         self.assertEqual(Path(self.formatted()[-1][-1]), self.source)
         self.assertEqual(self.calls(include_probes=True), before)

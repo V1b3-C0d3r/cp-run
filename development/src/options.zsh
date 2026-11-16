@@ -379,6 +379,9 @@ parse_cli() {
             --no-run) fail '--no-run was replaced by the compile command' ;;
             --debug-flags|--extra-debug-flags|--mode|--mode=*) fail 'use debug, debug=extra or --profile=NAME' ;;
             --test|--run-file|--run-file=*|--run-args|--run-arg=*) fail 'use test/run commands and -- argument boundaries; see --help' ;;
+            -)
+                if [[ -n $prettier && -z $source_file ]]; then source_file=-
+                else compiler_args+=("$arg"); fi ;;
             -*)
                 compiler_args+=("$arg")
                 if compiler_operand "$arg" && (( $# )); then compiler_args+=("$1"); shift; fi ;;

@@ -149,3 +149,5 @@ Time and memory limits are CLI-only and default to unlimited for all operations.
 ## School formatter branch
 
 Added a format action retaining prior source planning and legacy alias. Factory mode is clang. School stages candidates, uses AST diagnostics, fixed whitespace rules and GCC flag verification. Scope and author-review requirements are in docs/SCHOOL_FORMAT.md. Main CI was red due to macOS runner acquisition timeout; Linux test jobs had passed. Retried failed jobs without weakening checks.
+
+Verification: full local suite ran 534 tests; 532 passed and the two localhost tests passed when rerun outside the bind-restricted sandbox. Later focused checks passed 8 school tests and 8 formatting compatibility tests. Exact GNU 11.3.0 and automatic semantic certification remain outside the verified coverage.
