@@ -16,7 +16,7 @@ RELEASE = ROOT.parent.parent / 'Versions' / VERSION if ROOT.parent.name == 'Work
 ZSH_MODULES = ('bootstrap.zsh', 'options.zsh', 'paths.zsh', 'languages.zsh', 'toolchain.zsh',
                'profiles.zsh', 'artifacts.zsh', 'history.zsh', 'dispatch.zsh', 'launcher.zsh')
 PYTHON_MODULES = ('memory.py', 'runtime.py', 'measurements.py', 'cases.py', 'test_layout.py', 'bundles.py', 'comparison.py', 'reporting.py',
-                  'checking.py', 'stress.py', 'minimization.py', 'companion.py', 'school_format.py', 'integrations.py', 'settings_schema.py', 'settings.py',
+                  'checking.py', 'stress.py', 'minimization.py', 'companion.py', 'school_format.py', 'school_policy.py', 'school_project.py', 'integrations.py', 'settings_schema.py', 'settings.py',
                   'preferences.py', 'bridge.py')
 
 
@@ -32,6 +32,7 @@ def build():
     schema = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(schema)
     shell = shell.replace('# @NATIVE_SETTINGS@', schema.settings_text(schema.FACTORY_SETTINGS))
+    shell = shell.replace('# @SCHOOL_POLICY@', schema.school_shell_policy())
     # A quoted heredoc embeds data without evaluating shell metacharacters.
     if '\nCP_RUN_PYTHON\n' in support or shell.count('# @EMBEDDED_PYTHON@') != 1:
         raise ValueError('invalid embedded Python marker or delimiter')

@@ -140,37 +140,43 @@ Action codes are **F** for a semantics-preserving layout fix followed by verific
 | 6.5 | Audit header dependencies against types/entities needed by its declarations. E for a proven implementation-only include; R for templates/macros/forward-declaration tradeoffs. Do not remove includes automatically. | T6_5 unnecessary stdio include, FILE declaration requiring stdio, implementation-only I/O and template-dependent header. |
 | 6.6 | Locate the relevant project Makefile, parse rules read-only and require all/clean. E for missing targets; R for recipes' completeness and cleanup safety. Never run make clean to test the rule on user files. | T6_6 absent file/target, grouped targets, include/variables, complete project and unrelated-file preservation. |
 
+## Shared school preset
+
+One immutable policy record owns the C and C++ flags. The school formatter and the school compilation profile consume that same record. The named profile uses GNU GCC and bypasses unrelated global warning/optimization defaults; explicit user compiler arguments remain explicit overrides and are shown in the command. Reject a Clang backend for the pinned school preset. C++ selects its documented driver/flag subset; school does not target Python.
+
+The preset's policy flags are read-only in configure. Users can copy school to another profile for custom flags without modifying the school verifier. Destination and relative-path routing remain editable profile settings. Import normalizes an existing school preset against the canonical policy, with local backup before migration. Integration test P_school_sync compares ordered compiler argv for the preset and verifier, both languages, default GCC selection, explicit Clang rejection, copy behavior and import preservation.
+
 ## GCC flag architecture
 
 The reference environment is GNU C 11.3.0. The verifier must establish GNU identity, log the actual version and preserve the exact ordered C argv below. Clang's AST pass does not replace GCC checks. Compilation profiles may add user flags during ordinary compilation, but school verification uses its fixed policy.
 
 Test IDs G01–G23 are planned real-GCC contract tests. Positive and negative fixtures invoke the complete policy; diagnostics should expose the relevant warning when GCC provides it. Parser/formatting reviews are tested separately so a review cannot masquerade as a compiler warning.
 
-| ID | Flag occurrence | Role and planned verification |
-| --- | --- | --- |
-| G01 | -O2 | Optimize candidate as on the school server. Assert exact argv and compile a preprocessor fixture requiring __OPTIMIZE__. No performance claim. |
-| G02 | -Wall | Enable the baseline warning family. Unused-variable fixture fails; used variable passes. |
-| G03 | -Werror | Promote enabled warnings to errors. Assert nonzero compiler status; no source publication. |
-| G04 | -Wformat-security | Nonliteral printf format without arguments fails; literal format passes. |
-| G05 | -Wignored-qualifiers | Ignored return-type qualifier fixture fails; legitimate pointee qualifier passes. |
-| G06 | -Winit-self | Self-initialized scalar fixture fails with the enabled uninitialized/self-init diagnostics; proper initializer passes. |
-| G07 | -Wswitch-default | Switch without default fails; explicit default passes. Do not insert default behavior automatically. |
-| G08 | -Wfloat-equal | Direct floating equality fixture fails; integer comparison passes. Never invent epsilon/tolerance. |
-| G09 | -Wpointer-arith | void/function-pointer arithmetic fixture fails; arithmetic on a complete object type passes. |
-| G10 | -Wtype-limits | Always-false unsigned comparison fixture fails; meaningful bound comparison passes. |
-| G11 | -Wempty-body | Accidental empty conditional body fails; explicit compound statement passes. |
-| G12 | -Wno-logical-op | Preserve the disabled logical-op warning. A suitable logical-op warning probe must not fail specifically for logical-op; argv retains the switch. This does not waive style rules. |
-| G13 | -Wstrict-prototypes | Empty C declaration parameter list fails; (void) passes. C++ excludes this C-only switch. |
-| G14 | -Wold-style-declaration | Misplaced storage-class specifier fails; conventional declaration passes. C++ excludes this switch. |
-| G15 | -Wold-style-definition | K&R definition fails; typed prototype-style definition passes. C++ excludes this switch. |
-| G16 | -Wmissing-parameter-type | Missing K&R parameter type fails; all types explicit passes. C++ excludes this switch. |
-| G17 | -Wmissing-field-initializers | Missing structure-field initializer warning fails; complete initialization passes. PDF memset obligation remains a separate rule. |
-| G18 | -Wnested-externs | Nested extern declaration fails; file-scope prototype passes. C++ excludes this switch. |
-| G19 | -Wno-pointer-sign | Preserve the signedness-warning exception with a probe that has no other incompatible-pointer warning. It does not waive type safety or PDF checks. C++ excludes this C-only switch. |
-| G20 | -Wno-unused-result | Preserve the ignored warn_unused_result exception. A marked-result probe passes that warning gate; correct result handling also passes. |
-| G21 | -std=gnu99 | Compile GNU C99; fixture checks __STDC_VERSION__ == 199901L and a GNU extension. C++ instead uses its documented GNU++17 policy. |
-| G22 | first -lm | Place math-library linkage after the source/object. Link a runtime-dependent math call so constant folding cannot hide a missing library. Never execute the candidate. |
-| G23 | second -lm | Preserve the second occurrence and order exactly. Assert ordered argv, rather than assuming semantic deduplication is harmless. |
+| ID  | Flag occurrence              | Role and planned verification                                                                                                                                                        |
+| --- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| G01 | -O2                          | Optimize candidate as on the school server. Assert exact argv and compile a preprocessor fixture requiring __OPTIMIZE__. No performance claim.                                       |
+| G02 | -Wall                        | Enable the baseline warning family. Unused-variable fixture fails; used variable passes.                                                                                             |
+| G03 | -Werror                      | Promote enabled warnings to errors. Assert nonzero compiler status; no source publication.                                                                                           |
+| G04 | -Wformat-security            | Nonliteral printf format without arguments fails; literal format passes.                                                                                                             |
+| G05 | -Wignored-qualifiers         | Ignored return-type qualifier fixture fails; legitimate pointee qualifier passes.                                                                                                    |
+| G06 | -Winit-self                  | Self-initialized scalar fixture fails with the enabled uninitialized/self-init diagnostics; proper initializer passes.                                                               |
+| G07 | -Wswitch-default             | Switch without default fails; explicit default passes. Do not insert default behavior automatically.                                                                                 |
+| G08 | -Wfloat-equal                | Direct floating equality fixture fails; integer comparison passes. Never invent epsilon/tolerance.                                                                                   |
+| G09 | -Wpointer-arith              | void/function-pointer arithmetic fixture fails; arithmetic on a complete object type passes.                                                                                         |
+| G10 | -Wtype-limits                | Always-false unsigned comparison fixture fails; meaningful bound comparison passes.                                                                                                  |
+| G11 | -Wempty-body                 | Accidental empty conditional body fails; explicit compound statement passes.                                                                                                         |
+| G12 | -Wno-logical-op              | Preserve the disabled logical-op warning. A suitable logical-op warning probe must not fail specifically for logical-op; argv retains the switch. This does not waive style rules.   |
+| G13 | -Wstrict-prototypes          | Empty C declaration parameter list fails; (void) passes. C++ excludes this C-only switch.                                                                                            |
+| G14 | -Wold-style-declaration      | Misplaced storage-class specifier fails; conventional declaration passes. C++ excludes this switch.                                                                                  |
+| G15 | -Wold-style-definition       | K&R definition fails; typed prototype-style definition passes. C++ excludes this switch.                                                                                             |
+| G16 | -Wmissing-parameter-type     | Missing K&R parameter type fails; all types explicit passes. C++ excludes this switch.                                                                                               |
+| G17 | -Wmissing-field-initializers | Missing structure-field initializer warning fails; complete initialization passes. PDF memset obligation remains a separate rule.                                                    |
+| G18 | -Wnested-externs             | Nested extern declaration fails; file-scope prototype passes. C++ excludes this switch.                                                                                              |
+| G19 | -Wno-pointer-sign            | Preserve the signedness-warning exception with a probe that has no other incompatible-pointer warning. It does not waive type safety or PDF checks. C++ excludes this C-only switch. |
+| G20 | -Wno-unused-result           | Preserve the ignored warn_unused_result exception. A marked-result probe passes that warning gate; correct result handling also passes.                                              |
+| G21 | -std=gnu99                   | Compile GNU C99; fixture checks __STDC_VERSION__ == 199901L and a GNU extension. C++ instead uses its documented GNU++17 policy.                                                     |
+| G22 | first -lm                    | Place math-library linkage after the source/object. Link a runtime-dependent math call so constant folding cannot hide a missing library. Never execute the candidate.               |
+| G23 | second -lm                   | Preserve the second occurrence and order exactly. Assert ordered argv, rather than assuming semantic deduplication is harmless.                                                      |
 
 C++ retains G01–G12, G17, G20, G22 and G23, uses the GNU C++ driver and replaces G21 with -std=gnu++17. C-only G13–G16/G18/G19 are absent. Tests verify the full C++ vector independently.
 

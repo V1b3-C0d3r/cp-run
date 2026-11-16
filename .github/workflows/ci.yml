@@ -84,3 +84,34 @@ jobs:
           "$install_dir/bin/cp-run" run "$install_dir/main.out" -tm
           rm "$install_dir/bin/cp-run"
           test ! -e "$install_dir/bin/cp-run"
+
+  school-reference:
+    name: school (GNU 11.3.0)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      TMPDIR: /tmp
+      SCHOOL_REFERENCE_VERSION: 11.3.0
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - name: Install school frontend tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang clang-format zsh
+          docker pull gcc:11.3
+      - name: Prepare reference compiler wrappers
+        run: |
+          mkdir -p /tmp/school-reference
+          install -m 755 .github/scripts/school-reference.py /tmp/school-reference/gcc
+          install -m 755 .github/scripts/school-reference.py /tmp/school-reference/g++
+          echo 'CP_RUN_GCC=/tmp/school-reference/gcc' >> "$GITHUB_ENV"
+      - name: Build and verify reference compiler contracts
+        run: |
+          python3 -B development/build.py
+          cd development/tests
+          python3 -B -m unittest -v test_school_compiler test_school_format test_school_policy test_school_layout

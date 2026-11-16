@@ -13,6 +13,8 @@ typeset -r SCRIPT_PATH=${0:A} # Settings follow the real script when invoked thr
 
 # @NATIVE_SETTINGS@
 
+# @SCHOOL_POLICY@
+
 
 fail() { printf '%s: %s\n' "$PROGRAM" "$1" >&2; exit "${2:-2}"; }
 

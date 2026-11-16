@@ -15,6 +15,19 @@ import subprocess
 import tempfile
 
 
+SCHOOL_C_FLAGS = (
+    '-O2 -Wall -Werror -Wformat-security -Wignored-qualifiers -Winit-self '
+    '-Wswitch-default -Wfloat-equal -Wpointer-arith -Wtype-limits -Wempty-body '
+    '-Wno-logical-op -Wstrict-prototypes -Wold-style-declaration -Wold-style-definition '
+    '-Wmissing-parameter-type -Wmissing-field-initializers -Wnested-externs '
+    '-Wno-pointer-sign -Wno-unused-result -std=gnu99 -lm -lm'
+).split()
+SCHOOL_C_ONLY = {'-std=gnu99', '-Wstrict-prototypes', '-Wold-style-declaration',
+                 '-Wold-style-definition', '-Wmissing-parameter-type', '-Wnested-externs',
+                 '-Wno-pointer-sign'}
+SCHOOL_CPP_FLAGS = [flag for flag in SCHOOL_C_FLAGS if flag not in SCHOOL_C_ONLY] + ['-std=gnu++17']
+
+
 SETTINGS_BEGIN = '# CP_RUN_SETTINGS_BEGIN'
 SETTINGS_END = '# CP_RUN_SETTINGS_END'
 SETTINGS_GROUPS = {
@@ -96,6 +109,28 @@ FACTORY_SETTINGS = {
         'extra': '-Wsign-conversion -Wnull-dereference -Wvla -Wfloat-equal -Wswitch-enum -Wformat=2 -Wpedantic -Wunreachable-code -Warray-bounds',
     },
 }
+
+
+# The school verifier and native compilation preset share one immutable policy.
+FACTORY_SETTINGS['MODE_NAMES'].append('school')
+for _school_key in PROFILE_KEYS:
+    if _school_key not in ('MODE_DEST_DIR', 'MODE_SAVE_RELPATH'):
+        FACTORY_SETTINGS[_school_key]['school'] = PROFILE_DEFAULTS.get(_school_key, '')
+FACTORY_SETTINGS['MODE_C_GCC']['school'] = shlex.join(SCHOOL_C_FLAGS)
+FACTORY_SETTINGS['MODE_GCC']['school'] = shlex.join(SCHOOL_CPP_FLAGS)
+
+
+def school_shell_policy():
+    return ('typeset -gra SCHOOL_C_FLAGS=(' + shlex.join(SCHOOL_C_FLAGS) + ')\n' +
+            'typeset -gra SCHOOL_CPP_FLAGS=(' + shlex.join(SCHOOL_CPP_FLAGS) + ')')
+
+
+def normalize_school_preset(data):
+    if 'school' not in data['MODE_NAMES']:
+        return
+    for key in PROFILE_KEYS:
+        if key not in ('MODE_DEST_DIR', 'MODE_SAVE_RELPATH'):
+            data[key]['school'] = FACTORY_SETTINGS[key]['school']
 
 
 def read_settings(source):

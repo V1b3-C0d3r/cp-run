@@ -100,6 +100,7 @@ def validate_preferences(values):
             raise ValueError('invalid profile CPU policy: ' + name)
     for key in PROFILE_KEYS:
         if set(data[key]) - set(names): raise ValueError('unknown profile in ' + key)
+    normalize_school_preset(data)
     # Validate the shell-word grammar while preserving the original spelling.
     for key in ('DEFAULT_FLAGS', 'WARNINGS_GCC', 'WARNINGS_CLANG'):
         flag_units(data[key])

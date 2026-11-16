@@ -355,7 +355,10 @@ main() {
                 [[ $language != c ]] || DEFAULT_STANDARD=$C_STANDARD
                 # Each native role chooses its own family; an explicit CLI
                 # compiler applies to all roles and wins over saved preferences.
-                if (( ! compiler_given )); then compiler_choice=${LANGUAGE_COMPILERS[$language]-$DEFAULT_COMPILER}; fi
+                if (( ! compiler_given )); then
+                    if [[ $profile == school ]]; then compiler_choice=GCC
+                    else compiler_choice=${LANGUAGE_COMPILERS[$language]-$DEFAULT_COMPILER}; fi
+                fi
                 case "${compiler_choice:l}" in gcc|g++) family=gcc ;; *) family=clang ;; esac
                 if [[ -n ${compiler_paths[$language]-} ]]; then
                     compiler=${compiler_paths[$language]}; compiler_banner=${compiler_banners[$language]}
