@@ -1,0 +1,99 @@
+"""Real-tool tests of format command, school checks and source preservation."""
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import tempfile
+import unittest
+from _paths import RELEASE, load_engine
+
+engine = load_engine('cp_school_tests')
+
+
+@unittest.skipUnless(shutil.which('clang-format') and shutil.which('clang'), 'needs clang-format and clang')
+class SchoolFormatTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix='school-format-test-')
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.source = self.root / 'main.c'
+        self.env = dict(os.environ)
+        gcc = os.environ.get('CP_RUN_GCC') or shutil.which('gcc-16') or shutil.which('gcc')
+        if not gcc or 'clang' in subprocess.check_output([gcc, '--version'], text=True).lower():
+            self.skipTest('needs GNU GCC')
+        self.env['CP_RUN_GCC'] = gcc
+
+    def invoke(self, *args):
+        return subprocess.run([str(RELEASE / 'cp-run.zsh'), 'format', *args],
+            cwd=self.root, env=self.env, text=True, capture_output=True, timeout=30)
+
+    def test_explicit_mode_before_file_and_idempotence(self):
+        self.source.write_text('int main(){return 0;}\n')
+        formatted = self.invoke('--school', self.source)
+        self.assertEqual(formatted.returncode, 0, formatted.stderr)
+        self.assertEqual(self.source.read_text(), 'int\nmain(void) {\n    return 0;\n}\n')
+        before = self.source.read_bytes()
+        checked = self.invoke(self.source, '--school', '--check')
+        self.assertEqual(checked.returncode, 0, checked.stderr)
+        self.assertEqual(self.source.read_bytes(), before)
+        self.assertFalse((self.root / 'main.out').exists())
+
+    def test_check_and_policy_error_never_write(self):
+        self.source.write_text('int main(){return 0;}\n')
+        before = self.source.read_bytes()
+        self.assertEqual(self.invoke('--school', '--check', self.source).returncode, 1)
+        self.assertEqual(self.source.read_bytes(), before)
+        self.source.write_text('int main(void) { return 37; }\n')
+        before = self.source.read_bytes()
+        result = self.invoke('--school', self.source)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('5.1', result.stderr)
+        self.assertIn('named constant', result.stderr)
+        self.assertEqual(self.source.read_bytes(), before)
+
+    def test_compiler_warnings_are_errors(self):
+        self.source.write_text('int main(void) { int unused; return 0; }\n')
+        before = self.source.read_bytes()
+        result = self.invoke('--school', self.source)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('unused', result.stderr)
+        self.assertEqual(self.source.read_bytes(), before)
+
+    def test_unsafe_call_and_identifier_diagnostics(self):
+        self.source.write_text('char *strcpy(char *, const char *);\n'
+            'int main(void) { char *BadName = 0; strcpy(BadName, ""); return 0; }\n')
+        result = self.invoke('--school', self.source)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('3.4', result.stderr)
+        self.assertIn('5.8', result.stderr)
+
+    def test_clang_mode_and_school_rejects_python(self):
+        self.source.write_text('int main(){return 0;}\n')
+        self.assertEqual(self.invoke('--clang', self.source).returncode, 0)
+        python = self.root / 'main.py'
+        python.write_text('print("not executed")')
+        result = self.invoke('--school', python)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('C and C++', result.stderr)
+
+    def test_saved_default_and_explicit_override(self):
+        script = self.root / 'configured'
+        shutil.copy2(RELEASE / 'cp-run.zsh', script)
+        original = script.read_text()
+        data = engine.read_settings(original)
+        self.assertEqual(data['FORMAT_MODE'], 'clang')
+        data['FORMAT_MODE'] = 'school'
+        engine.save_settings(script, original, data)
+        self.source.write_text('int main(){return 0;}\n')
+        result = subprocess.run([str(script), 'format', str(self.source)],
+            env=self.env, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('main(void)', self.source.read_text())
+        result = subprocess.run([str(script), 'format', '--clang', str(self.source)],
+            env=self.env, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_flag_policy_keeps_duplicate_math_libraries(self):
+        self.assertEqual(engine.SCHOOL_C_FLAGS.count('-lm'), 2)
+        self.assertIn('-std=gnu99', engine.SCHOOL_C_FLAGS)
+        self.assertIn('-Werror', engine.SCHOOL_C_FLAGS)

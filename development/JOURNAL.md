@@ -145,3 +145,7 @@ Paths are a top-level settings section. Profile flags select language then backe
 ## 1.4.1 — Explicit resource limits
 
 Time and memory limits are CLI-only and default to unlimited for all operations. Imports discard legacy saved limits. Measurements and explicit limits collect complete terminal stdin before any execution.
+
+## School formatter branch
+
+Added a format action retaining prior source planning and legacy alias. Factory mode is clang. School stages candidates, uses AST diagnostics, fixed whitespace rules and GCC flag verification. Scope and author-review requirements are in docs/SCHOOL_FORMAT.md. Main CI was red due to macOS runner acquisition timeout; Linux test jobs had passed. Retried failed jobs without weakening checks.

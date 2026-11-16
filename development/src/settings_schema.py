@@ -33,7 +33,7 @@ PROFILE_DEFAULTS = {'MODE_KIND': 'flags', 'MODE_CPU': 'default'}
 # reset cannot quietly diverge from a freshly downloaded script.
 FACTORY_SETTINGS = {
     'MODE_CPP_FLAGS': {}, 'MODE_C_FLAGS': {}, 'MODE_C_GCC': {}, 'MODE_C_CLANG': {},
-    'DEFAULT_COMPILER': 'GCC', 'DEFAULT_STANDARD': 'auto',
+    'FORMAT_MODE': 'clang', 'DEFAULT_COMPILER': 'GCC', 'DEFAULT_STANDARD': 'auto',
     'DEFAULT_LANGUAGE': 'c++', 'LANGUAGE_COMPILERS': {},
     'DEFAULT_SOURCE': 'main.cpp',
     'DEFAULT_INPUT': 'in.txt',

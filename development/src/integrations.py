@@ -2,6 +2,8 @@
 
 
 def execute_format(config):
+    if config.get("format_mode") == "school":
+        return execute_school_format(config)
     sources = config.get("protected", [])
     if not sources:
         raise CheckUsageError("formatting needs a source file")

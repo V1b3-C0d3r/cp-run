@@ -731,7 +731,7 @@ def edit_settings(script_path):
 
 
 def _settings_languages(editor):
-    with editor.scope(['DEFAULT_LANGUAGE', 'LANGUAGE_COMPILERS', 'DEFAULT_INTERPRETER', 'C_SOURCE', 'PYTHON_SOURCE', 'C_STANDARD', 'NATIVE_FORMATTER', 'PYTHON_FORMATTER', 'PYTHON_FLAGS']):
+    with editor.scope(['DEFAULT_LANGUAGE', 'LANGUAGE_COMPILERS', 'DEFAULT_INTERPRETER', 'C_SOURCE', 'PYTHON_SOURCE', 'C_STANDARD', 'NATIVE_FORMATTER', 'PYTHON_FORMATTER', 'FORMAT_MODE', 'PYTHON_FLAGS']):
         _settings_languages_menu(editor)
 
 
@@ -747,6 +747,7 @@ def _settings_languages_menu(editor):
                 ('C_SOURCE', 'C fallback source', _settings_filename),
                 ('PYTHON_SOURCE', 'Python fallback source', _settings_filename),
                 ('C_STANDARD', 'C standard (auto or native spelling)', None),
+                ('FORMAT_MODE', 'Format mode (clang or school)', _settings_choice('clang', 'school')),
                 ('NATIVE_FORMATTER', 'C/C++ formatter executable', None),
                 ('PYTHON_FORMATTER', 'Python formatter (ruff or black)', None),
             ])

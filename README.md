@@ -21,6 +21,7 @@ In the directory containing `main.cpp`, run `cp-run` and type the input. You can
 | Check one sample | Save input in `in.txt`, expected output in `ans.txt`, then run `cp-run test --cout` |
 | Check numbered samples | Put `in1.txt`, `ans1.txt`, etc. in `tests/` and run `cp-run test=mult --cout` |
 | Find a counterexample | Put `main.cpp`, `brute.cpp` and `gen.cpp` together and run `cp-run stress --stop-on-failure` |
+| Format source | `cp-run format --clang solution.cpp` or `cp-run format --school solution.c` |
 | Change files, tools or profiles | `cp-run configure` |
 
 **Tools.** Use zsh 5.9 or newer. Native builds default to GNU GCC; select Clang with `--compiler=clang`. Python solutions default to PyPy; select CPython with `--interpreter=python3`. Tests and settings need Python 3.9+. Check your installation with `cp-run --doctor`.

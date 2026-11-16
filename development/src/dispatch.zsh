@@ -33,7 +33,7 @@ main() {
     local test_folder=$DEFAULT_TEST_FOLDER
     local bundle_format=legacy bundle_stream=both report_tests=$DEFAULT_REPORT_TESTS
     local minimize= validator=
-    local prettier= companion_port=$COMPANION_PORT companion_wait=$COMPANION_WAIT
+    local format_mode=$FORMAT_MODE prettier= companion_port=$COMPANION_PORT companion_wait=$COMPANION_WAIT
     local -i doctor_requested=0 interpreter_given=0 compiler_given=0
     local -i data_controls=0 layout_controls=0 companion_controls=0 report_controls=0 bundle_given=0
     local -i overwrite=0 stop_on_failure=0
@@ -89,7 +89,7 @@ main() {
                 workspace_file_path "$role"; protected_files+=("${value:A}")
             done
         fi
-        config=(prettier "$prettier" native_formatter "$NATIVE_FORMATTER" python_formatter "$PYTHON_FORMATTER")
+        config=(format_mode "$format_mode" prettier "$prettier" native_formatter "$NATIVE_FORMATTER" python_formatter "$PYTHON_FORMATTER")
         python_action format; return $?
     fi
     if [[ -n $transfer_action ]]; then

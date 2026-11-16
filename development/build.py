@@ -16,7 +16,7 @@ RELEASE = ROOT.parent.parent / 'Versions' / VERSION if ROOT.parent.name == 'Work
 ZSH_MODULES = ('bootstrap.zsh', 'options.zsh', 'paths.zsh', 'languages.zsh', 'toolchain.zsh',
                'profiles.zsh', 'artifacts.zsh', 'history.zsh', 'dispatch.zsh', 'launcher.zsh')
 PYTHON_MODULES = ('memory.py', 'runtime.py', 'measurements.py', 'cases.py', 'test_layout.py', 'bundles.py', 'comparison.py', 'reporting.py',
-                  'checking.py', 'stress.py', 'minimization.py', 'companion.py', 'integrations.py', 'settings_schema.py', 'settings.py',
+                  'checking.py', 'stress.py', 'minimization.py', 'companion.py', 'school_format.py', 'integrations.py', 'settings_schema.py', 'settings.py',
                   'preferences.py', 'bridge.py')
 
 
