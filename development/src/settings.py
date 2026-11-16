@@ -342,6 +342,13 @@ def _settings_profile(editor, name):
 
 
 def _settings_profile_preview(editor, name, libraries=False):
+    if name == 'school':
+        print('school · GNU GCC · shared with school formatting')
+        print('c → gcc: ' + shlex.join(SCHOOL_C_FLAGS))
+        print('c++ → gcc: ' + shlex.join(SCHOOL_CPP_FLAGS))
+        if libraries:
+            print('  library: selected by the GNU C++ driver')
+        return
     print('Configured flags; backend support is checked at build time.')
     print('CPU: {}; native selection is resolved at build time.'.format(
         editor.data['MODE_CPU'].get(name, 'default')))
@@ -407,6 +414,9 @@ def _settings_profile_menu(editor, name):
             continue
         if choice in ('', 'back'):
             return
+        if name == 'school' and choice in ('flags', 'advanced', 'cpu', 'kind'):
+            print('School flags are shared with the verifier. Use profiles → new NAME school to customize a copy.')
+            continue
         if choice == 'flags':
             _settings_profile_languages(editor, name)
         elif choice in ('preview', 'preview --lib'):
@@ -731,7 +741,7 @@ def edit_settings(script_path):
 
 
 def _settings_languages(editor):
-    with editor.scope(['DEFAULT_LANGUAGE', 'LANGUAGE_COMPILERS', 'DEFAULT_INTERPRETER', 'C_SOURCE', 'PYTHON_SOURCE', 'C_STANDARD', 'NATIVE_FORMATTER', 'PYTHON_FORMATTER', 'PYTHON_FLAGS']):
+    with editor.scope(['DEFAULT_LANGUAGE', 'LANGUAGE_COMPILERS', 'DEFAULT_INTERPRETER', 'C_SOURCE', 'PYTHON_SOURCE', 'C_STANDARD', 'NATIVE_FORMATTER', 'PYTHON_FORMATTER', 'FORMAT_MODE', 'PYTHON_FLAGS']):
         _settings_languages_menu(editor)
 
 
@@ -747,6 +757,7 @@ def _settings_languages_menu(editor):
                 ('C_SOURCE', 'C fallback source', _settings_filename),
                 ('PYTHON_SOURCE', 'Python fallback source', _settings_filename),
                 ('C_STANDARD', 'C standard (auto or native spelling)', None),
+                ('FORMAT_MODE', 'Format mode (clang or school)', _settings_choice('clang', 'school')),
                 ('NATIVE_FORMATTER', 'C/C++ formatter executable', None),
                 ('PYTHON_FORMATTER', 'Python formatter (ruff or black)', None),
             ])

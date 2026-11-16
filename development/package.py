@@ -75,6 +75,9 @@ def release_files():
     for name in ('.gitignore', '.gitattributes'):
         files[(ROOT if workspace else RELEASE) / name] = name
     files[ROOT / 'ci.yml' if workspace else RELEASE / '.github/workflows/ci.yml'] = '.github/workflows/ci.yml'
+    github_scripts = (ROOT / 'scripts' if workspace else RELEASE / '.github/scripts')
+    for script in github_scripts.glob('*.py'):
+        files[script] = '.github/scripts/' + script.name
     return files
 
 

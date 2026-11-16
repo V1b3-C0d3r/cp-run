@@ -46,7 +46,8 @@ Language and build:
                           Factory macro: define FILEO (native only)
                           Auto in configure: redirect saved input/output files
                           Auto accepts optional IN [OUT] operands after -f
-  --make-prettier         Format source and stop; never compile or run
+  format [--clang|--school] [FILE] [--check]  Format source and stop
+  --make-prettier         Alias for format
   --make-prettier=check   Check formatting without editing; never compile or run
 
 Routing and checking:
@@ -176,6 +177,7 @@ parse_cli() {
                     bundle_stream=${arg#*=}
                     case "$bundle_stream" in in|ans) ;; *) fail 'pack/unpack accepts =in, =ans, or no selector for both' ;; esac
                 fi ;;
+            format) action=ordinary; prettier=format; shift ;;
             compile|run|stress|companion|configure) action=$1; shift ;;
             debug|debug=*)
                 action=debug; value=${1#debug}; value=${value#=}
@@ -301,6 +303,12 @@ parse_cli() {
                 case "$minimize" in sequence|lines|cases) ;; *) fail '--minimize accepts sequence, lines or cases' ;; esac ;;
             --validator|--validator=*) take_value "$@"; (( ! consumed )) || shift; validator=$value ;;
             --doctor) doctor_requested=1 ;;
+            --clang|--school)
+                [[ -n $prettier ]] || fail 'use format --clang or format --school'
+                format_mode=${arg#--} ;;
+            --check)
+                [[ -n $prettier ]] || fail '--check requires format'
+                prettier=check ;;
             --make-prettier|--make-prettier=*)
                 if [[ $arg == *=* ]]; then
                     [[ ${arg#*=} == check ]] || fail '--make-prettier accepts check; omit its value to format'
@@ -371,10 +379,17 @@ parse_cli() {
             --no-run) fail '--no-run was replaced by the compile command' ;;
             --debug-flags|--extra-debug-flags|--mode|--mode=*) fail 'use debug, debug=extra or --profile=NAME' ;;
             --test|--run-file|--run-file=*|--run-args|--run-arg=*) fail 'use test/run commands and -- argument boundaries; see --help' ;;
+            -)
+                if [[ -n $prettier && -z $source_file ]]; then source_file=-
+                else compiler_args+=("$arg"); fi ;;
             -*)
                 compiler_args+=("$arg")
                 if compiler_operand "$arg" && (( $# )); then compiler_args+=("$1"); shift; fi ;;
-            *) fail "unexpected argument: $arg; put program arguments after --" ;;
+            *)
+                if [[ -n $prettier && -z $source_file ]]; then
+                    source_file=$arg; positional_count=1; continue
+                fi
+                fail "unexpected argument: $arg; put program arguments after --" ;;
         esac
     done
     managed_count=${#compiler_args}

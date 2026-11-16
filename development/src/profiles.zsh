@@ -45,6 +45,15 @@ build_flags() {
     local arg value index proposed opt_rank=0 debug_level=0
     local -a optimization_levels=(-O2 -O1 -Og -O0) retained=()
 
+    if [[ $profile == school ]]; then
+        [[ $family == gcc ]] || fail 'school requires GNU GCC; use --compiler=gcc or copy the preset'
+        (( ! no_warnings )) || fail 'school warning policy cannot be disabled; copy the preset for customization'
+        if [[ $language == c ]]; then flags=("${SCHOOL_C_FLAGS[@]}")
+        else flags=("${SCHOOL_CPP_FLAGS[@]}"); fi
+        if (( macro_file_io )); then flags+=("-D$DEFAULT_MACRO"); fi
+        return 0
+    fi
+
     # Only the managed region translates GNU compatibility aliases for Clang.
     # Known operands keep their literal spelling, including directory names.
     if [[ $family == clang ]]; then

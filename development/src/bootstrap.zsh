@@ -8,10 +8,12 @@
 emulate -LR zsh
 setopt NO_UNSET PIPE_FAIL EXTENDED_GLOB
 unsetopt ALIASES
-typeset -r PROGRAM=cp-run VERSION=1.4.1
+typeset -r PROGRAM=cp-run VERSION=1.5.0
 typeset -r SCRIPT_PATH=${0:A} # Settings follow the real script when invoked through a symlink.
 
 # @NATIVE_SETTINGS@
+
+# @SCHOOL_POLICY@
 
 
 fail() { printf '%s: %s\n' "$PROGRAM" "$1" >&2; exit "${2:-2}"; }

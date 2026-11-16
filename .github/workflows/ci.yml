@@ -17,7 +17,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-26, macos-26-intel]
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-latest, macos-26-intel]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -33,9 +33,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zsh g++ clang libc++-dev libc++abi-dev pypy3 clang-format
 
-      - name: Install GNU GCC on macOS
+      - name: Install GNU GCC and school formatter on macOS
         if: runner.os == 'macOS'
-        run: brew list gcc >/dev/null 2>&1 || brew install gcc
+        run: |
+          brew list gcc >/dev/null 2>&1 || brew install gcc
+          brew list clang-format >/dev/null 2>&1 || brew install clang-format
 
       - name: Select real compiler executables
         shell: bash
@@ -84,3 +86,34 @@ jobs:
           "$install_dir/bin/cp-run" run "$install_dir/main.out" -tm
           rm "$install_dir/bin/cp-run"
           test ! -e "$install_dir/bin/cp-run"
+
+  school-reference:
+    name: school (GNU 11.3.0)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      TMPDIR: /tmp
+      SCHOOL_REFERENCE_VERSION: 11.3.0
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - name: Install school frontend tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang clang-format zsh
+          docker pull gcc:11.3
+      - name: Prepare reference compiler wrappers
+        run: |
+          mkdir -p /tmp/school-reference
+          install -m 755 .github/scripts/school-reference.py /tmp/school-reference/gcc
+          install -m 755 .github/scripts/school-reference.py /tmp/school-reference/g++
+          echo 'CP_RUN_GCC=/tmp/school-reference/gcc' >> "$GITHUB_ENV"
+      - name: Build and verify reference compiler contracts
+        run: |
+          python3 -B development/build.py
+          cd development/tests
+          python3 -B -m unittest discover -v -p 'test_school*.py'

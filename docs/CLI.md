@@ -219,22 +219,23 @@ Run `cp-run configure` and enter a section name.
 There are exactly two forms:
 
 ```sh
-cp-run main.cpp --make-prettier        # Format and stop
-cp-run main.py --make-prettier=check   # Check style without editing; stop
+cp-run format --clang main.cpp        # Format and stop
+cp-run format main.py --check         # Check without editing
+cp-run format --school main.c         # School layout and diagnostics
 ```
 
-Both operate only on selected source files and **never compile, run or compare answers**. Omitted FILE uses source discovery; stress selects MAIN, BRUTE and GEN once each. Binary-only modes cannot format. `--make-prettier check`, empty values and the former `only`/`before` values are not supported. This optional value intentionally requires `=check`.
+Both modes operate only on selected source files and never run programs or compare answers. School compiles staged candidates for diagnostics; clang only formats. Omitted FILE uses source discovery; stress selects MAIN, BRUTE and GEN once each. Binary-only modes cannot format. `--make-prettier check`, empty values and the former `only`/`before` values are not supported. This optional value intentionally requires `=check`.
 
 C/C++ use [clang-format](https://clang.llvm.org/docs/ClangFormat.html), honoring `.clang-format` or otherwise LLVM style with include sorting disabled. Python uses [Ruff](https://docs.astral.sh/ruff/installation/) (`ruff format`), honoring project settings. [Black](https://black.readthedocs.io/en/stable/getting_started.html#installation) can be selected in **advanced → Language and formatter options → Interpreter/source/standard/tools → Python formatter**.
 
-All required formatters are located before editing starts. Missing tools produce an installation hint. A later formatter failure may leave earlier files formatted. Backend/runtime arguments, output options and execution/measurement controls are incompatible. Formatter diagnostics go to stderr; stdout stays empty. Check returns nonzero when changes are required. Formatting does not lint, fix algorithms, optimize code or inject pragmas.
+All required formatters are located before editing starts. Missing tools produce an installation hint. A later formatter failure may leave earlier files formatted. Backend/runtime arguments, output options and execution/measurement controls are incompatible. Formatter diagnostics go to stderr; stdout stays empty. Check returns nonzero when changes are required. Clang mode only formats. School adds AST and GCC diagnostics; see its coverage and author-review requirements below. Neither mode fixes algorithms or injects pragmas.
 
 ## Information, values and errors
 
 - `--help`: help without compiler discovery. `--version`: cp-run plus the selected compiler version; an explicit interpreter selects its version instead.
 - `--doctor`: list required/optional tools without installing anything.
 - Required option values accept `--option=VALUE` and `--option VALUE`, including `--test-f` and `-std`; empty/missing values fail. Dash-leading values use `=VALUE`.
-- Optional booleans consume only 0/1. `-f` takes no mode value; choose its action in `cp-run configure`. Pack command selectors require `pack=in`/`pack=ans` (or `unpack=…`); formatter check requires `=check`.
+- Optional booleans consume only 0/1. `-f` takes no mode value; choose its action in `cp-run configure`. Pack command selectors require `pack=in`/`pack=ans` (or `unpack=…`); format accepts `--check`; the legacy alias requires `=check`.
 - Compiler diagnostics remain live on stderr. Ordinary runtime stderr is direct; tests put runtime stderr in their protocols. Commands appear only with `--show-command`.
 
 Exit codes: 0 success; 2 wrapper usage error; 3 WA; 4 unfinished comparison; 124 TLE; 125 MLE; 130/143 interruption. Compiler/runtime failures retain meaningful nonzero statuses. A program's own exit 3 means RE, not WA: read the verdict rather than inferring it from the number alone.
@@ -242,3 +243,16 @@ Exit codes: 0 success; 2 wrapper usage error; 3 WA; 4 unfinished comparison; 124
 With terminal input and timing or memory measurements, enter the complete input first and press Ctrl-D on an empty line. Execution and its limits start afterward. For empty input, press Ctrl-D immediately. Pipes and files supply EOF automatically.
 
 In configure, **paths** opens source/workspace/output paths directly. The workspace prefix is explained once at the top. Profile **flags** selects a language and backend. Existing shared groups remain in profile advanced settings. C-specific backend entries override legacy shared backend flags. **preview** lists language → backend; **preview --lib** adds C++ library details.
+
+### School formatting workflow
+
+School needs clang-format 15+, Clang and GNU GCC. Set `CP_RUN_GCC` to a GNU executable if detection fails. It verifies the supplied GNU C99 warning/optimization policy; C++ uses the matching language-valid subset.
+
+1. Run `cp-run format --school FILE`. Safe layout changes are saved; remaining errors and reviews return status 1.
+2. Edit each proven violation using its file, rule number and suggestion.
+3. Inspect semantic review requests. After checking an obligation, document the reason in that file, for example `// school-reviewed 3.2: a and b denote the two input leg lengths.`
+4. Run `cp-run format --school FILE --check`. Status 0 means layout/compiler checks passed and outstanding semantic obligations have explicit author assertions.
+
+A review comment cannot suppress a proven violation. Check mode never writes. Syntax/tool failures or a detected change in program structure preserve the original. School never executes your program or Makefile. See the [per-rule architecture](SCHOOL_FORMAT.md) for the exact checks and limitations.
+
+The `school` compilation profile uses the same GCC policy: `cp-run FILE --profile=school`. Its flags are fixed; copy it to a custom profile to change them. Output paths remain configurable.

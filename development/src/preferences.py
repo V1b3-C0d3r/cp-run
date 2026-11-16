@@ -31,6 +31,7 @@ def validate_preferences(values):
             raise ValueError('invalid profile key in ' + key)
         if any(not isinstance(v, str) or any(c in v for c in '\x00\r\n') for v in strings):
             raise ValueError('invalid text in ' + key + '; use visible \\n escapes')
+    _settings_choice('clang', 'school')(data['FORMAT_MODE'])
     data['DEFAULT_COMPILER'] = _settings_compiler(data['DEFAULT_COMPILER'])
     _settings_standard(data['DEFAULT_STANDARD'])
     _settings_choice('c++', 'c', 'python', 'auto')(data['DEFAULT_LANGUAGE'])
@@ -99,6 +100,7 @@ def validate_preferences(values):
             raise ValueError('invalid profile CPU policy: ' + name)
     for key in PROFILE_KEYS:
         if set(data[key]) - set(names): raise ValueError('unknown profile in ' + key)
+    normalize_school_preset(data)
     # Validate the shell-word grammar while preserving the original spelling.
     for key in ('DEFAULT_FLAGS', 'WARNINGS_GCC', 'WARNINGS_CLANG'):
         flag_units(data[key])

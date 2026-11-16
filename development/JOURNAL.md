@@ -145,3 +145,19 @@ Paths are a top-level settings section. Profile flags select language then backe
 ## 1.4.1 — Explicit resource limits
 
 Time and memory limits are CLI-only and default to unlimited for all operations. Imports discard legacy saved limits. Measurements and explicit limits collect complete terminal stdin before any execution.
+
+## School formatter branch
+
+Added a format action retaining prior source planning and legacy alias. Factory mode is clang. School stages candidates, uses AST diagnostics, fixed whitespace rules and GCC flag verification. Scope and author-review requirements are in docs/SCHOOL_FORMAT.md. Main CI was red due to macOS runner acquisition timeout; Linux test jobs had passed. Retried failed jobs without weakening checks.
+
+Verification: full local suite ran 534 tests; 532 passed and the two localhost tests passed when rerun outside the bind-restricted sandbox. Later focused checks passed 8 school tests and 8 formatting compatibility tests. Exact GNU 11.3.0 and automatic semantic certification remain outside the verified coverage.
+
+## School formatter verification checkpoint
+
+Implemented independently reported behavioral tests for all 68 numbered PDF rules and 23 supplied flag occurrences. Added explicit author-review validation, ownership/resource analysis, read-only header/Makefile checks and pinned compilation/formatting flags. Normal format now publishes safe layout even when policy edits remain; check mode never writes. Syntax/tool failures, changed tokens/AST and concurrent source edits block publication. File publication preserves permissions and reports any already completed files after a later failure.
+
+Focused verification on macOS Apple Silicon: 170 school tests passed with the reference-version test intentionally delegated to CI. A separate forced-g++ driver test and three settings tests passed. A real C hypotenuse workflow passed from unreadable input through formatting, specific author assertions, read-only check and school-profile execution. Fixed the Linux CI regression by explicitly selecting C/C++ for the school profile. Full source/archive verification and current platform CI are the remaining release gates.
+
+The first full source run passed 701 tests on macOS Apple Silicon (one expected reference-version skip). Linux CI exposed a real compatibility failure: Clang 18 exposes stream analysis as alpha.unix.Stream, while Apple Clang uses unix.Stream. The analyzer now discovers supported checkers, selects the equivalent name and fails explicitly if required resource analysis is absent. Added three capability regressions; the updated 176-test school suite passed locally (one expected reference-version skip). Current CI and final archive verification are pending.
+
+The updated reference job passed all school contracts on GNU 11.3.0. A final multi-module regression now checks main as a translation unit instead of falsely requiring other modules to link inside format; project Makefile obligations remain explicit and recipes are never executed. The affected 105-test project/format/review/rule suite passed. macOS ARM repeatedly received no runner under the versioned label; CI now requests the officially documented standard ARM label macos-latest (currently macOS 26), retaining both architectures and all checks.
