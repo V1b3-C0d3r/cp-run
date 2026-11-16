@@ -182,7 +182,7 @@ class SchoolProjectAudit:
                 for function in policy.functions:
                     if function.get('storageClass') != 'static' and school_declaration_key(function) not in declared:
                         policy.emit('6.1', 'declare this public function in ' + header.name, function)
-        if not policy.has_main:
+        if not policy.has_main or self.direct:
             self.makefile()
 
     def makefile(self):

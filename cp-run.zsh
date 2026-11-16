@@ -4117,6 +4117,11 @@ def school_gcc_arguments(source, path, directory, gcc, tree):
         includes = ['-include', str(path)]
     main = tree is not None and any(n.get('kind') == 'FunctionDecl' and n.get('name') == 'main'
                                    for n in tree.get('inner', []))
+    # Other project implementations are outside this formatting action. Compile
+    # this unit; the read-only Makefile audit owns the complete-link obligation.
+    project = any(item[1] == '"' and (source.parent / item[2]).is_file()
+                  for item in school_includes(path.read_text()))
+    main = main and not project
     argv = [driver, '-x', language, *includes, str(input_path), '-iquote', str(source.parent)]
     return argv, flags, main, input_path, includes
 
@@ -5419,7 +5424,7 @@ class SchoolProjectAudit:
                 for function in policy.functions:
                     if function.get('storageClass') != 'static' and school_declaration_key(function) not in declared:
                         policy.emit('6.1', 'declare this public function in ' + header.name, function)
-        if not policy.has_main:
+        if not policy.has_main or self.direct:
             self.makefile()
 
     def makefile(self):

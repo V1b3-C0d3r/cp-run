@@ -63,6 +63,11 @@ def school_gcc_arguments(source, path, directory, gcc, tree):
         includes = ['-include', str(path)]
     main = tree is not None and any(n.get('kind') == 'FunctionDecl' and n.get('name') == 'main'
                                    for n in tree.get('inner', []))
+    # Other project implementations are outside this formatting action. Compile
+    # this unit; the read-only Makefile audit owns the complete-link obligation.
+    project = any(item[1] == '"' and (source.parent / item[2]).is_file()
+                  for item in school_includes(path.read_text()))
+    main = main and not project
     argv = [driver, '-x', language, *includes, str(input_path), '-iquote', str(source.parent)]
     return argv, flags, main, input_path, includes
 

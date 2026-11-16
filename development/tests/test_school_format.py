@@ -124,3 +124,20 @@ class SchoolFormatTest(unittest.TestCase):
         source.write_text('#pragma once\n')
         result = self.invoke('--school', source, '--check')
         self.assertEqual(result.returncode, 0, result.stderr)
+
+
+    def test_multimodule_main_compiles_unit_and_audits_makefile_without_running_it(self):
+        (self.root / 'module.h').write_text('#pragma once\nvoid run(void);\n')
+        (self.root / 'module.c').write_text('#include "module.h"\nvoid run(void) { return; }\n')
+        self.source.write_text('#include "module.h"\nint main(void) { run(); return 0; }\n')
+        result = self.invoke('--school', self.source)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn('6.6 error', result.stderr)
+        self.assertNotIn('undefined reference', result.stderr)
+        (self.root / 'Makefile').write_text('all:\n\ttouch must-not-exist\nclean:\n\trm -f must-not-exist\n')
+        reviews = ('// school-reviewed 6.4: all consumers of run include module.h directly.\n'
+                   '// school-reviewed 6.6: the recipes are explicit author assertions, never executed by the formatter.\n')
+        self.source.write_text(reviews + self.source.read_text())
+        checked = self.invoke('--school', self.source, '--check')
+        self.assertEqual(checked.returncode, 0, checked.stderr)
+        self.assertFalse((self.root / 'must-not-exist').exists())
