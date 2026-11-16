@@ -127,7 +127,10 @@ def school_prepare(source, text, clang):
     for start, end, replacement in sorted(set(edits), reverse=True):
         encoded = encoded[:start] + replacement + encoded[end:]
     # These are source directives, not matches against code hidden in strings/comments.
-    for line_number, line in enumerate(text.splitlines(), 1):
+    directive_text = re.sub(r'/\*.*?\*/|//[^\n]*|"(?:\\.|[^"\\])*"',
+        lambda match: ''.join('\n' if c == '\n' else ' ' for c in match[0]),
+        text, flags=re.S)
+    for line_number, line in enumerate(directive_text.splitlines(), 1):
         if re.match(r'^\s*#\s*define\s+\w+\s+[-+]?\d', line):
             diagnostics.append('{}:{}: school 5.2: replace integer #define with enum.'.format(source, line_number))
         if any(ord(c) < 32 and c not in '\t\r\n' or ord(c) == 127 for c in line):

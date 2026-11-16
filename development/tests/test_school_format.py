@@ -93,6 +93,11 @@ class SchoolFormatTest(unittest.TestCase):
             env=self.env, text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_numeric_define_inside_comment_is_not_code(self):
+        self.source.write_text('/*\n#define SIZE 42\n*/\nint main(void) { return 0; }\n')
+        result = self.invoke('--school', self.source)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_flag_policy_keeps_duplicate_math_libraries(self):
         self.assertEqual(engine.SCHOOL_C_FLAGS.count('-lm'), 2)
         self.assertIn('-std=gnu99', engine.SCHOOL_C_FLAGS)
