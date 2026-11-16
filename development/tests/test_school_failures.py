@@ -27,6 +27,36 @@ class SchoolFailureTest(unittest.TestCase):
             with self.assertRaisesRegex(engine.CheckSetupError, 'tool timed out: clang'):
                 engine.school_tool(['clang'])
 
+    def test_analyzer_uses_stable_stream_checker_when_available(self):
+        names = ('unix.Malloc', 'unix.Stream', 'core.NullDereference', 'core.StackAddressEscape',
+                 'cplusplus.NewDelete', 'cplusplus.NewDeleteLeaks')
+        output = ''.join('  ' + name + '  description\n' for name in names)
+        result = subprocess.CompletedProcess(['clang'], 0, output, '')
+        with mock.patch.dict(engine.SCHOOL_ANALYZER_CAPABILITIES, clear=True):
+            with mock.patch.object(engine, 'school_tool', return_value=result) as tool:
+                self.assertEqual(engine.school_analyzer_checkers('clang'), names)
+                self.assertEqual(engine.school_analyzer_checkers('clang'), names)
+                self.assertEqual(tool.call_count, 1)
+
+    def test_analyzer_uses_equivalent_alpha_stream_checker_on_older_clang(self):
+        names = ('unix.Malloc', 'core.NullDereference', 'core.StackAddressEscape',
+                 'cplusplus.NewDelete', 'cplusplus.NewDeleteLeaks')
+        stable = subprocess.CompletedProcess(['clang'], 0, ''.join('  ' + name + '  description\n' for name in names), '')
+        alpha = subprocess.CompletedProcess(['clang'], 0, '  alpha.unix.Stream  stream handling\n', '')
+        with mock.patch.dict(engine.SCHOOL_ANALYZER_CAPABILITIES, clear=True):
+            with mock.patch.object(engine, 'school_tool', side_effect=[stable, alpha]):
+                resolved = engine.school_analyzer_checkers('clang')
+                self.assertIn('alpha.unix.Stream', resolved)
+                self.assertNotIn('unix.Stream', resolved)
+                self.assertTrue(set(names) <= set(resolved))
+
+    def test_missing_resource_checker_is_not_silently_disabled(self):
+        result = subprocess.CompletedProcess(['clang'], 0, '  unix.Malloc  allocation checker\n', '')
+        with mock.patch.dict(engine.SCHOOL_ANALYZER_CAPABILITIES, clear=True):
+            with mock.patch.object(engine, 'school_tool', return_value=result):
+                with self.assertRaisesRegex(engine.CheckSetupError, 'install a Clang analyzer'):
+                    engine.school_analyzer_checkers('clang')
+
     def test_malformed_or_unexpected_ast_is_not_accepted(self):
         for output in ('not json', '[]', '{"kind":"FunctionDecl"}'):
             with self.subTest(output=output):

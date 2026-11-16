@@ -5186,20 +5186,48 @@ def school_apply_layout(source, text, clang):
     return labeled, tree, issues
 
 
+SCHOOL_ANALYZER_CAPABILITIES = {}
+
+
+def school_analyzer_checkers(clang):
+    """Resolve the same stream analysis under stable and older alpha names."""
+    if clang in SCHOOL_ANALYZER_CAPABILITIES:
+        return SCHOOL_ANALYZER_CAPABILITIES[clang]
+    result = school_tool([clang, '-cc1', '-analyzer-checker-help'], capture_output=True, text=True)
+    if result.returncode:
+        raise CheckSetupError('school: cannot query Clang analyzer checkers: ' + result.stderr)
+    available = set(re.findall(r'^\s+([A-Za-z_][\w.]+)\s', result.stdout, re.M))
+    stream = 'unix.Stream'
+    if stream not in available:
+        alpha = school_tool([clang, '-cc1', '-analyzer-checker-help-alpha'], capture_output=True, text=True)
+        if alpha.returncode:
+            raise CheckSetupError('school: cannot query Clang stream analysis: ' + alpha.stderr)
+        available.update(re.findall(r'^\s+([A-Za-z_][\w.]+)\s', alpha.stdout, re.M))
+        stream = 'alpha.unix.Stream'
+    required = ('unix.Malloc', stream, 'core.NullDereference', 'core.StackAddressEscape',
+                'cplusplus.NewDelete', 'cplusplus.NewDeleteLeaks')
+    missing = set(required) - available
+    if missing:
+        raise CheckSetupError('school: install a Clang analyzer providing: ' + ', '.join(sorted(missing)))
+    SCHOOL_ANALYZER_CAPABILITIES[clang] = required
+    return required
+
+
 def school_resource_analysis(source, candidate_path, input_path, clang, include_args=()):
     language = 'c' if source.suffix in ('.c', '.h') else 'c++'
     standard = '-std=gnu99' if language == 'c' else '-std=gnu++17'
+    checkers = school_analyzer_checkers(clang)
     with tempfile.TemporaryDirectory(prefix='school-analysis-') as directory:
         result = school_tool(
             [clang, '--analyze', '-x', language, standard,
              '-iquote', str(source.parent), *include_args,
-             '-Xanalyzer', '-analyzer-checker=unix.Malloc,unix.Stream,core.NullDereference,cplusplus.NewDelete,cplusplus.NewDeleteLeaks',
+             '-Xanalyzer', '-analyzer-checker=' + ','.join(checkers),
              '-Xanalyzer', '-analyzer-output=text',
              str(input_path), '-o', str(Path(directory) / 'analysis.plist')],
             text=True, capture_output=True)
     if result.returncode:
         raise CheckSetupError(str(source) + ': school analyzer failed:\n' + result.stderr)
-    resource_warning = re.search(r'warning:.*\[(?:unix\.(?:Malloc|Stream)|core\.NullDereference|cplusplus\.NewDelete(?:Leaks)?)\]', result.stderr)
+    resource_warning = re.search(r'warning:.*\[(?:(?:alpha\.)?unix\.(?:Malloc|Stream)|core\.(?:NullDereference|StackAddressEscape)|cplusplus\.NewDelete(?:Leaks)?)\]', result.stderr)
     if resource_warning is None:
         return []
     diagnostic = result.stderr.replace(str(candidate_path), str(source))
