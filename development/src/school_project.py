@@ -5,7 +5,7 @@ def school_includes(text):
     visible = SCHOOL_LEXER.sub(
         lambda match: ''.join('\n' if c == '\n' else ' ' for c in match[0])
         if match.group('comment') else match[0], text)
-    return list(re.finditer(r'^\s*#\s*include\s*([<"])([^>"\n]+)[>"]', visible, re.M))
+    return list(re.finditer(r'^[^\S\r\n]*#[^\S\r\n]*include[^\S\r\n]*([<"])([^>"\n]+)[>"]', visible, re.M))
 
 
 def school_declaration_key(node):
@@ -85,7 +85,7 @@ class SchoolProjectAudit:
             self.policy.emit('6.4', 'include graph exceeds 64 project headers; verify a smaller complete module context.',
                              review=True)
             return
-        text = path.read_text(encoding='utf-8')
+        text = self.policy.text if path == self.policy.source else path.read_text(encoding='utf-8')
         tree, issues = school_parse(path, text, self.clang, cpp=self.policy.cpp)
         if issues:
             self.policy.findings.extend(issues)
@@ -130,7 +130,7 @@ class SchoolProjectAudit:
             elif len(candidates) > 1:
                 self.policy.emit('6.4', 'resolve the owning declaration header for ' + reference.get('name', ''),
                                  node, review=True)
-        if self.headers:
+        if any(self.public_symbols(context) for context in self.headers.values()):
             self.policy.emit('6.4', 'confirm all other project consumers include their owning headers directly.',
                              review=True)
 

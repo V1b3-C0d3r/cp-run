@@ -26,6 +26,8 @@ In the directory containing `main.cpp`, run `cp-run` and type the input. You can
 
 **Tools.** Use zsh 5.9 or newer. Native builds default to GNU GCC; select Clang with `--compiler=clang`. Python solutions default to PyPy; select CPython with `--interpreter=python3`. Tests and settings need Python 3.9+. Check your installation with `cp-run --doctor`.
 
+**School formatting.** `--school` fixes layout and reports numbered style/compiler issues. It keeps safe formatting even when edits or author review remain. [Workflow and rules](docs/SCHOOL_FORMAT.md).
+
 **Upgrading.** Settings live in the installed script. Run `cp-run --export prefs.json` before replacing it (`--export-settings` on versions before 1.2), then `cp-run --import prefs.json`.
 
 [Command reference](docs/CLI.md) · [Test formats and verdicts](docs/TESTING.md) · [Runnable examples](examples/README.md) · [Build from source](docs/DEVELOPMENT.md)

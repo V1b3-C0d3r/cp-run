@@ -34,7 +34,10 @@ build_artifact() {
     if [[ -L $final ]]; then target=${final:A}; fi
     stage=$(mktemp -d "${target:h}/.cp-run-build.XXXXXXXX") || fail 'cannot create build staging directory' 1
     CLEANUP_DIRS+=("$stage")
-    command_args=("$compiler" "$source_file" "${flags[@]}" "${compiler_args[@]}" "${profile_levels[@]}" -o "$stage/${target:t}")
+    command_args=("$compiler")
+    # A configured GCC driver can be g++; keep the pinned C preset in C mode.
+    [[ $profile != school ]] || command_args+=(-x "$language")
+    command_args+=("$source_file" "${flags[@]}" "${compiler_args[@]}" "${profile_levels[@]}" -o "$stage/${target:t}")
     if (( show_command )); then printf '%q ' "${command_args[@]}" >&2; printf '\n' >&2; fi
     if (( compile_only )) || [[ $action == test || $action == stress ]]; then "${command_args[@]}" >&2 || rc=$?
     else "${command_args[@]}" || rc=$?; fi

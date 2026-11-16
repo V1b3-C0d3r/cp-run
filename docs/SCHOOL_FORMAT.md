@@ -1,19 +1,21 @@
 # School formatter architecture
 
-**Design status.** This document specifies every numbered rule in the supplied PDF and every occurrence in the GCC command. It is the implementation contract, not a report that every check already passes. Implementation and verification evidence belong in development/JOURNAL.md and the test results.
+**Scope.** This document maps every numbered rule in the supplied PDF and every occurrence in the GCC command to its implementation contract. Behavioral evidence is in `development/tests/test_school*.py`; release verification is recorded in `development/JOURNAL.md`.
 
 Source policy is *Стиль форматирования программ*, 8 November 2026. Paragraphs 1.1–6.6 and their examples define the requirements. Formatting examples are reference data.
 
 ## User contract
 
 - Run cp-run format [FILE] --clang or --school. --check never writes. The --make-prettier spelling delegates to the same action. Preserve discovery, quoted paths, workspace prefixes, history -, profile selectors and all previously supported formatting options.
-- Repository default is clang. Personal default is school. Formatting mode and compilation profile are independent. Rename the personal informatics profile to school without altering its flags; migrate Code Runner references and keep a backup.
+- Repository default is clang. Personal default is school. Formatting mode and compilation profile are independent. Rename the personal informatics profile to school, normalize its flags to the shared policy, migrate Code Runner references and keep a backup.
 - School is a formatter plus a fail-closed policy checker. It does not execute the submitted program or a project Makefile.
 - Mechanical violations are errors. A semantic obligation that cannot be established statically is a blocking review request tied to a rule and a source location.
 - A review is an explicit author assertion in an actual source comment, for example '// school-reviewed 3.1: calc_sqrt names the integer square-root calculation'. It requires a substantive reason. It applies only to review obligations in that file. Strings cannot create reviews. Unknown rule IDs and attempts to waive mechanical-only rules are errors.
 - An assertion cannot suppress a proven violation, even when the same rule also has semantic obligations. For example, reviewing an indirect call under 5.8 cannot allow a direct strcpy call.
 - Exit 0 means formatting, compiler checks and all applicable policy obligations have been resolved. It is not a mathematical proof of English meaning, program correctness or resource lifetime. The summary distinguishes automatic checks from author assertions.
-- Any parse failure, unsupported construct that hides applicable obligations, tool failure, hard violation or unresolved review blocks the result. No source is written in these cases.
+- Normal format first publishes a verified layout and then reports remaining policy errors/reviews with a nonzero status. This lets an author progressively improve unreadable but parseable code. Compiler warnings do not prevent safe whitespace fixes.
+- Syntax errors, tool failures, altered AST semantics and concurrent edits prevent publication. If Clang cannot parse a GNU-only construct that GCC accepts, a conservative token-only layout may be published with explicit incomplete-check diagnostics; it can never produce a successful school check.
+- Check mode never writes. When formatting differs, diagnostic locations are explicitly identified as referring to the formatted candidate. After normal format, locations refer to the published file.
 
 ## Components and data flow
 
@@ -190,3 +192,29 @@ C++ retains G01–G12, G17, G20, G22 and G23, uses the GNU C++ driver and replac
 6. Update the coverage ledger with actual test evidence. Keep main CI fixes separate from the formatter branch. Install locally only a checked build with configuration backup and the personal school default. Do not publish a new release without authorization.
 
 Completion requires all 68 rule contracts and G01–G23 gates to have implementation plus passing evidence, or an explicitly documented external verification blocker. Architectural coverage, static enforcement, author review and reference-compiler verification are separate claims.
+
+## Practical formatting and safety
+
+The normal workflow is format, inspect the compact per-rule review list, edit/justify the remaining issues, and format/check again. The formatter never invents meaningful names, enum purposes, return values, cleanup operations or output behavior.
+
+Compare source-local AST structure before and after automatic edits. Normalize only the planned empty-parameter definition conversion and single-statement control-body braces; preserve literals, declaration/reference identity, operator order and branch binding. Source-location-sensitive builtins require an explicit review. Reject a formatter that returns a different program.
+
+Normal format may write a candidate with unresolved naming/library/review obligations, but returns nonzero and says which files were formatted. Check mode reports without writing. Every source in a multi-source action must be safely prepared before publication begins; atomicity remains per file.
+
+Review diagnostics are grouped by rule and file with representative locations, keeping noisy real code usable. Hard errors and compiler diagnostics retain their actionable evidence. A review never turns a mechanical failure into success.
+
+Long literal tokens are never rewritten automatically. Split adjacent literals yourself if a line cannot meet the 100-character limit. GNU-only syntax that the Clang frontend cannot parse receives conservative token layout plus an explicit incomplete-check error.
+
+### Behavioral coverage
+
+| Area | Tests |
+| --- | --- |
+| Each of 68 numbered paragraphs | `test_school_rule_matrix.py`: individually reported T1_1 through T6_6 |
+| Every supplied flag, including both math libraries | `test_school_compiler.py`: G01 through G23 |
+| Boundary cases and language exceptions | `test_school_edges.py`, `test_school_layout.py` |
+| Real unreadable code and semantic preservation | `test_school_safety.py` |
+| Pending/resolved/invalid reviews and proven errors | `test_school_reviews.py` |
+| Tool/encoding failures, concurrent edits, permissions and partial publication | `test_school_failures.py` |
+| Shared compile/format policy and personal routing | P_school_sync and `test_school_settings.py` |
+
+These tests exercise examples and boundaries, not every possible C/C++ program. Meaningful English names, diagnostic intent, custom ownership, project-wide completeness and similar semantic decisions require author review. GNU 11.3.0 runs in a separate CI job, independently of the locally installed compiler.

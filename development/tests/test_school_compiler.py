@@ -39,69 +39,45 @@ class SchoolCompilerTest(unittest.TestCase):
             *(engine.SCHOOL_C_FLAGS if flags is None else flags), *extra,
             '-o', str(self.root / 'verified.out')], text=True, capture_output=True, timeout=45)
 
-    def test_G01_G21_optimization_language_and_G23_order(self):
-        self.assertEqual(engine.SCHOOL_C_FLAGS, EXPECTED_C)
-        code = ('#ifndef __OPTIMIZE__\n#error optimization missing\n#endif\n'
-                '#if __STDC_VERSION__ != 199901L\n#error wrong C standard\n#endif\n'
-                'int main(void) { __typeof__(0) value = 0; __asm__ volatile(""); return value; }\n')
+    def test_G01(self):
+        result = self.compile('#ifndef __OPTIMIZE__\n#error optimization missing\n#endif\nint main(void) { return 0; }')
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_G03(self):
+        code = 'int main(void) { int unused; return 0; }'
+        error = self.compile(code)
+        warning = self.compile(code, flags=[flag for flag in engine.SCHOOL_C_FLAGS if flag != '-Werror'])
+        self.assertNotEqual(error.returncode, 0, error.stderr)
+        self.assertEqual(warning.returncode, 0, warning.stderr)
+        self.assertIn('warning:', warning.stderr)
+
+    def test_G21(self):
+        result = self.compile('#if __STDC_VERSION__ != 199901L\n#error wrong C standard\n#endif\n'
+            'int main(void) { __typeof__(0) value = 0; __asm__ volatile(""); return value; }')
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_G22(self):
+        code = ('#include <math.h>\n#include <stdio.h>\n'
+                'int main(int argc, char **argv) { (void)argv; '
+                'volatile double first = argc, second = 1; '
+                'double (*operation)(double, double) = hypot; '
+                'printf("%f\\n", operation(first, second)); return 0; }')
         result = self.compile(code)
         self.assertEqual(result.returncode, 0, result.stderr)
+        if sys.platform.startswith('linux'):
+            probe = self.compile(code, flags=[flag for flag in engine.SCHOOL_C_FLAGS if flag != '-lm'])
+            self.assertNotEqual(probe.returncode, 0, probe.stderr)
+
+    def test_G23(self):
+        self.assertEqual(engine.SCHOOL_C_FLAGS, EXPECTED_C)
         self.assertEqual(engine.SCHOOL_C_FLAGS[-2:], ['-lm', '-lm'])
+        self.assertEqual(engine.SCHOOL_C_FLAGS.count('-lm'), 2)
 
     def test_reference_GNU_11_3_0_when_required(self):
         required = os.environ.get('SCHOOL_REFERENCE_VERSION')
         if not required:
             self.skipTest('reference version is exercised by the dedicated CI job')
         self.assertRegex(self.banner.splitlines()[0], r'\b' + re.escape(required) + r'\b')
-
-    def test_warning_flags_G02_G11_G13_G18(self):
-        cases = [
-            ('G02/G03', 'int main(void) { int unused; return 0; }'),
-            ('G04', '#include <stdio.h>\nint main(int argc, char **argv) { printf(argv[argc - 1]); return 0; }'),
-            ('G05', 'const int value(void) { return 0; } int main(void) { return value(); }'),
-            ('G06', 'int value(void) { int number = number; return number; } int main(void) { return value(); }'),
-            ('G07', 'int value(int number) { switch (number) { case 0: return 0; } return 1; } int main(void) { return value(0); }'),
-            ('G08', 'int main(void) { volatile double left = 0, right = 1; return left == right; }'),
-            ('G09', 'int main(void) { void *ptr = 0; ++ptr; return ptr != 0; }'),
-            ('G10', 'int value(unsigned int number) { return number < 0; } int main(void) { return value(0); }'),
-            ('G11', 'int main(void) { int value = 0; if (value); return 0; }'),
-            ('G13', 'int value(); int value(void) { return 0; } int main(void) { return value(); }'),
-            ('G14', 'int static value = 0; int main(void) { return value; }'),
-            ('G15', 'int value(int); int value(number) int number; { return number; } int main(void) { return value(0); }'),
-            ('G16', 'int value(number) { return number; } int main(void) { return value(0); }'),
-            ('G17', 'struct Pair { int first, second; }; struct Pair value = {1}; int main(void) { return value.first; }'),
-            ('G18', 'int value = 0; int main(void) { extern int value; return value; }'),
-        ]
-        for identifier, code in cases:
-            with self.subTest(flag=identifier):
-                result = self.compile(code)
-                self.assertNotEqual(result.returncode, 0, result.stderr)
-                self.assertIn('error:', result.stderr)
-
-    def test_G12_G19_G20_disabled_warnings_are_actual_exceptions(self):
-        cases = [
-            ('G12', 'int value(int number) { return number && number; } int main(void) { return value(0); }', '-Wlogical-op'),
-            ('G19', 'int value(const char *text) { return text[0]; } int main(void) { unsigned char text[1] = {0}; return value(text); }', '-Wpointer-sign'),
-            ('G20', '__attribute__((warn_unused_result)) int value(void) { return 0; } int main(void) { value(); return 0; }', '-Wunused-result'),
-        ]
-        for identifier, code, enabled in cases:
-            with self.subTest(flag=identifier):
-                result = self.compile(code)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                probe = self.compile(code, (enabled,))
-                self.assertNotEqual(probe.returncode, 0, probe.stderr)
-
-    def test_G22_math_link_and_complete_positive_program(self):
-        code = ('#include <math.h>\n#include <stdio.h>\n'
-                'int main(int argc, char **argv) { (void)argv; '
-                'volatile double first = argc, second = 1; '
-                'double (*operation)(double, double) = hypot; '
-                'printf("%f\\n", operation(first, second)); return 0; }\n')
-        result = self.compile(code)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        if sys.platform.startswith('linux'):
-            probe = self.compile(code, flags=[flag for flag in engine.SCHOOL_C_FLAGS if flag != '-lm'])
-            self.assertNotEqual(probe.returncode, 0, probe.stderr)
 
     @unittest.skipUnless(shutil.which('clang-format') and shutil.which('clang'), 'needs school frontend tools')
     def test_P_school_sync_real_profile_and_verifier_arguments(self):
@@ -140,3 +116,89 @@ class SchoolCompilerTest(unittest.TestCase):
                     self.assertNotIn('-O0', argv)
                     self.assertNotIn('-Wconversion', argv)
 
+
+
+WARNING_CASES = {
+    'G02': ('unused-variable',
+        'int main(void) { int unused; return 0; }',
+        'int main(void) { int value = 0; return value; }'),
+    'G04': ('format-security',
+        '#include <stdio.h>\nint main(int argc, char **argv) { printf(argv[argc - 1]); return 0; }',
+        '#include <stdio.h>\nint main(int argc, char **argv) { printf("%s", argv[argc - 1]); return 0; }'),
+    'G05': ('ignored-qualifiers',
+        'const int value(void) { return 0; } int main(void) { return value(); }',
+        'const int *value(void) { return 0; } int main(void) { return value() != 0; }'),
+    'G06': ('uninitialized',
+        'int value(void) { int number = number; return number; } int main(void) { return value(); }',
+        'int value(void) { int number = 0; return number; } int main(void) { return value(); }'),
+    'G07': ('switch-default',
+        'int value(int number) { switch (number) { case 0: return 0; } return 1; } int main(void) { return value(0); }',
+        'int value(int number) { switch (number) { case 0: return 0; default: return 1; } } int main(void) { return value(0); }'),
+    'G08': ('float-equal',
+        'int main(void) { volatile double left = 0, right = 1; return left == right; }',
+        'int main(void) { volatile int left = 0, right = 1; return left == right; }'),
+    'G09': ('pointer-arith',
+        'int main(void) { void *ptr = 0; ++ptr; return ptr != 0; }',
+        'int main(void) { char values[2] = {0}; char *ptr = values; ++ptr; return ptr != 0; }'),
+    'G10': ('type-limits',
+        'int value(unsigned int number) { return number < 0; } int main(void) { return value(0); }',
+        'int value(unsigned int number) { return number < 1; } int main(void) { return value(0); }'),
+    'G11': ('empty-body',
+        'int main(void) { int value = 0; if (value); return 0; }',
+        'int main(void) { int value = 0; if (value) {} return 0; }'),
+    'G13': ('strict-prototypes',
+        'int value(); int value(void) { return 0; } int main(void) { return value(); }',
+        'int value(void); int value(void) { return 0; } int main(void) { return value(); }'),
+    'G14': ('old-style-declaration',
+        'int static value = 0; int main(void) { return value; }',
+        'static int value = 0; int main(void) { return value; }'),
+    'G15': ('old-style-definition',
+        'int value(int); int value(number) int number; { return number; } int main(void) { return value(0); }',
+        'int value(int); int value(int number) { return number; } int main(void) { return value(0); }'),
+    'G16': ('(?:missing-parameter-type|implicit-int)',
+        'int value(number) { return number; } int main(void) { return value(0); }',
+        'int value(int number) { return number; } int main(void) { return value(0); }'),
+    'G17': ('missing-field-initializers',
+        'struct Pair { int first, second; }; struct Pair value = {1}; int main(void) { return value.first; }',
+        'struct Pair { int first, second; }; struct Pair value = {1, 0}; int main(void) { return value.first; }'),
+    'G18': ('nested-externs',
+        'int value = 0; int main(void) { extern int value; return value; }',
+        'int value = 0; int main(void) { return value; }'),
+}
+DISABLED_CASES = {
+    'G12': ('int value(int number) { return number && number; } int main(void) { return value(0); }', '-Wlogical-op'),
+    'G19': ('int value(const char *text) { return text[0]; } int main(void) { unsigned char text[1] = {0}; return value(text); }', '-Wpointer-sign'),
+    'G20': ('__attribute__((warn_unused_result)) int value(void) { return 0; } int main(void) { value(); return 0; }', '-Wunused-result'),
+}
+
+
+def warning_contract(diagnostic, bad, good):
+    def test(self):
+        negative = self.compile(bad)
+        self.assertNotEqual(negative.returncode, 0, negative.stderr)
+        self.assertRegex(negative.stderr, diagnostic)
+        positive = self.compile(good)
+        self.assertEqual(positive.returncode, 0, positive.stderr)
+    return test
+
+
+def disabled_warning_contract(code, enabled):
+    def test(self):
+        accepted = self.compile(code)
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        rejected = self.compile(code, (enabled,))
+        self.assertNotEqual(rejected.returncode, 0, rejected.stderr)
+    return test
+
+
+for _identifier, _case in WARNING_CASES.items():
+    setattr(SchoolCompilerTest, 'test_' + _identifier, warning_contract(*_case))
+for _identifier, _case in DISABLED_CASES.items():
+    setattr(SchoolCompilerTest, 'test_' + _identifier, disabled_warning_contract(*_case))
+
+
+class SchoolFlagInventoryTest(unittest.TestCase):
+    def test_each_flag_occurrence_has_an_individual_behavioral_test(self):
+        methods = unittest.defaultTestLoader.getTestCaseNames(SchoolCompilerTest)
+        actual = {name for name in methods if re.fullmatch(r'test_G\d\d', name)}
+        self.assertEqual(actual, {'test_G%02d' % number for number in range(1, 24)})

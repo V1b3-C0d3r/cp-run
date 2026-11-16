@@ -16,15 +16,17 @@ SCHOOL_RULES = (
 )
 SCHOOL_REVIEW_RULES = {
     '3.1', '3.2', '3.4', '3.5', '3.7', '4.4.1', '4.4.4', '4.5.1',
-    '4.6.11', '4.6.12', '4.7.9', '5.2', '5.3', '5.4', '5.5', '5.6',
+    '4.6.11', '4.6.12', '4.7.9', '5.1', '5.2', '5.3', '5.4', '5.5', '5.6',
     '5.7', '5.8', '5.9', '5.10', '5.11', '5.12', '5.13', '5.14',
-    '5.15', '5.17', '6.4', '6.5', '6.6',
+    '5.15', '5.17', '6.1', '6.4', '6.5', '6.6',
 }
 # A scanner keeps comments and literals out of directive/code checks.
 SCHOOL_LEXER = re.compile(
-    r'(?P<comment>/\*.*?\*/|//[^\n]*)|'
-    r'(?P<string>"(?:\\.|[^"\\])*")|'
-    r"(?P<char>'(?:\\.|[^'\\])*')", re.S)
+    r'(?P<raw>(?:u8|[uUL])?R"(?P<raw_delimiter>[^ ()\\\t\r\n]{0,16})'
+    r'\(.*?\)(?P=raw_delimiter)")|'
+    r'(?P<comment>/\*.*?\*/|//(?:[^\r\n\\]|\\[^\r\n]|\\(?:\r\n|\r|\n))*)|'
+    r'(?P<string>(?:u8|[uUL])?"(?:\\.|[^"\\])*")|'
+    r"(?P<char>(?<![\w.])(?:u8|[uUL])?'(?:\\.|[^'\\])*')", re.S)
 SCHOOL_STANDARD_HEADERS = set((
     'assert.h complex.h ctype.h errno.h fenv.h float.h inttypes.h iso646.h limits.h '
     'locale.h math.h setjmp.h signal.h stdalign.h stdarg.h stdatomic.h stdbool.h '
@@ -83,13 +85,6 @@ def school_unwrap(node):
         node = children[0]
     return node
 
-
-def school_callee(node):
-    children = node.get('inner', [])
-    if not children:
-        return ''
-    target = school_unwrap(children[0])
-    return target.get('referencedDecl', {}).get('name', target.get('name', ''))
 
 
 def school_integer(node, constants):
@@ -158,6 +153,22 @@ class SchoolPolicy:
                 if any(child.get('kind') == 'CompoundStmt' for child in node.get('inner', [])):
                     self.functions.append(node)
         self.has_main = any(node.get('name') == 'main' for node in self.functions)
+        self.resource_ids = set()
+        acquisitions = SCHOOL_ALLOCATORS | {'fopen', 'fdopen', 'freopen', 'open', 'socket', 'opendir', 'dup', 'popen'}
+        releases = {'free', 'fclose', 'close', 'closedir', 'pclose'}
+        for node in school_nodes(tree):
+            kind, children = node.get('kind'), node.get('inner', [])
+            if kind == 'VarDecl' and any(
+                    child.get('kind') == 'CXXNewExpr' or
+                    child.get('kind') == 'CallExpr' and self.callee(child) in acquisitions
+                    for child in school_nodes(node)):
+                self.resource_ids.add(node.get('id'))
+            if kind == 'BinaryOperator' and node.get('opcode') == '=' and len(children) == 2:
+                if any(child.get('kind') == 'CallExpr' and self.callee(child) in acquisitions
+                       for child in school_nodes(children[1])):
+                    self.resource_ids.add(school_unwrap(children[0]).get('referencedDecl', {}).get('id'))
+            if kind == 'CallExpr' and self.callee(node) in releases and len(children) > 1:
+                self.resource_ids.add(school_unwrap(children[1]).get('referencedDecl', {}).get('id'))
         self.read_reviews()
 
     def offset(self, node):
@@ -188,54 +199,78 @@ class SchoolPolicy:
         if line is None:
             line = self.data[:self.offset(node or {})].count(b'\n') + 1
         severity = 'review required' if review else 'error'
-        self.findings.append('{}:{}: school {} {}: {}'.format(
-            source or self.source, line, rule, severity, message))
+        offset = self.offset(node or {})
+        start = self.data.rfind(b'\n', 0, offset) + 1
+        column = len(self.data[start:offset].decode('utf-8', errors='replace')) + 1 if node else 1
+        self.findings.append('{}:{}:{}: school {} {}: {}'.format(
+            source or self.source, line, column, rule, severity, message))
 
-    def callee(self, node):
+    def callee_declaration(self, node):
         children = node.get('inner', [])
         if not children:
-            return ''
+            return {}
         target = school_unwrap(children[0])
         seen = set()
         while True:
-            if target.get('kind') == 'UnaryOperator' and target.get('opcode') == '*':
+            if target.get('kind') == 'UnaryOperator' and target.get('opcode') in ('*', '&'):
                 target = school_unwrap(target['inner'][0])
             reference = target.get('referencedDecl', {})
             if reference.get('kind') in ('FunctionDecl', 'CXXMethodDecl'):
-                return reference.get('name', '').removeprefix('__builtin_')
+                return reference
             identifier = reference.get('id')
             if not identifier or identifier in seen:
-                return ''
+                return {}
             seen.add(identifier)
             declaration = self.symbols.get(identifier, {})
             values = declaration.get('inner', [])
             if declaration.get('kind') != 'VarDecl' or not values:
-                return ''
+                return {}
             target = school_unwrap(values[-1])
+
+    def callee(self, node):
+        name = self.callee_declaration(node).get('name', '').removeprefix('__builtin_')
+        fortified = name.removeprefix('__').removesuffix('_chk')
+        return fortified if name.endswith('_chk') and fortified in SCHOOL_UNSAFE_CALLS else name
+
+    def canonical_declaration(self, identifier):
+        seen = set()
+        while identifier not in seen:
+            seen.add(identifier)
+            previous = self.symbols.get(identifier, {}).get('previousDecl')
+            if not previous:
+                break
+            identifier = previous
+        return identifier
 
     def read_reviews(self):
         for token in SCHOOL_LEXER.finditer(self.text):
             if not token.group('comment'):
                 continue
-            # Review markers must be actual standalone comment lines, not literals.
-            content = token[0]
-            for line in content.splitlines():
-                match = re.fullmatch(r'\s*(?://|/\*|\*)?\s*school-reviewed\s+'
-                                     r'([0-9., ]+):\s*(.*?)\s*(?:\*/)?\s*', line)
-                if not match:
+            line_number = self.text[:token.start()].count('\n') + 1
+            for index, raw_line in enumerate(token[0].splitlines()):
+                line = re.sub(r'^\s*(?://|/\*|\*)?\s*', '', raw_line).removesuffix('*/').strip()
+                if not line.startswith('school-reviewed'):
                     continue
-                rules = [rule.strip() for rule in match[1].split(',')]
-                reason = match[2].strip()
-                if len(reason) < 12:
-                    self.emit('3.1', 'school-reviewed requires a specific rationale of at least 12 characters.',
-                              line=self.text[:token.start()].count('\n') + 1)
+                match = re.fullmatch(r'school-reviewed\s+([0-9., ]+):\s*(.+)', line)
+                problem = None
+                if match is None:
+                    problem = 'expected school-reviewed RULE[, RULE]: a specific rationale'
+                elif len(match[2].strip()) < 12:
+                    problem = 'provide a specific rationale of at least 12 characters'
+                if problem:
+                    self.findings.append('{}:{}:1: school-review error: {}'.format(
+                        self.source, line_number + index, problem))
                     continue
-                for rule in rules:
-                    if rule not in SCHOOL_REVIEW_RULES:
-                        self.emit('3.1', 'school-reviewed cannot waive mechanical rule ' + rule,
-                                  line=self.text[:token.start()].count('\n') + 1)
+                for rule in (value.strip() for value in match[1].split(',')):
+                    if rule not in SCHOOL_RULES:
+                        problem = 'unknown rule ' + rule
+                    elif rule not in SCHOOL_REVIEW_RULES:
+                        problem = 'cannot waive mechanical rule ' + rule
                     else:
-                        self.reviews[rule] = reason
+                        self.reviews[rule] = match[2].strip()
+                        continue
+                    self.findings.append('{}:{}:1: school-review error: {}'.format(
+                        self.source, line_number + index, problem))
 
     def declarations(self, node, ancestors):
         kind, name = node.get('kind'), node.get('name', '')
@@ -244,7 +279,13 @@ class SchoolPolicy:
         declaration = kind in ('FunctionDecl', 'CXXMethodDecl', 'VarDecl', 'FieldDecl',
                                'ParmVarDecl', 'EnumConstantDecl', 'TypedefDecl',
                                'RecordDecl', 'CXXRecordDecl', 'EnumDecl', 'LabelStmt')
+        if kind == 'CXXMethodDecl' and name.startswith('operator'):
+            declaration = False  # Operator spellings are imposed by the language.
         if declaration and name and name not in ('main', 'argc', 'argv'):
+            forbidden = (not name.isascii() or name == 'vychislenie_kornya' or
+                         kind in ('FunctionDecl', 'CXXMethodDecl') and name == 'f')
+            if forbidden:
+                self.emit('3.2', 'use an English identifier; this spelling is explicitly prohibited by the policy.', node)
             self.emit('3.2', 'confirm that "{}" is English or a conventional abbreviation, not transliteration.'.format(name),
                       node, review=True)
         if kind in ('FunctionDecl', 'VarDecl') and name and name != 'main':
@@ -279,21 +320,22 @@ class SchoolPolicy:
                 self.emit('5.2', 'define integer constants with enum, not const.', node)
             if not local and node.get('storageClass') != 'extern' and not constant:
                 self.emit('5.14', 'justify this global variable or pass state as a parameter.', node, review=True)
-            if local and '[' in typ:
+            if local and '[' in typ and not re.search(r'\(\s*\*[^)]*\)\s*\[', typ):
                 dimensions = re.findall(r'\[([^]]*)\]', typ)
                 if any(not dimension.isdecimal() for dimension in dimensions):
                     self.emit('5.16', 'replace this variable-length array with fixed-size storage or allocation.', node)
-            for parent in ancestors:
-                if parent.get('kind') in ('RecordDecl', 'CXXRecordDecl'):
-                    break
             init = node.get('inner', [])
-            if local and typ.startswith(('struct ', 'union ')) and init:
-                self.emit('4.4.4', 'zero the local structure with memset before assigning fields.', node,
-                          review=self.cpp)
+            if local and typ.startswith(('struct ', 'union ')) and '*' not in typ and '[' not in typ:
+                if init:
+                    self.emit('4.4.4', 'zero the local structure with memset before assigning fields.', node,
+                              review=self.cpp)
+                else:
+                    self.structure_zeroing(node, ancestors)
             resource_calls = {self.callee(n) for n in school_nodes(node)
                               if n.get('kind') == 'CallExpr'} & (
                                   SCHOOL_ALLOCATORS | {'fopen', 'fdopen', 'open', 'socket', 'opendir', 'dup'})
-            if local and ('*' in typ or resource_calls):
+            owned = node.get('id') in self.resource_ids or resource_calls or re.search(r'\b(?:FILE|DIR)\s*\*', typ)
+            if local and owned:
                 body = next((n for n in reversed(ancestors) if n.get('kind') == 'CompoundStmt'), None)
                 function_body = next((n for n in ancestors if n.get('kind') == 'CompoundStmt'), None)
                 if body is not function_body:
@@ -309,6 +351,42 @@ class SchoolPolicy:
                     self.emit('5.17', 'initialize the resource to a valid handle or its unallocated sentinel.', node)
                 self.emit('5.17', 'prove ownership/borrowing, initialization and timely cleanup on every exit.', node,
                           review=True)
+            elif local and ('*' in typ or any(child.get('kind') == 'CXXConstructExpr' for child in init)):
+                self.emit('5.17', 'verify this borrowed pointer/custom object lifetime and any RAII cleanup.', node,
+                          review=True)
+
+    def structure_zeroing(self, node, ancestors):
+        """Require the first real use to zero the whole object, without inventing a memset."""
+        function = next((parent for parent in reversed(ancestors)
+                         if parent.get('kind') in ('FunctionDecl', 'CXXMethodDecl')), {})
+        identifier = node.get('id')
+
+        def first_use(current, parents=()):
+            if current.get('kind') == 'DeclRefExpr' and current.get('referencedDecl', {}).get('id') == identifier:
+                return parents
+            for child in current.get('inner', []):
+                result = first_use(child, (*parents, current))
+                if result is not None:
+                    return result
+            return None
+
+        parents = first_use(function)
+        if parents is None:
+            return  # No initialization is needed for an object which is never used.
+        call = next((parent for parent in reversed(parents) if parent.get('kind') == 'CallExpr'), {})
+        arguments = call.get('inner', [])[1:]
+        zeroed = self.callee(call) in ('memset', '__memset_chk') and len(arguments) >= 3
+        if zeroed:
+            address, count = school_unwrap(arguments[0]), school_unwrap(arguments[2])
+            zeroed = (address.get('kind') == 'UnaryOperator' and address.get('opcode') == '&' and
+                      any(child.get('referencedDecl', {}).get('id') == identifier for child in school_nodes(address)) and
+                      school_integer(arguments[1], self.constants) == 0 and count.get('name') == 'sizeof' and
+                      any(child.get('referencedDecl', {}).get('id') == identifier for child in school_nodes(count)))
+        if not zeroed:
+            self.emit('4.4.4', 'memset the entire local structure to zero before its first use/field assignment.',
+                      node, review=self.cpp)
+        elif any(parent.get('kind') in ('IfStmt', 'ForStmt', 'WhileStmt', 'SwitchStmt') for parent in parents):
+            self.emit('4.4.4', 'verify every path zeroes this structure before any field is used.', node, review=True)
 
     def functions_and_records(self, node, ancestors):
         kind = node.get('kind')
@@ -316,6 +394,28 @@ class SchoolPolicy:
         if kind in ('FunctionDecl', 'CXXMethodDecl'):
             body = next((child for child in children if child.get('kind') == 'CompoundStmt'), None)
             if body is not None:
+                parameters = school_definition_parameters(self.text, node)
+                if parameters and parameters[1] == parameters[0] + 1:
+                    self.emit('4.5.2', 'write (void) for a definition with no parameters; resolve incompatible calls first.', node)
+                if parameters:
+                    start = node.get('loc', {}).get('offset')
+                    finish = body.get('range', {}).get('begin', {}).get('offset')
+                    if start is not None and finish is not None:
+                        line_start = self.data.rfind(b'\n', 0, start) + 1
+                        header = self.data[line_start:finish].decode('utf-8')
+                        base = len(header) - len(header.lstrip(' '))
+                        if base + len(' '.join(header.split())) + 2 > 70:
+                            brace_line = self.data[self.data.rfind(b'\n', 0, finish) + 1:finish]
+                            correct = not brace_line.strip()
+                            for parameter in (child for child in children if child.get('kind') == 'ParmVarDecl'):
+                                location = parameter.get('range', {}).get('begin', {}).get('offset')
+                                if location is None:
+                                    correct = False
+                                    continue
+                                prefix = self.data[self.data.rfind(b'\n', 0, location) + 1:location]
+                                correct = correct and prefix == b' ' * (base + 8)
+                            if not correct:
+                                self.emit('4.5.3', 'put each parameter on its own line at +8 spaces and the opening brace on its own line.', node)
                 returns = [n for n in school_nodes(body) if n.get('kind') == 'ReturnStmt']
                 if not returns:
                     self.emit('4.5.1', 'add an explicit return, including in void functions.', node)
@@ -329,6 +429,18 @@ class SchoolPolicy:
                             self.emit('5.7', 'prove this main return value belongs to [0, 128).', ret, review=True)
                         elif not 0 <= value < 128:
                             self.emit('5.7', 'main must return a value in [0, 128).', ret)
+        for index, body in enumerate(school_control_bodies(node)):
+            chained_else = kind == 'IfStmt' and node.get('hasElse') and index == 1 and body.get('kind') == 'IfStmt'
+            if body.get('kind') != 'CompoundStmt' and not chained_else:
+                self.emit('4.6.8', 'put this control body inside braces, including an empty body.', body)
+        if kind in ('RecordDecl', 'CXXRecordDecl') and node.get('tagUsed') in ('struct', 'union'):
+            field_lines = set()
+            for field in children:
+                if field.get('kind') == 'FieldDecl' and self.local(field):
+                    line = self.data[:self.offset(field)].count(b'\n')
+                    if line in field_lines:
+                        self.emit('4.1', 'declare every structure field on its own line.', field)
+                    field_lines.add(line)
         if kind == 'DeclStmt':
             declarations = [n for n in children if n.get('kind') == 'VarDecl']
             if len(declarations) > 1:
@@ -399,7 +511,13 @@ class SchoolPolicy:
         kind = node.get('kind')
         inner = node.get('inner', [])
         if kind in ('IntegerLiteral', 'FloatingLiteral'):
-            constant_context = any(n.get('kind') == 'EnumConstantDecl' or
+            spelling = node.get('range', {}).get('begin', {}).get('spellingLoc', {})
+            if spelling.get('file') == '<scratch space>':
+                self.emit('4.5.1', 'verify location-sensitive macro values after layout changes (for example __LINE__).',
+                          node, review=True)
+                return
+            generated_in_header = bool(spelling.get('includedFrom'))
+            constant_context = generated_in_header or any(n.get('kind') == 'EnumConstantDecl' or
                 n.get('kind') == 'VarDecl' and 'const' in n.get('type', {}).get('qualType', '') and
                 '*' not in n.get('type', {}).get('qualType', '') for n in ancestors)
             if not constant_context and str(node.get('value')) not in ('0', '1'):
@@ -415,6 +533,9 @@ class SchoolPolicy:
                         break
                 if not stderr_descriptor:
                     self.emit('5.1', 'replace literal {} with a named constant.'.format(node.get('value')), node)
+        if kind == 'UnaryOperator' and node.get('opcode') == '-' and inner and school_integer(inner[0], self.constants) == 1:
+            if not any(parent.get('kind') == 'EnumConstantDecl' for parent in ancestors):
+                self.emit('5.1', 'confirm -1 is an error sentinel; otherwise use a named constant.', node, review=True)
         if kind == 'EnumConstantDecl':
             self.emit('5.2', 'verify this enum name describes its purpose rather than spelling a number.',
                       node, review=True)
@@ -441,7 +562,10 @@ class SchoolPolicy:
                 parent_precedence = precedence.get(parent.get('opcode'))
                 redundant_binary = (child_precedence is not None and parent_precedence is not None
                                     and child_precedence > parent_precedence)
-                if simple or control and not assignment or redundant_binary:
+                root_expression = parent.get('kind') == 'ReturnStmt' and not any(
+                    ancestor.get('kind') == 'DecltypeType' for ancestor in ancestors)
+                if (simple and parent.get('kind') != 'DecltypeType' or control and not assignment or
+                        redundant_binary or root_expression):
                     self.emit('4.7.9', 'remove redundant parentheses around this expression.', node)
                 elif assignment or child.get('kind') == 'CXXOperatorCallExpr':
                     self.emit('4.7.9', 'confirm this grouping is needed for an intentional assignment or overloaded operator.',
@@ -611,7 +735,17 @@ class SchoolPolicy:
                     self.emit(rule, 'terminate complete messages/results with newline, or justify split/character-stream output.',
                               node, review=completion is None)
         if name == 'malloc':
-            self.emit('5.9', 'use calloc unless this is a documented realloc-based growable array.', node, review=True)
+            owner = self.allocation_owner(node, ancestors)
+            owner_type = owner.get('type', {}).get('desugaredQualType', owner.get('type', {}).get('qualType', ''))
+            record_name = re.sub(r'\b(?:struct|const)\b|[ *]', '', owner_type)
+            record = next((item for item in school_nodes(self.tree)
+                           if item.get('kind') in ('RecordDecl', 'CXXRecordDecl') and
+                           item.get('name') == record_name and item.get('completeDefinition')), {})
+            linked = any(field.get('kind') == 'FieldDecl' and '*' in field.get('type', {}).get('qualType', '') and
+                         re.search(r'\b' + re.escape(record_name) + r'\b', field.get('type', {}).get('qualType', ''))
+                         for field in record.get('inner', []))
+            self.emit('5.9', 'use calloc for list/tree nodes; malloc is only allowed for a justified realloc-based array.',
+                      node, review=not linked)
         if name in SCHOOL_ALLOCATORS:
             size_index = 1 if name in ('calloc', 'realloc') else 0
             size = school_unwrap(args[size_index]) if len(args) > size_index else {}
@@ -637,12 +771,17 @@ class SchoolPolicy:
                 self.emit('2.2', 'split the literal/comment to at most 100 characters.', line=number)
         for match in SCHOOL_LEXER.finditer(self.text):
             comment = match.group('comment')
+            if comment and re.search(r'\bclang-format\s+off\b', comment):
+                self.emit('2.1', 'remove clang-format off to validate school layout; use --clang for custom formatting.',
+                          line=self.text[:match.start()].count('\n') + 1)
             if comment and 'school-reviewed' not in comment and re.search(
                     r'(?:\b(?:if|for|while|printf|return)\b.*[;{}]|\w+\s*=[^=].*;)', comment):
                 self.emit('5.12', 'remove commented-out debugging code or explain why this is documentation.',
                           line=self.text[:match.start()].count('\n') + 1, review=True)
         for number, line in enumerate(self.code.splitlines(), 1):
-            if re.match(r'\s*#\s*define\s+\w+\s+[-+]?\d', line):
+            macro = re.match(r'\s*#\s*define\s+\w+\s+(.+)', line)
+            integer_macro = macro and re.search(r'\b(?:0[xX][\da-fA-F]+|\d+)[uUlL]*\b', macro[1]) and not re.search(r'\d\.\d|\d[eEpP][+-]?\d', macro[1])
+            if integer_macro:
                 self.emit('5.2', 'replace integer #define with enum.', line=number)
             if re.match(r'\s*#\s*define\s+\w+\(', line):
                 self.emit('4.5.1', 'review function-like macros separately; prefer a typed function.',
@@ -714,8 +853,11 @@ def school_parameter_layout(source, text, tree):
         if end is None:
             continue
         header = data[start:end].decode('utf-8')
-        logical = ' '.join(header.split())
-        if len(logical) <= 70:
+        line_start = data.rfind(b'\n', 0, start) + 1
+        prefix = data[line_start:start].decode('utf-8')
+        indent = prefix[:len(prefix) - len(prefix.lstrip(' '))]
+        logical = ' '.join((prefix + header).split())
+        if len(indent) + len(logical) + 2 <= 70:
             continue
         params = [n for n in function.get('inner', []) if n.get('kind') == 'ParmVarDecl']
         name = function.get('name', '')
@@ -725,19 +867,21 @@ def school_parameter_layout(source, text, tree):
             begin, finish = span.get('begin', {}), span.get('end', {})
             if 'offset' not in begin or 'offset' not in finish:
                 break
-            parts.append(' '.join(data[begin['offset']:finish['offset'] +
-                                      finish.get('tokLen', 1)].decode('utf-8').split()))
+            part = data[begin['offset']:finish['offset'] + finish.get('tokLen', 1)].decode('utf-8')
+            # Preserve whitespace inside default string literals and comments.
+            if '\n' in part or '\r' in part:
+                break  # Keep layout intact; report unsupported parameter wrapping below.
+            parts.append(part.strip())
         else:
             if function.get('variadic'):
                 parts.append('...')
             if not parts:
                 continue
-            line_start = data.rfind(b'\n', 0, start) + 1
-            indent = data[line_start:start].decode('utf-8')
-            if indent.strip():
-                continue
             # Locate the matching closing parenthesis without touching attributes/body.
-            opening = header.find('(')
+            parameters = school_definition_parameters(text, function)
+            if not parameters:
+                continue
+            opening = school_tokens(text)[parameters[0]][1] - len(data[:start].decode('utf-8'))
             depth, closing = 0, None
             masked = school_mask(header)
             for index in range(opening, len(masked)):
@@ -751,7 +895,7 @@ def school_parameter_layout(source, text, tree):
             if closing is None:
                 continue
             suffix = header[closing + 1:].strip()
-            replacement = (name + '(\n' + ',\n'.join(
+            replacement = (header[:opening] + '(\n' + ',\n'.join(
                 indent + ' ' * 8 + part for part in parts) + ')'
                 + (' ' + suffix if suffix else '') + '\n' + indent)
             edits.append((start, end, replacement.encode('utf-8')))
@@ -800,3 +944,23 @@ def school_apply_layout(source, text, clang):
     if labeled != candidate:
         tree, issues = school_parse(source, labeled, clang)
     return labeled, tree, issues
+
+
+def school_resource_analysis(source, candidate_path, input_path, clang, include_args=()):
+    language = 'c' if source.suffix in ('.c', '.h') else 'c++'
+    standard = '-std=gnu99' if language == 'c' else '-std=gnu++17'
+    with tempfile.TemporaryDirectory(prefix='school-analysis-') as directory:
+        result = school_tool(
+            [clang, '--analyze', '-x', language, standard,
+             '-iquote', str(source.parent), *include_args,
+             '-Xanalyzer', '-analyzer-checker=unix.Malloc,unix.Stream,core.NullDereference,cplusplus.NewDelete,cplusplus.NewDeleteLeaks',
+             '-Xanalyzer', '-analyzer-output=text',
+             str(input_path), '-o', str(Path(directory) / 'analysis.plist')],
+            text=True, capture_output=True)
+    if result.returncode:
+        raise CheckSetupError(str(source) + ': school analyzer failed:\n' + result.stderr)
+    resource_warning = re.search(r'warning:.*\[(?:unix\.(?:Malloc|Stream)|core\.NullDereference|cplusplus\.NewDelete(?:Leaks)?)\]', result.stderr)
+    if resource_warning is None:
+        return []
+    diagnostic = result.stderr.replace(str(candidate_path), str(source))
+    return [str(source) + ': school 5.17 error: fix the resource/control-flow diagnostic:\n' + diagnostic]

@@ -38,7 +38,7 @@ class SchoolFormatTest(unittest.TestCase):
         self.assertEqual(self.source.read_bytes(), before)
         self.assertFalse((self.root / 'main.out').exists())
 
-    def test_check_and_policy_error_never_write(self):
+    def test_check_never_writes_and_policy_errors_allow_safe_layout(self):
         self.source.write_text('int main(){return 0;}\n')
         before = self.source.read_bytes()
         self.assertEqual(self.invoke('--school', '--check', self.source).returncode, 1)
@@ -49,7 +49,8 @@ class SchoolFormatTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn('5.1', result.stderr)
         self.assertIn('named constant', result.stderr)
-        self.assertEqual(self.source.read_bytes(), before)
+        self.assertNotEqual(self.source.read_bytes(), before)
+        self.assertIn('return 37;', self.source.read_text())
 
     def test_compiler_warnings_are_errors(self):
         self.source.write_text('int main(void) { int unused; return 0; }\n')
@@ -57,7 +58,8 @@ class SchoolFormatTest(unittest.TestCase):
         result = self.invoke('--school', self.source)
         self.assertEqual(result.returncode, 1)
         self.assertIn('unused', result.stderr)
-        self.assertEqual(self.source.read_bytes(), before)
+        self.assertNotEqual(self.source.read_bytes(), before)
+        self.assertIn('int unused;', self.source.read_text())
 
     def test_unsafe_call_and_identifier_diagnostics(self):
         self.source.write_text('char *strcpy(char *, const char *);\n'
@@ -102,3 +104,23 @@ class SchoolFormatTest(unittest.TestCase):
         self.assertEqual(engine.SCHOOL_C_FLAGS.count('-lm'), 2)
         self.assertIn('-std=gnu99', engine.SCHOOL_C_FLAGS)
         self.assertIn('-Werror', engine.SCHOOL_C_FLAGS)
+
+    def test_resource_analyzer_finds_leak_despite_author_review(self):
+        code = ('#include <stdlib.h>\n'
+                '// school-reviewed 3.2, 3.5: buffer is an English name without a type prefix.\n'
+                '// school-reviewed 5.17: This assertion must not hide an actual leak.\n'
+                'int main(void) { char *buffer = calloc(1, sizeof(*buffer)); '
+                'if (!buffer) { return 1; } buffer[0] = 0; return buffer[0]; }\n')
+        self.source.write_text(code)
+        result = self.invoke('--school', self.source)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('5.17 error', result.stderr)
+        self.assertIn('leak', result.stderr.lower())
+        self.assertNotEqual(self.source.read_text(), code)
+        self.assertNotIn('free(buffer)', self.source.read_text())
+
+    def test_empty_pragma_once_header_compiles_as_an_include(self):
+        source = self.root / 'empty.h'
+        source.write_text('#pragma once\n')
+        result = self.invoke('--school', source, '--check')
+        self.assertEqual(result.returncode, 0, result.stderr)

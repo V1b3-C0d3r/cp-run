@@ -244,4 +244,15 @@ With terminal input and timing or memory measurements, enter the complete input 
 
 In configure, **paths** opens source/workspace/output paths directly. The workspace prefix is explained once at the top. Profile **flags** selects a language and backend. Existing shared groups remain in profile advanced settings. C-specific backend entries override legacy shared backend flags. **preview** lists language → backend; **preview --lib** adds C++ library details.
 
-Use cp-run format [FILE] --clang or --school; --check validates without writing. The --make-prettier spelling remains an alias. Configure the default in language settings. See [school architecture and coverage](SCHOOL_FORMAT.md).
+### School formatting workflow
+
+School needs clang-format 15+, Clang and GNU GCC. Set `CP_RUN_GCC` to a GNU executable if detection fails. It verifies the supplied GNU C99 warning/optimization policy; C++ uses the matching language-valid subset.
+
+1. Run `cp-run format --school FILE`. Safe layout changes are saved; remaining errors and reviews return status 1.
+2. Edit each proven violation using its file, rule number and suggestion.
+3. Inspect semantic review requests. After checking an obligation, document the reason in that file, for example `// school-reviewed 3.2: a and b denote the two input leg lengths.`
+4. Run `cp-run format --school FILE --check`. Status 0 means layout/compiler checks passed and outstanding semantic obligations have explicit author assertions.
+
+A review comment cannot suppress a proven violation. Check mode never writes. Syntax/tool failures or a detected change in program structure preserve the original. School never executes your program or Makefile. See the [per-rule architecture](SCHOOL_FORMAT.md) for the exact checks and limitations.
+
+The `school` compilation profile uses the same GCC policy: `cp-run FILE --profile=school`. Its flags are fixed; copy it to a custom profile to change them. Output paths remain configurable.

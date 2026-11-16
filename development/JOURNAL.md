@@ -151,3 +151,9 @@ Time and memory limits are CLI-only and default to unlimited for all operations.
 Added a format action retaining prior source planning and legacy alias. Factory mode is clang. School stages candidates, uses AST diagnostics, fixed whitespace rules and GCC flag verification. Scope and author-review requirements are in docs/SCHOOL_FORMAT.md. Main CI was red due to macOS runner acquisition timeout; Linux test jobs had passed. Retried failed jobs without weakening checks.
 
 Verification: full local suite ran 534 tests; 532 passed and the two localhost tests passed when rerun outside the bind-restricted sandbox. Later focused checks passed 8 school tests and 8 formatting compatibility tests. Exact GNU 11.3.0 and automatic semantic certification remain outside the verified coverage.
+
+## School formatter verification checkpoint
+
+Implemented independently reported behavioral tests for all 68 numbered PDF rules and 23 supplied flag occurrences. Added explicit author-review validation, ownership/resource analysis, read-only header/Makefile checks and pinned compilation/formatting flags. Normal format now publishes safe layout even when policy edits remain; check mode never writes. Syntax/tool failures, changed tokens/AST and concurrent source edits block publication. File publication preserves permissions and reports any already completed files after a later failure.
+
+Focused verification on macOS Apple Silicon: 170 school tests passed with the reference-version test intentionally delegated to CI. A separate forced-g++ driver test and three settings tests passed. A real C hypotenuse workflow passed from unreadable input through formatting, specific author assertions, read-only check and school-profile execution. Fixed the Linux CI regression by explicitly selecting C/C++ for the school profile. Full source/archive verification and current platform CI are the remaining release gates.
