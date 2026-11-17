@@ -4523,7 +4523,7 @@ def format_clang_analyze(config):
 
 # Source: format_cache.py
 """Bounded result cache; unchanged source, tools and dependencies are mandatory."""
-SCHOOL_ENGINE_ID = '534aef5e1fccad827eab3007d9cfcb5d2aaede067ee78efe2d38e22c24d5944d'
+SCHOOL_ENGINE_ID = 'fdf1d24bc2e05e3f11afa3728dce900c23921554569648a8f72b3ace7a0a4a58'
 
 
 def format_file_identity(value):
@@ -4602,19 +4602,22 @@ def format_cache_load(source, text, tools, config):
 
 
 
-def format_include_candidates(source, text, dependencies, search_directories=()):
+def format_include_candidates(source, text, dependencies, search_directories=(), owners=None):
     """Conservatively watch lookup alternatives without caching compiler output."""
     candidates, macro_owners, names, directories = set(), set(), set(), set()
+    selected = None if owners is None else {Path(value) for value in owners}
     roots = list(dict.fromkeys([*search_directories, (str(source.parent), False)]))
     roots = [(Path(value), framework) for value, framework in roots]
-    canonical_roots = [(root, framework, root.resolve()) for root, framework in roots]
-    project = source.parent.resolve()
-    local = {}
+    canonical_roots = [(root.parts, framework, root.resolve().parts) for root, framework in roots]
+    project_parts = source.parent.resolve().parts
+    local, searched = {}, set()
 
     def in_project(directory):
-        if directory not in local:
-            local[directory] = directory.resolve().is_relative_to(project)
-        return local[directory]
+        key = str(directory)
+        if key not in local:
+            parts = directory.resolve().parts
+            local[key] = parts[:len(project_parts)] == project_parts
+        return local[key]
 
     gap = r'(?:[ \t\v\f]|/\*.*?\*/)*'
     literal = re.compile(r'#' + gap + r'include(?:_next)?\b' + gap + r'([<"])([^>"\r\n\0]+)[>"]', re.S)
@@ -4630,6 +4633,10 @@ def format_include_candidates(source, text, dependencies, search_directories=())
 
     def search_candidates(name, owner, directory=False):
         watch(owner / name, directory)
+        key = name, directory
+        if key in searched:
+            return
+        searched.add(key)
         for root, framework in roots:
             if framework:
                 library, separator, remainder = name.partition('/')
@@ -4641,36 +4648,40 @@ def format_include_candidates(source, text, dependencies, search_directories=())
 
     uncovered = False
     for owner in [source, *(Path(value) for value in dependencies)]:
-        try:
-            contents = text if owner == source else owner.read_text()
-        except (OSError, UnicodeDecodeError):
-            continue
-        contents = contents.replace('\\\r\n', '').replace('\\\n', '')
-        for directive in literal.finditer(contents):
-            search_candidates(directive[2], owner.parent, directory=True)
-        for expression in presence.finditer(contents):
-            search_candidates(expression[2], owner.parent, directory=True)
-        unknown = list(opaque_presence.finditer(contents))
-        if unknown:
-            ignored = [(token.start(), token.end()) for token in SCHOOL_LEXER.finditer(contents)]
-            for expression in unknown:
-                before = contents[contents.rfind('\n', 0, expression.start()) + 1:expression.start()]
-                signature = re.fullmatch(r'\s*#\s*define\s+', before)
-                if not signature and not any(start <= expression.start() < end for start, end in ignored):
-                    raise ValueError('nonliteral file-presence expression requires fresh preprocessing')
-        if macro.search(contents):
-            macro_owners.add(owner.parent)
+        if owner != source and selected is not None and owner not in selected:
+            if not owner.is_file():
+                continue
+        else:
+            try:
+                contents = text if owner == source else owner.read_text()
+            except (OSError, UnicodeDecodeError):
+                continue
+            contents = contents.replace('\\\r\n', '').replace('\\\n', '')
+            for directive in literal.finditer(contents):
+                search_candidates(directive[2], owner.parent, directory=True)
+            for expression in presence.finditer(contents):
+                search_candidates(expression[2], owner.parent, directory=True)
+            unknown = list(opaque_presence.finditer(contents))
+            if unknown:
+                ignored = [(token.start(), token.end()) for token in SCHOOL_LEXER.finditer(contents)]
+                for expression in unknown:
+                    before = contents[contents.rfind('\n', 0, expression.start()) + 1:expression.start()]
+                    signature = re.fullmatch(r'\s*#\s*define\s+', before)
+                    if not signature and not any(start <= expression.start() < end for start, end in ignored):
+                        raise ValueError('nonliteral file-presence expression requires fresh preprocessing')
+            if macro.search(contents):
+                macro_owners.add(owner.parent)
         if owner != source:
             names.add(owner.name)
             covered = False
-            resolved = owner.resolve()
+            parts, resolved = owner.parts, owner.resolve().parts
             for root, framework, canonical in canonical_roots:
-                if owner.is_relative_to(root):
+                if parts[:len(root)] == root:
                     covered = True
-                    relative = owner.relative_to(root)
-                elif resolved.is_relative_to(canonical):
+                    relative = Path(*parts[len(root):])
+                elif resolved[:len(canonical)] == canonical:
                     covered = True
-                    relative = resolved.relative_to(canonical)
+                    relative = Path(*resolved[len(canonical):])
                 else:
                     continue
                 if not framework:
@@ -4681,7 +4692,8 @@ def format_include_candidates(source, text, dependencies, search_directories=())
                             position = relative.parts.index(folder)
                             names.add(relative.parts[0][:-len('.framework')] + '/' +
                                       '/'.join(relative.parts[position + 1:]))
-            uncovered = uncovered or not covered
+            configuration = str(owner) in SCHOOL_CONFIGURATION_INPUTS or str(owner.resolve()) in SCHOOL_CONFIGURATION_INPUTS
+            uncovered = uncovered or not (covered or configuration)
     if macro_owners and uncovered:
         raise ValueError('macro include has prerequisites outside the known search roots')
     # Macro spellings cannot always be reconstructed. Watch external lookup
@@ -4765,7 +4777,7 @@ def format_cache_store(source, candidate, findings, dependencies, tools, config)
 
 # Source: format_preamble.py
 """Private, bounded compiler preambles; each reader owns its artifact lifetime."""
-SCHOOL_PREAMBLE_CACHE_VERSION = 4
+SCHOOL_PREAMBLE_CACHE_VERSION = 5
 SCHOOL_PREAMBLE_CACHE_ENTRIES = 8
 SCHOOL_PREAMBLE_CACHE_BYTES = 256 * 1024 * 1024
 
@@ -4831,6 +4843,10 @@ def school_preamble_cache_load(source, prefix, key):
                 or not isinstance(record.get('inputs'), list)
                 or not isinstance(record.get('prefix'), str) or not record['prefix']
                 or not prefix.startswith(record['prefix'])
+                or not isinstance(record.get('lookup_roots'), list)
+                or any(not isinstance(value, list) or len(value) != 2
+                       or not isinstance(value[0], str) or not Path(value[0]).is_absolute()
+                       or type(value[1]) is not bool for value in record['lookup_roots'])
                 or any(value not in record['dependencies'] for value in record['inputs'])):
             return None
         dependencies = record['dependencies']
@@ -4850,7 +4866,8 @@ def school_preamble_cache_load(source, prefix, key):
             return None
         os.utime(index, None)
         return dict(temporary=temporary, pch=str(target), prefix=record['prefix'],
-                    dependencies=record['inputs'], identities=dependencies, cache_key=key)
+                    dependencies=record['inputs'], identities=dependencies, cache_key=key,
+                    lookup_roots=[tuple(value) for value in record['lookup_roots']], lookup_complete=True)
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         if temporary is not None:
             temporary.cleanup()
@@ -4903,7 +4920,7 @@ def school_preamble_cache_store(source, key, entry):
         os.chmod(blob, 0o600)
         record = dict(version=SCHOOL_PREAMBLE_CACHE_VERSION, key=key, clock_independent=True, blob=blob.name,
                       artifact=school_preamble_blob_info(blob), dependencies=entry['identities'],
-                      inputs=entry['dependencies'], prefix=entry['prefix'])
+                      inputs=entry['dependencies'], prefix=entry['prefix'], lookup_roots=entry['lookup_roots'])
         with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', prefix='.index-', dir=root, delete=False) as stream:
             temporary = Path(stream.name)
             json.dump(record, stream)
@@ -5215,8 +5232,30 @@ def school_analyze(config):
         snapshot = None
         if config.get('format_cache', True):
             try:
-                expanded = dependencies | format_include_candidates(source, candidate, dependencies, search)
-                snapshot = {value: format_file_identity(value) for value in expanded}
+                prepared = original_tree.get('school_prepared_lookup') if original_tree is not None else None
+                reusable = prepared and candidate.startswith(prepared['prefix']) and set(search) <= set(prepared['roots'])
+                body = candidate[len(prepared['prefix']):] if reusable else candidate
+                # Conditional/file directives need a full lookup graph; common
+                # body edits only add definitions after the prepared includes.
+                if reusable:
+                    for start, stop in school_directive_spans(body):
+                        directive = re.match(r'\s*#\s*(\w+)', body[start:stop])
+                        if directive is None or directive[1] not in ('define', 'undef'):
+                            reusable = False
+                    reusable = reusable and '__has_' not in body and '_Pragma' not in body and '%:' not in body
+                if reusable:
+                    positive = {prepared['identities'][value][0] for value in prepared['inputs']
+                                if prepared['identities'].get(value) is not None}
+                    extra = [value for value in dependencies
+                             if Path(value).is_file() and str(Path(value).resolve()) not in positive]
+                    expanded = dependencies | set(prepared['identities'])
+                    expanded.update(format_include_candidates(source, body, dependencies, search, owners=extra))
+                    snapshot = dict(prepared['identities'])
+                    for value in expanded - snapshot.keys():
+                        snapshot[value] = format_file_identity(value)
+                else:
+                    expanded = dependencies | format_include_candidates(source, candidate, dependencies, search)
+                    snapshot = {value: format_file_identity(value) for value in expanded}
                 dependencies = expanded
             except (OSError, ValueError):
                 pass  # Unusable speculative include paths disable optional result caching.
@@ -5242,6 +5281,7 @@ def execute_school_format(config):
 """GNU-compatible Clang parsing with dependency-validated precompiled preambles."""
 SCHOOL_CPP_CONTEXTS = {}
 SCHOOL_HEADER_SEARCHES = {}
+SCHOOL_CONFIGURATION_INPUTS = set()
 SCHOOL_PREAMBLES = {}
 SCHOOL_FRONTEND_ENVIRONMENT = (
     'CPATH', 'C_INCLUDE_PATH', 'CPLUS_INCLUDE_PATH', 'SDKROOT', 'DEVELOPER_DIR',
@@ -5278,8 +5318,8 @@ def school_header_search(compiler, language, arguments=()):
                     framework = value.endswith(' (framework directory)')
                     path = value.removesuffix(' (framework directory)')
                     paths.append((str(Path(path).absolute()), framework))
-        # Clang also emits SDK configuration as a prerequisite. Its directory
-        # is a conservative dependency root, not an extra compiler include flag.
+        # SDK configuration is an input, but it is not an include-search root.
+        # Keep its file identity without projecting every header through it.
         for line in probe.stderr.splitlines():
             try:
                 words = shlex.split(line)
@@ -5287,7 +5327,8 @@ def school_header_search(compiler, language, arguments=()):
                 continue
             for word in words:
                 if word.startswith('-fdepfile-entry='):
-                    paths.append((str(Path(word.split('=', 1)[1]).absolute().parent), False))
+                    value = Path(word.split('=', 1)[1]).absolute()
+                    SCHOOL_CONFIGURATION_INPUTS.update((str(value), str(value.resolve())))
         for name in ('CPATH', 'CPLUS_INCLUDE_PATH' if language == 'c++' else 'C_INCLUDE_PATH'):
             if name in os.environ:
                 paths.extend((str(Path(value or '.').absolute()), False)
@@ -5381,6 +5422,10 @@ def school_cpp_preamble(source, text, clang, args):
         entry['temporary'].cleanup()
         del SCHOOL_PREAMBLES[key]
     search = school_header_search(clang, 'c++', [*args, '-iquote', str(source.parent)])
+    gcc = shutil.which(os.environ.get('CP_RUN_GCC', 'gcc-16')) or shutil.which('gcc')
+    if gcc:
+        driver = shutil.which(str(Path(gcc).with_name(Path(gcc).name.replace('gcc', 'g++')))) or gcc
+        search = list(dict.fromkeys([*search, *school_header_search(driver, 'c++')]))
     cache_key = school_preamble_cache_key(source, prefix, clang, ['clang-pch', *args, search])
     restored = school_preamble_cache_load(source, prefix, cache_key)
     if restored is not None:
@@ -5416,7 +5461,7 @@ def school_cpp_preamble(source, text, clang, args):
         identities = {value: format_file_identity(value) for value in dependencies}
         cacheable = False
     entry = dict(temporary=temporary, pch=str(pch), prefix=prepared,
-                 dependencies=dependencies, identities=identities)
+                 dependencies=dependencies, identities=identities, lookup_roots=search, lookup_complete=cacheable)
     if cacheable:
         school_preamble_cache_store(source, cache_key, entry)
         SCHOOL_PREAMBLES[key] = entry
@@ -5578,6 +5623,10 @@ def school_frontend_parse(source, text, clang, cpp):
             if format_file_identity(value) != identity:
                 raise CheckSetupError('dependency changed during formatting: ' + value)
         reduced['school_dependency_identities'].update(entry['identities'])
+        if entry.get('lookup_complete'):
+            reduced['school_prepared_lookup'] = dict(
+                prefix=entry['prefix'], identities=entry['identities'],
+                inputs=entry['dependencies'], roots=entry['lookup_roots'])
     return reduced, SchoolParseIssues()
 
 

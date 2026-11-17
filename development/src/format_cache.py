@@ -78,19 +78,22 @@ def format_cache_load(source, text, tools, config):
 
 
 
-def format_include_candidates(source, text, dependencies, search_directories=()):
+def format_include_candidates(source, text, dependencies, search_directories=(), owners=None):
     """Conservatively watch lookup alternatives without caching compiler output."""
     candidates, macro_owners, names, directories = set(), set(), set(), set()
+    selected = None if owners is None else {Path(value) for value in owners}
     roots = list(dict.fromkeys([*search_directories, (str(source.parent), False)]))
     roots = [(Path(value), framework) for value, framework in roots]
-    canonical_roots = [(root, framework, root.resolve()) for root, framework in roots]
-    project = source.parent.resolve()
-    local = {}
+    canonical_roots = [(root.parts, framework, root.resolve().parts) for root, framework in roots]
+    project_parts = source.parent.resolve().parts
+    local, searched = {}, set()
 
     def in_project(directory):
-        if directory not in local:
-            local[directory] = directory.resolve().is_relative_to(project)
-        return local[directory]
+        key = str(directory)
+        if key not in local:
+            parts = directory.resolve().parts
+            local[key] = parts[:len(project_parts)] == project_parts
+        return local[key]
 
     gap = r'(?:[ \t\v\f]|/\*.*?\*/)*'
     literal = re.compile(r'#' + gap + r'include(?:_next)?\b' + gap + r'([<"])([^>"\r\n\0]+)[>"]', re.S)
@@ -106,6 +109,10 @@ def format_include_candidates(source, text, dependencies, search_directories=())
 
     def search_candidates(name, owner, directory=False):
         watch(owner / name, directory)
+        key = name, directory
+        if key in searched:
+            return
+        searched.add(key)
         for root, framework in roots:
             if framework:
                 library, separator, remainder = name.partition('/')
@@ -117,36 +124,40 @@ def format_include_candidates(source, text, dependencies, search_directories=())
 
     uncovered = False
     for owner in [source, *(Path(value) for value in dependencies)]:
-        try:
-            contents = text if owner == source else owner.read_text()
-        except (OSError, UnicodeDecodeError):
-            continue
-        contents = contents.replace('\\\r\n', '').replace('\\\n', '')
-        for directive in literal.finditer(contents):
-            search_candidates(directive[2], owner.parent, directory=True)
-        for expression in presence.finditer(contents):
-            search_candidates(expression[2], owner.parent, directory=True)
-        unknown = list(opaque_presence.finditer(contents))
-        if unknown:
-            ignored = [(token.start(), token.end()) for token in SCHOOL_LEXER.finditer(contents)]
-            for expression in unknown:
-                before = contents[contents.rfind('\n', 0, expression.start()) + 1:expression.start()]
-                signature = re.fullmatch(r'\s*#\s*define\s+', before)
-                if not signature and not any(start <= expression.start() < end for start, end in ignored):
-                    raise ValueError('nonliteral file-presence expression requires fresh preprocessing')
-        if macro.search(contents):
-            macro_owners.add(owner.parent)
+        if owner != source and selected is not None and owner not in selected:
+            if not owner.is_file():
+                continue
+        else:
+            try:
+                contents = text if owner == source else owner.read_text()
+            except (OSError, UnicodeDecodeError):
+                continue
+            contents = contents.replace('\\\r\n', '').replace('\\\n', '')
+            for directive in literal.finditer(contents):
+                search_candidates(directive[2], owner.parent, directory=True)
+            for expression in presence.finditer(contents):
+                search_candidates(expression[2], owner.parent, directory=True)
+            unknown = list(opaque_presence.finditer(contents))
+            if unknown:
+                ignored = [(token.start(), token.end()) for token in SCHOOL_LEXER.finditer(contents)]
+                for expression in unknown:
+                    before = contents[contents.rfind('\n', 0, expression.start()) + 1:expression.start()]
+                    signature = re.fullmatch(r'\s*#\s*define\s+', before)
+                    if not signature and not any(start <= expression.start() < end for start, end in ignored):
+                        raise ValueError('nonliteral file-presence expression requires fresh preprocessing')
+            if macro.search(contents):
+                macro_owners.add(owner.parent)
         if owner != source:
             names.add(owner.name)
             covered = False
-            resolved = owner.resolve()
+            parts, resolved = owner.parts, owner.resolve().parts
             for root, framework, canonical in canonical_roots:
-                if owner.is_relative_to(root):
+                if parts[:len(root)] == root:
                     covered = True
-                    relative = owner.relative_to(root)
-                elif resolved.is_relative_to(canonical):
+                    relative = Path(*parts[len(root):])
+                elif resolved[:len(canonical)] == canonical:
                     covered = True
-                    relative = resolved.relative_to(canonical)
+                    relative = Path(*resolved[len(canonical):])
                 else:
                     continue
                 if not framework:
@@ -157,7 +168,8 @@ def format_include_candidates(source, text, dependencies, search_directories=())
                             position = relative.parts.index(folder)
                             names.add(relative.parts[0][:-len('.framework')] + '/' +
                                       '/'.join(relative.parts[position + 1:]))
-            uncovered = uncovered or not covered
+            configuration = str(owner) in SCHOOL_CONFIGURATION_INPUTS or str(owner.resolve()) in SCHOOL_CONFIGURATION_INPUTS
+            uncovered = uncovered or not (covered or configuration)
     if macro_owners and uncovered:
         raise ValueError('macro include has prerequisites outside the known search roots')
     # Macro spellings cannot always be reconstructed. Watch external lookup

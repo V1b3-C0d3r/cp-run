@@ -52,6 +52,38 @@ class FormatCacheTest(unittest.TestCase):
             self.collect_calls()
             self.assertEqual(parse.call_count, 2)
 
+    def test_prepared_cpp_lookup_reuses_graph_and_still_tracks_header_changes(self):
+        self.source = self.source.with_suffix('.cpp')
+        self.config['protected'] = [str(self.source)]
+        header = self.source.parent / 'values.hpp'
+        header.write_text('#pragma once\nenum { STATUS = 0 };\n')
+        self.source.write_text('#include "values.hpp"\nint\nmain(void) {\n    return STATUS;\n}\n')
+        with mock.patch.object(engine, 'format_include_candidates', wraps=engine.format_include_candidates) as lookup:
+            self.collect_calls()
+        self.assertTrue(any(call.kwargs.get('owners') is not None for call in lookup.call_args_list))
+        _, warm = self.collect_calls()
+        self.assertFalse(any('-ast-dump=json' in args for args in warm))
+        header.write_text('#pragma once\nenum { STATUS = 128 };\n')
+        result, fresh = self.collect_calls()
+        self.assertTrue(any('-ast-dump=json' in args for args in fresh))
+        self.assertTrue(any(item.rule == '5.7' for item in result.errors), result.findings)
+
+    def test_body_file_presence_uses_full_graph_after_prepared_includes(self):
+        self.source = self.source.with_suffix('.cpp')
+        self.config['protected'] = [str(self.source)]
+        (self.source.parent / 'values.hpp').write_text('#pragma once\n')
+        self.source.write_text('#include "values.hpp"\n#if __has_include("feature.hpp")\n'
+                               '#define STATUS 37\n#else\n#define STATUS 0\n#endif\n'
+                               'int\nmain(void) {\n    return STATUS;\n}\n')
+        with mock.patch.object(engine, 'format_include_candidates', wraps=engine.format_include_candidates) as lookup:
+            self.collect_calls()
+        self.assertTrue(all(call.kwargs.get('owners') is None for call in lookup.call_args_list))
+        _, warm = self.collect_calls()
+        self.assertFalse(any('-ast-dump=json' in args for args in warm))
+        (self.source.parent / 'feature.hpp').write_text('// feature is available\n')
+        _, fresh = self.collect_calls()
+        self.assertTrue(any('-ast-dump=json' in args for args in fresh))
+
     def test_unchanged_second_pass_does_not_repeat_frontend_or_compile(self):
         first, initial = self.collect_calls()
         second, repeated = self.collect_calls()

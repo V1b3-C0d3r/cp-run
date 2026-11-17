@@ -157,7 +157,7 @@ class PreambleCacheTest(unittest.TestCase):
                          '#include "values.hpp"\n#include "bad.hpp"\n')
 
     def test_corrupt_blob_or_manifest_rebuilds_instead_of_skipping_checks(self):
-        for damage in ('blob', 'index'):
+        for damage in ('blob', 'index', 'roots'):
             with self.subTest(damage=damage):
                 self.parse()
                 index = self.records()[0]
@@ -165,6 +165,9 @@ class PreambleCacheTest(unittest.TestCase):
                 self.clear_memory()
                 if damage == 'blob':
                     (index.parent / record['blob']).write_bytes(b'not a PCH')
+                elif damage == 'roots':
+                    record['lookup_roots'] = [[{}, False]]
+                    index.write_text(json.dumps(record))
                 else:
                     index.write_text('[]')
                 _, calls = self.parse()

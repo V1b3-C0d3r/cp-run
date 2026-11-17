@@ -199,8 +199,30 @@ def school_analyze(config):
         snapshot = None
         if config.get('format_cache', True):
             try:
-                expanded = dependencies | format_include_candidates(source, candidate, dependencies, search)
-                snapshot = {value: format_file_identity(value) for value in expanded}
+                prepared = original_tree.get('school_prepared_lookup') if original_tree is not None else None
+                reusable = prepared and candidate.startswith(prepared['prefix']) and set(search) <= set(prepared['roots'])
+                body = candidate[len(prepared['prefix']):] if reusable else candidate
+                # Conditional/file directives need a full lookup graph; common
+                # body edits only add definitions after the prepared includes.
+                if reusable:
+                    for start, stop in school_directive_spans(body):
+                        directive = re.match(r'\s*#\s*(\w+)', body[start:stop])
+                        if directive is None or directive[1] not in ('define', 'undef'):
+                            reusable = False
+                    reusable = reusable and '__has_' not in body and '_Pragma' not in body and '%:' not in body
+                if reusable:
+                    positive = {prepared['identities'][value][0] for value in prepared['inputs']
+                                if prepared['identities'].get(value) is not None}
+                    extra = [value for value in dependencies
+                             if Path(value).is_file() and str(Path(value).resolve()) not in positive]
+                    expanded = dependencies | set(prepared['identities'])
+                    expanded.update(format_include_candidates(source, body, dependencies, search, owners=extra))
+                    snapshot = dict(prepared['identities'])
+                    for value in expanded - snapshot.keys():
+                        snapshot[value] = format_file_identity(value)
+                else:
+                    expanded = dependencies | format_include_candidates(source, candidate, dependencies, search)
+                    snapshot = {value: format_file_identity(value) for value in expanded}
                 dependencies = expanded
             except (OSError, ValueError):
                 pass  # Unusable speculative include paths disable optional result caching.

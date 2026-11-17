@@ -1,5 +1,5 @@
 """Private, bounded compiler preambles; each reader owns its artifact lifetime."""
-SCHOOL_PREAMBLE_CACHE_VERSION = 4
+SCHOOL_PREAMBLE_CACHE_VERSION = 5
 SCHOOL_PREAMBLE_CACHE_ENTRIES = 8
 SCHOOL_PREAMBLE_CACHE_BYTES = 256 * 1024 * 1024
 
@@ -65,6 +65,10 @@ def school_preamble_cache_load(source, prefix, key):
                 or not isinstance(record.get('inputs'), list)
                 or not isinstance(record.get('prefix'), str) or not record['prefix']
                 or not prefix.startswith(record['prefix'])
+                or not isinstance(record.get('lookup_roots'), list)
+                or any(not isinstance(value, list) or len(value) != 2
+                       or not isinstance(value[0], str) or not Path(value[0]).is_absolute()
+                       or type(value[1]) is not bool for value in record['lookup_roots'])
                 or any(value not in record['dependencies'] for value in record['inputs'])):
             return None
         dependencies = record['dependencies']
@@ -84,7 +88,8 @@ def school_preamble_cache_load(source, prefix, key):
             return None
         os.utime(index, None)
         return dict(temporary=temporary, pch=str(target), prefix=record['prefix'],
-                    dependencies=record['inputs'], identities=dependencies, cache_key=key)
+                    dependencies=record['inputs'], identities=dependencies, cache_key=key,
+                    lookup_roots=[tuple(value) for value in record['lookup_roots']], lookup_complete=True)
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         if temporary is not None:
             temporary.cleanup()
@@ -137,7 +142,7 @@ def school_preamble_cache_store(source, key, entry):
         os.chmod(blob, 0o600)
         record = dict(version=SCHOOL_PREAMBLE_CACHE_VERSION, key=key, clock_independent=True, blob=blob.name,
                       artifact=school_preamble_blob_info(blob), dependencies=entry['identities'],
-                      inputs=entry['dependencies'], prefix=entry['prefix'])
+                      inputs=entry['dependencies'], prefix=entry['prefix'], lookup_roots=entry['lookup_roots'])
         with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', prefix='.index-', dir=root, delete=False) as stream:
             temporary = Path(stream.name)
             json.dump(record, stream)

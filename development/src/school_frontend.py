@@ -1,6 +1,7 @@
 """GNU-compatible Clang parsing with dependency-validated precompiled preambles."""
 SCHOOL_CPP_CONTEXTS = {}
 SCHOOL_HEADER_SEARCHES = {}
+SCHOOL_CONFIGURATION_INPUTS = set()
 SCHOOL_PREAMBLES = {}
 SCHOOL_FRONTEND_ENVIRONMENT = (
     'CPATH', 'C_INCLUDE_PATH', 'CPLUS_INCLUDE_PATH', 'SDKROOT', 'DEVELOPER_DIR',
@@ -37,8 +38,8 @@ def school_header_search(compiler, language, arguments=()):
                     framework = value.endswith(' (framework directory)')
                     path = value.removesuffix(' (framework directory)')
                     paths.append((str(Path(path).absolute()), framework))
-        # Clang also emits SDK configuration as a prerequisite. Its directory
-        # is a conservative dependency root, not an extra compiler include flag.
+        # SDK configuration is an input, but it is not an include-search root.
+        # Keep its file identity without projecting every header through it.
         for line in probe.stderr.splitlines():
             try:
                 words = shlex.split(line)
@@ -46,7 +47,8 @@ def school_header_search(compiler, language, arguments=()):
                 continue
             for word in words:
                 if word.startswith('-fdepfile-entry='):
-                    paths.append((str(Path(word.split('=', 1)[1]).absolute().parent), False))
+                    value = Path(word.split('=', 1)[1]).absolute()
+                    SCHOOL_CONFIGURATION_INPUTS.update((str(value), str(value.resolve())))
         for name in ('CPATH', 'CPLUS_INCLUDE_PATH' if language == 'c++' else 'C_INCLUDE_PATH'):
             if name in os.environ:
                 paths.extend((str(Path(value or '.').absolute()), False)
@@ -140,6 +142,10 @@ def school_cpp_preamble(source, text, clang, args):
         entry['temporary'].cleanup()
         del SCHOOL_PREAMBLES[key]
     search = school_header_search(clang, 'c++', [*args, '-iquote', str(source.parent)])
+    gcc = shutil.which(os.environ.get('CP_RUN_GCC', 'gcc-16')) or shutil.which('gcc')
+    if gcc:
+        driver = shutil.which(str(Path(gcc).with_name(Path(gcc).name.replace('gcc', 'g++')))) or gcc
+        search = list(dict.fromkeys([*search, *school_header_search(driver, 'c++')]))
     cache_key = school_preamble_cache_key(source, prefix, clang, ['clang-pch', *args, search])
     restored = school_preamble_cache_load(source, prefix, cache_key)
     if restored is not None:
@@ -175,7 +181,7 @@ def school_cpp_preamble(source, text, clang, args):
         identities = {value: format_file_identity(value) for value in dependencies}
         cacheable = False
     entry = dict(temporary=temporary, pch=str(pch), prefix=prepared,
-                 dependencies=dependencies, identities=identities)
+                 dependencies=dependencies, identities=identities, lookup_roots=search, lookup_complete=cacheable)
     if cacheable:
         school_preamble_cache_store(source, cache_key, entry)
         SCHOOL_PREAMBLES[key] = entry
@@ -337,4 +343,8 @@ def school_frontend_parse(source, text, clang, cpp):
             if format_file_identity(value) != identity:
                 raise CheckSetupError('dependency changed during formatting: ' + value)
         reduced['school_dependency_identities'].update(entry['identities'])
+        if entry.get('lookup_complete'):
+            reduced['school_prepared_lookup'] = dict(
+                prefix=entry['prefix'], identities=entry['identities'],
+                inputs=entry['dependencies'], roots=entry['lookup_roots'])
     return reduced, SchoolParseIssues()
