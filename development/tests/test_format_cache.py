@@ -4,6 +4,7 @@ from pathlib import Path
 import shutil
 import shlex
 import unittest
+import tempfile
 from unittest import mock
 import test_school_format as fixtures
 
@@ -67,6 +68,36 @@ class FormatCacheTest(unittest.TestCase):
         self.assertTrue(any('-ast-dump=json' in args for args in calls))
         _, calls = self.collect_calls(format_cache=False)
         self.assertTrue(any('-ast-dump=json' in args for args in calls))
+
+    def test_external_angle_header_shadow_invalidates_cached_result(self):
+        with tempfile.TemporaryDirectory(prefix='cp-external-includes-') as temporary:
+            external = Path(temporary)
+            first, fallback = external / 'first', external / 'fallback'
+            first.mkdir()
+            fallback.mkdir()
+            (first / 'values.h').write_text('#pragma once\n#include <status.h>\n')
+            (fallback / 'status.h').write_text('#pragma once\nenum { STATUS = 0 };\n')
+            self.source.write_text('#include <values.h>\nint\nmain(void) {\n    return STATUS;\n}\n')
+            with mock.patch.dict(engine.os.environ, CPATH=str(first) + engine.os.pathsep + str(fallback)):
+                self.collect_calls()
+                _, warm = self.collect_calls()
+                self.assertFalse(any('-ast-dump=json' in argv for argv in warm))
+                (first / 'status.h').write_text('#pragma once\nenum { STATUS = 128 };\n')
+                result, fresh = self.collect_calls()
+            self.assertTrue(any('-ast-dump=json' in argv for argv in fresh))
+            self.assertTrue(any(item.rule == '5.7' for item in result.errors), result.findings)
+
+    def test_unusable_extra_dependency_disables_optional_cache(self):
+        with mock.patch.object(engine, 'format_include_candidates', return_value={'bad\0name.h'}):
+            result, _ = self.collect_calls()
+        self.assertFalse(result.errors, result.findings)
+        self.assertFalse(list(self.cache.rglob('school-*.json')))
+
+    def test_dependency_superset_covers_comments_and_spliced_directives(self):
+        text = '#/**/include/**/"first.h"\n#inc\\\nlude "second.h"\n'
+        candidates = engine.format_include_candidates(self.source, text, [])
+        self.assertIn(str(self.source.parent / 'first.h'), candidates)
+        self.assertIn(str(self.source.parent / 'second.h'), candidates)
 
     def test_header_change_invalidates_result(self):
         header = self.case.root / 'values.h'

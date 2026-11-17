@@ -74,6 +74,21 @@ class FormatTerminalTest(unittest.TestCase):
         self.assertEqual(repeated.returncode, 0, repeated.stderr)
         self.assertNotEqual(target.read_bytes(), b'old binary')
 
+    def test_gnu_helper_enters_style_review_and_batch_justification_completes(self):
+        self.source = self.case.root / 'main.cpp'
+        self.source.write_text('#include <algorithm>\n'
+                               'int main(void) { int BadName = std::__lg(8); return BadName != 3; }\n')
+        report = self.case.root / 'review.json'
+        self.start(['format', '--school', self.source, '--review', '--report', report])
+        self.until(b'error> ')
+        initial = json.loads(report.read_text())['findings']
+        self.assertTrue(initial)
+        self.assertTrue(all(item['rule'] not in ('frontend', 'GCC', 'backend') for item in initial), initial)
+        os.write(self.master, b'j all required by assignment\n')
+        self.assertEqual(self.process.wait(timeout=20), 0)
+        self.assertIn('school-error-justified', self.source.read_text())
+        self.assertEqual(json.loads(report.read_text())['state'], 'complete')
+
     def test_real_annotation_and_empty_batch_justification(self):
         self.source.write_text('int state;\nint main(void){return 0;}\n')
         self.start(['format', '--school', self.source, '--annotate'])

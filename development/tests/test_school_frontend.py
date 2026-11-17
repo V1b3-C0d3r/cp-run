@@ -1,5 +1,6 @@
 """GNU compatibility and small ASTs without losing header semantics."""
 import shutil
+import subprocess
 import unittest
 from unittest import mock
 import test_school_format as fixtures
@@ -35,6 +36,26 @@ class SchoolFrontendTest(unittest.TestCase):
         self.assertEqual(errors, [], errors)
         self.assertIsNotNone(tree)
         return tree, calls
+
+    def test_driver_probe_uses_stable_locale_without_changing_user_environment(self):
+        headers = self.case.root / 'include' / 'c++' / '16'
+        headers.mkdir(parents=True)
+        output = '#include <...> search starts here:\n ' + str(headers) + '\nEnd of search list.\n'
+        result = subprocess.CompletedProcess([], 0, '', output)
+        with mock.patch.dict(engine.SCHOOL_CPP_CONTEXTS, clear=True), \
+             mock.patch.dict(engine.os.environ, LC_ALL='user-locale'), \
+             mock.patch.object(engine, 'school_tool', return_value=result) as tool:
+            context = engine.school_cpp_context()
+            self.assertEqual(context, ['-nostdinc++', '-isystem', str(headers.resolve())])
+            self.assertEqual(tool.call_args.kwargs['env']['LC_ALL'], 'C')
+            self.assertEqual(engine.os.environ['LC_ALL'], 'user-locale')
+
+    def test_unavailable_container_headers_keep_local_clang_search(self):
+        output = '#include <...> search starts here:\n /nonexistent-cp-run/include/c++/99\nEnd of search list.\n'
+        result = subprocess.CompletedProcess([], 0, '', output)
+        with mock.patch.dict(engine.SCHOOL_CPP_CONTEXTS, clear=True), \
+             mock.patch.object(engine, 'school_tool', return_value=result):
+            self.assertEqual(engine.school_cpp_context(), [])
 
     def test_gnu_lg_and_bits_use_gnu_headers_with_a_small_ast(self):
         code = '#include <bits/stdc++.h>\nint main() { return std::__lg(8) != 3; }\n'
@@ -160,6 +181,9 @@ class SchoolFrontendTest(unittest.TestCase):
         for code, expected in (
             ('int main() { int values[2] = {}; return values[0]; }', False),
             ('int read_value(int *values) { return values[0]; }', True),
+            ('int main() { int values[2][2] = {}; return values[0][0]; }', False),
+            ('int read_value(int (&values)[2]) { return values[0]; }', True),
+            ('int (&values())[2]; int main() { return values()[0]; }', True),
             ('int main() { int *value = 0; return *value; }', True),
             ('int main() { int *value = new int(0); return *value; }', True),
         ):

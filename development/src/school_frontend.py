@@ -24,7 +24,7 @@ def school_cpp_context():
            str(Path.cwd()), tuple(os.environ.get(name) for name in SCHOOL_FRONTEND_ENVIRONMENT))
     if key not in SCHOOL_CPP_CONTEXTS:
         probe = school_tool([driver, '-E', '-x', 'c++', '-v', '-'],
-                            input='', text=True, capture_output=True)
+                            input='', text=True, capture_output=True, env=dict(os.environ, LC_ALL='C'))
         paths, inside = [], False
         if not probe.returncode:
             for line in probe.stderr.splitlines():
@@ -113,10 +113,15 @@ def school_cpp_preamble(source, text, clang, args):
         temporary.cleanup()
         return None
     dependencies = format_dependency_paths(dependency.read_text())
-    dependencies = list(dict.fromkeys([
-        *dependencies, *format_include_candidates(source, prefix, dependencies)]))
-    entry = dict(temporary=temporary, pch=str(pch), prefix=prefix, dependencies=dependencies,
-                 identities={value: format_file_identity(value) for value in dependencies})
+    try:
+        dependencies = list(dict.fromkeys([
+            *dependencies, *format_include_candidates(source, prefix, dependencies)]))
+        identities = {value: format_file_identity(value) for value in dependencies}
+    except (OSError, ValueError):
+        temporary.cleanup()
+        return None
+    entry = dict(temporary=temporary, pch=str(pch), prefix=prefix,
+                 dependencies=dependencies, identities=identities)
     if len(SCHOOL_PREAMBLES) >= 4:
         _, previous = SCHOOL_PREAMBLES.popitem()
         previous['temporary'].cleanup()

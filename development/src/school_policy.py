@@ -1023,10 +1023,15 @@ def school_needs_resource_analysis(source, text, tree):
             return True
         if kind == 'ArraySubscriptExpr':
             base = school_unwrap(next(iter(node.get('inner', [])), {}))
-            # Fixed arrays carry no nullable/owning pointer. Pointer indexing
-            # still needs the same null/lifetime analysis as dereferencing.
-            typ = base.get('type', {}).get('desugaredQualType', base.get('type', {}).get('qualType', ''))
-            if '[' not in typ or '*' in typ:
+            # Skip only actual array objects, including multidimensional
+            # indexing. Calls/references/fields can still hide borrowed storage.
+            while base.get('kind') == 'ArraySubscriptExpr':
+                base = school_unwrap(next(iter(base.get('inner', [])), {}))
+            reference = base.get('referencedDecl', {})
+            details = reference.get('type', {})
+            typ = details.get('desugaredQualType', details.get('qualType', ''))
+            if (base.get('kind') != 'DeclRefExpr' or reference.get('kind') != 'VarDecl'
+                    or '[' not in typ or '*' in typ or '&' in typ):
                 return True
         if kind == 'UnaryOperator' and node.get('opcode') == '*' or kind == 'MemberExpr' and node.get('isArrow'):
             return True

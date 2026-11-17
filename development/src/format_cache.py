@@ -79,22 +79,20 @@ def format_cache_load(source, text, tools, config):
 
 
 def format_include_candidates(source, text, dependencies):
-    """Track local header shadows without lexing every system implementation."""
+    """Conservatively track include shadows, without lexing header bodies."""
     candidates = set()
-    quoted = re.compile(r'^[^\S\r\n]*#[^\S\r\n]*include[^\S\r\n]*"', re.M)
+    gap = r'(?:[ \t\v\f]|/\*.*?\*/)*'
+    literal = re.compile(r'#' + gap + r'include' + gap + r'([<"])([^>"\r\n\0]+)[>"]', re.S)
     for owner in [source, *(Path(value) for value in dependencies)]:
         try:
             contents = text if owner == source else owner.read_text()
         except (OSError, UnicodeDecodeError):
             continue
-        # All source include spellings affect the project auditor. In external
-        # headers only quoted includes consult a local directory first.
-        local = owner == source or owner.is_relative_to(source.parent)
-        if not local and not quoted.search(contents):
-            continue
-        for directive in school_includes(contents):
-            if local or directive[1] == '"':
-                candidates.add(str((owner.parent / directive[2]).absolute()))
+        # This is a dependency superset, not a policy diagnostic: apparent
+        # includes inside comments/strings only cause extra invalidation.
+        contents = contents.replace('\\\r\n', '').replace('\\\n', '')
+        for directive in literal.finditer(contents):
+            candidates.add(str((owner.parent / directive[2]).absolute()))
     return candidates
 
 
@@ -106,10 +104,13 @@ def format_cache_store(source, candidate, findings, dependencies, tools, config)
     dependencies = set(dependencies) | {str(source.with_suffix('.h')),
                     str(source.parent / 'Makefile'), str(source.parent / 'makefile')}
     headers = [value for value in dependencies if Path(value).suffix in ('.h', '.hpp', '.hh', '.hxx')]
-    dependencies.update(format_include_candidates(source, candidate, headers))
-    record = dict(key=format_cache_key(candidate, tools), candidate=candidate,
-                  dependencies={value: format_file_identity(value) for value in dependencies},
-                  findings=[item.record() for item in findings])
+    try:
+        dependencies.update(format_include_candidates(source, candidate, headers))
+        record = dict(key=format_cache_key(candidate, tools), candidate=candidate,
+                      dependencies={value: format_file_identity(value) for value in dependencies},
+                      findings=[item.record() for item in findings])
+    except (OSError, ValueError):
+        return  # An unusable conservative candidate disables optional caching.
     temporary = None
     try:
         descriptor, temporary = tempfile.mkstemp(prefix='.school-cache-', dir=path.parent)

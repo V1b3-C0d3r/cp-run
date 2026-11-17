@@ -4523,7 +4523,7 @@ def format_clang_analyze(config):
 
 # Source: format_cache.py
 """Bounded result cache; unchanged source, tools and dependencies are mandatory."""
-SCHOOL_ENGINE_ID = 'd7bb4a66021d60f5be3f0b6030da80fd34d0e917938551dbf6477b734145404c'
+SCHOOL_ENGINE_ID = 'e187daad3970575eeb095990fd8031bbb837bbb4eb1aa213ceed18023a9c6683'
 
 
 def format_file_identity(value):
@@ -4603,22 +4603,20 @@ def format_cache_load(source, text, tools, config):
 
 
 def format_include_candidates(source, text, dependencies):
-    """Track local header shadows without lexing every system implementation."""
+    """Conservatively track include shadows, without lexing header bodies."""
     candidates = set()
-    quoted = re.compile(r'^[^\S\r\n]*#[^\S\r\n]*include[^\S\r\n]*"', re.M)
+    gap = r'(?:[ \t\v\f]|/\*.*?\*/)*'
+    literal = re.compile(r'#' + gap + r'include' + gap + r'([<"])([^>"\r\n\0]+)[>"]', re.S)
     for owner in [source, *(Path(value) for value in dependencies)]:
         try:
             contents = text if owner == source else owner.read_text()
         except (OSError, UnicodeDecodeError):
             continue
-        # All source include spellings affect the project auditor. In external
-        # headers only quoted includes consult a local directory first.
-        local = owner == source or owner.is_relative_to(source.parent)
-        if not local and not quoted.search(contents):
-            continue
-        for directive in school_includes(contents):
-            if local or directive[1] == '"':
-                candidates.add(str((owner.parent / directive[2]).absolute()))
+        # This is a dependency superset, not a policy diagnostic: apparent
+        # includes inside comments/strings only cause extra invalidation.
+        contents = contents.replace('\\\r\n', '').replace('\\\n', '')
+        for directive in literal.finditer(contents):
+            candidates.add(str((owner.parent / directive[2]).absolute()))
     return candidates
 
 
@@ -4630,10 +4628,13 @@ def format_cache_store(source, candidate, findings, dependencies, tools, config)
     dependencies = set(dependencies) | {str(source.with_suffix('.h')),
                     str(source.parent / 'Makefile'), str(source.parent / 'makefile')}
     headers = [value for value in dependencies if Path(value).suffix in ('.h', '.hpp', '.hh', '.hxx')]
-    dependencies.update(format_include_candidates(source, candidate, headers))
-    record = dict(key=format_cache_key(candidate, tools), candidate=candidate,
-                  dependencies={value: format_file_identity(value) for value in dependencies},
-                  findings=[item.record() for item in findings])
+    try:
+        dependencies.update(format_include_candidates(source, candidate, headers))
+        record = dict(key=format_cache_key(candidate, tools), candidate=candidate,
+                      dependencies={value: format_file_identity(value) for value in dependencies},
+                      findings=[item.record() for item in findings])
+    except (OSError, ValueError):
+        return  # An unusable conservative candidate disables optional caching.
     temporary = None
     try:
         descriptor, temporary = tempfile.mkstemp(prefix='.school-cache-', dir=path.parent)
@@ -4884,7 +4885,7 @@ def school_cpp_context():
            str(Path.cwd()), tuple(os.environ.get(name) for name in SCHOOL_FRONTEND_ENVIRONMENT))
     if key not in SCHOOL_CPP_CONTEXTS:
         probe = school_tool([driver, '-E', '-x', 'c++', '-v', '-'],
-                            input='', text=True, capture_output=True)
+                            input='', text=True, capture_output=True, env=dict(os.environ, LC_ALL='C'))
         paths, inside = [], False
         if not probe.returncode:
             for line in probe.stderr.splitlines():
@@ -4973,10 +4974,15 @@ def school_cpp_preamble(source, text, clang, args):
         temporary.cleanup()
         return None
     dependencies = format_dependency_paths(dependency.read_text())
-    dependencies = list(dict.fromkeys([
-        *dependencies, *format_include_candidates(source, prefix, dependencies)]))
-    entry = dict(temporary=temporary, pch=str(pch), prefix=prefix, dependencies=dependencies,
-                 identities={value: format_file_identity(value) for value in dependencies})
+    try:
+        dependencies = list(dict.fromkeys([
+            *dependencies, *format_include_candidates(source, prefix, dependencies)]))
+        identities = {value: format_file_identity(value) for value in dependencies}
+    except (OSError, ValueError):
+        temporary.cleanup()
+        return None
+    entry = dict(temporary=temporary, pch=str(pch), prefix=prefix,
+                 dependencies=dependencies, identities=identities)
     if len(SCHOOL_PREAMBLES) >= 4:
         _, previous = SCHOOL_PREAMBLES.popitem()
         previous['temporary'].cleanup()
@@ -6153,10 +6159,15 @@ def school_needs_resource_analysis(source, text, tree):
             return True
         if kind == 'ArraySubscriptExpr':
             base = school_unwrap(next(iter(node.get('inner', [])), {}))
-            # Fixed arrays carry no nullable/owning pointer. Pointer indexing
-            # still needs the same null/lifetime analysis as dereferencing.
-            typ = base.get('type', {}).get('desugaredQualType', base.get('type', {}).get('qualType', ''))
-            if '[' not in typ or '*' in typ:
+            # Skip only actual array objects, including multidimensional
+            # indexing. Calls/references/fields can still hide borrowed storage.
+            while base.get('kind') == 'ArraySubscriptExpr':
+                base = school_unwrap(next(iter(base.get('inner', [])), {}))
+            reference = base.get('referencedDecl', {})
+            details = reference.get('type', {})
+            typ = details.get('desugaredQualType', details.get('qualType', ''))
+            if (base.get('kind') != 'DeclRefExpr' or reference.get('kind') != 'VarDecl'
+                    or '[' not in typ or '*' in typ or '&' in typ):
                 return True
         if kind == 'UnaryOperator' and node.get('opcode') == '*' or kind == 'MemberExpr' and node.get('isArrow'):
             return True
