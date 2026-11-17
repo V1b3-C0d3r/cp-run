@@ -13,9 +13,9 @@ This table maps all 68 numbered paragraphs of the supplied school codestyle to o
 | Layout | Fixed clang-format policy, parameter/label edits, token and AST verification |
 | Policy | Structured file/line/column/rule/severity/evidence findings |
 | Project audit | Read-only header ownership, guards, necessary includes and literal Makefile targets |
-| Compiler verification | Shared GNU flags; compile a staged unit without linking or running it |
-| Resource analysis | Run relevant Clang checkers when source contains resource/pointer evidence |
-| Result cache | Source/tool/policy/environment key, compiler dependency metadata and bounded private storage |
+| Compiler verification | Compile with every shared GNU flag; structured warning identities avoid a redundant syntax pass |
+| Resource analysis | Keep pointer/container/closure checks; plain scalar fields through this alone need no resource pass |
+| Preparation/result caches | Validate real inputs and header lookup alternatives; bounded private storage, atomic publication and reader-owned artifacts |
 | Review | Error repair/exception loop, then warning decisions; no inferred success after accept |
 | Publisher | Concurrent-edit preflight, per-file atomic replacement, preserved permissions |
 | Report | Initial snapshots plus final decisions; protected destinations and atomic updates |
@@ -35,11 +35,11 @@ The strict compilation gate first checks every source read-only. Warnings pass. 
 | 2.3 | Eight-space continuations | No column alignment. |
 | 3.1 | Function/global names shorter than three characters; function f | No assessment of meaningfulness or abbreviation quality. |
 | 3.2 | Non-ASCII identifiers; distinctive whole transliterated words or multiple Russian-word tokens | No general English dictionary or broad substring matching. |
-| 3.3 | UPPER_SNAKE_CASE scalar constants and enum members | Pointer-to-const is not a constant object. |
+| 3.3 | UPPER_SNAKE_CASE scalar constants and enum members; N is allowed | Pointer-to-const is not a constant object. |
 | 3.4 | lower_snake_case variables/labels; function casing warning | A teacher-approved function spelling can be justified. |
 | 3.5 | Type-prefix warning only when the prefix matches the declared type | Ordinary names do not require type-encoding assertions. |
 | 3.6 | PascalCase types/tags | No word-meaning check. |
-| 3.7 | Forbidden I/O/l identifiers and concrete ambiguous glyph runs | No general name-readability inference. |
+| 3.7 | Forbidden I/O/l identifiers, I/O macros and concrete ambiguous glyph runs | No general name-readability inference. |
 | 4.1 | Record layout, separate fields and object declarations; C++ field prefixes | Constructors/operators retain language-imposed forms. |
 | 4.2 | Enum layout and value ordering | Single-member enum form remains legal. |
 | 4.3 | Pointer-star layout | Multiplication is an expression, not a declarator. |

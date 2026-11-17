@@ -842,6 +842,9 @@ class SchoolPolicy:
                 self.emit('5.12', 'remove commented-out debugging code or explain why this is documentation.',
                           line=self.text[:match.start()].count('\n') + 1, review=True)
         for number, line in enumerate(self.code.splitlines(), 1):
+            name = re.match(r'\s*#\s*define\s+([A-Za-z_]\w*)', line)
+            if name and name[1] in ('I', 'O'):
+                self.emit('3.7', 'rename visually ambiguous constant ' + name[1], line=number)
             macro = re.match(r'\s*#\s*define\s+\w+\s+(.+)', line)
             integer_macro = macro and re.search(r'\b(?:0[xX][\da-fA-F]+|\d+)[uUlL]*\b', macro[1]) and not re.search(r'\d\.\d|\d[eEpP][+-]?\d', macro[1])
             exception = macro and re.fullmatch(r'[()\s]*(-\s*1|2)[uUlL]*[()\s]*', macro[1])
@@ -1033,7 +1036,21 @@ def school_needs_resource_analysis(source, text, tree):
             if (base.get('kind') != 'DeclRefExpr' or reference.get('kind') != 'VarDecl'
                     or '[' not in typ or '*' in typ or '&' in typ):
                 return True
-        if kind == 'UnaryOperator' and node.get('opcode') == '*' or kind == 'MemberExpr' and node.get('isArrow'):
+        if kind == 'UnaryOperator' and node.get('opcode') == '*':
+            return True
+        if kind == 'MemberExpr' and node.get('isArrow'):
+            base = school_unwrap(next(iter(node.get('inner', [])), {}))
+            details = node.get('type', {})
+            typ = details.get('desugaredQualType', details.get('qualType', ''))
+            scalar_words = {'const', 'volatile', 'signed', 'unsigned', 'short', 'long',
+                            'int', 'char', 'bool', 'float', 'double', 'wchar_t',
+                            'char8_t', 'char16_t', 'char32_t', '__int128', '_Bool'}
+            plain_scalar = bool(typ.split()) and set(typ.split()) <= scalar_words
+            # Only a plain scalar field through this is harmless by itself.
+            # Pointer/container fields, method calls and closures retain analysis.
+            if base.get('kind') != 'CXXThisExpr' or not plain_scalar:
+                return True
+        if kind == 'LambdaExpr' and any(child.get('kind') == 'CXXThisExpr' for child in school_nodes(node)):
             return True
         if kind == 'CallExpr' and policy.callee(node) in calls:
             return True

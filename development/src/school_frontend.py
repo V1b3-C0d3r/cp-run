@@ -1,5 +1,6 @@
 """GNU-compatible Clang parsing with dependency-validated precompiled preambles."""
 SCHOOL_CPP_CONTEXTS = {}
+SCHOOL_HEADER_SEARCHES = {}
 SCHOOL_PREAMBLES = {}
 SCHOOL_FRONTEND_ENVIRONMENT = (
     'CPATH', 'C_INCLUDE_PATH', 'CPLUS_INCLUDE_PATH', 'SDKROOT', 'DEVELOPER_DIR',
@@ -14,6 +15,46 @@ class SchoolParseIssues(list):
         self.identities = {value: format_file_identity(value) for value in self.dependencies}
 
 
+
+def school_header_search(compiler, language, arguments=()):
+    """Read real search roots, including framework and nonexistent env roots."""
+    key = (str(Path(compiler).resolve()), tuple(format_file_identity(compiler) or ()),
+           language, tuple(arguments), str(Path.cwd()),
+           tuple(os.environ.get(name) for name in SCHOOL_FRONTEND_ENVIRONMENT))
+    if key not in SCHOOL_HEADER_SEARCHES:
+        probe = school_tool([compiler, '-E', '-x', language, '-v', *arguments, '-'],
+                            input='', text=True, capture_output=True, env=dict(os.environ, LC_ALL='C'))
+        paths, inside = [], False
+        if not probe.returncode:
+            for line in probe.stderr.splitlines():
+                value = line.strip()
+                if value in ('#include <...> search starts here:', '#include "..." search starts here:'):
+                    inside = True
+                    continue
+                if value == 'End of search list.':
+                    break
+                if inside and value:
+                    framework = value.endswith(' (framework directory)')
+                    path = value.removesuffix(' (framework directory)')
+                    paths.append((str(Path(path).absolute()), framework))
+        # Clang also emits SDK configuration as a prerequisite. Its directory
+        # is a conservative dependency root, not an extra compiler include flag.
+        for line in probe.stderr.splitlines():
+            try:
+                words = shlex.split(line)
+            except ValueError:
+                continue
+            for word in words:
+                if word.startswith('-fdepfile-entry='):
+                    paths.append((str(Path(word.split('=', 1)[1]).absolute().parent), False))
+        for name in ('CPATH', 'CPLUS_INCLUDE_PATH' if language == 'c++' else 'C_INCLUDE_PATH'):
+            if name in os.environ:
+                paths.extend((str(Path(value or '.').absolute()), False)
+                             for value in os.environ[name].split(os.pathsep))
+        SCHOOL_HEADER_SEARCHES[key] = list(dict.fromkeys(paths))
+    return SCHOOL_HEADER_SEARCHES[key]
+
+
 def school_cpp_context():
     """Query the selected GNU driver; never mix its headers with libc++."""
     gcc = shutil.which(os.environ.get('CP_RUN_GCC', 'gcc-16')) or shutil.which('gcc')
@@ -23,49 +64,44 @@ def school_cpp_context():
     key = (str(Path(driver).resolve()), tuple(format_file_identity(driver) or ()),
            str(Path.cwd()), tuple(os.environ.get(name) for name in SCHOOL_FRONTEND_ENVIRONMENT))
     if key not in SCHOOL_CPP_CONTEXTS:
-        probe = school_tool([driver, '-E', '-x', 'c++', '-v', '-'],
-                            input='', text=True, capture_output=True, env=dict(os.environ, LC_ALL='C'))
-        paths, inside = [], False
-        if not probe.returncode:
-            for line in probe.stderr.splitlines():
-                if line.strip() == '#include <...> search starts here:':
-                    inside = True
-                    continue
-                if line.strip() == 'End of search list.':
-                    break
-                value = line.strip()
-                if inside and '/c++/' in value and Path(value).is_dir():
-                    paths.append(str(Path(value).resolve()))
+        paths = [str(Path(value).resolve()) for value, _ in school_header_search(driver, 'c++')
+                 if '/c++/' in value and Path(value).is_dir()]
         SCHOOL_CPP_CONTEXTS[key] = ['-nostdinc++', *[arg for value in dict.fromkeys(paths)
                                                   for arg in ('-isystem', value)]] if paths else []
     return SCHOOL_CPP_CONTEXTS[key]
 
 
-def school_preamble_prefix(text):
+def school_preamble_prefixes(text):
     """End at the last balanced include, leaving later source macros editable."""
-    code, end, balanced, depth = school_mask(text), 0, 0, 0
+    code, end, depth, prefixes = school_mask(text), 0, 0, []
     pending_include = False
     for start, finish in school_directive_spans(text):
         if code[end:start].strip():
             break
         directive = re.match(r'\s*#\s*([A-Za-z_]\w*)', code[start:finish])
         if not directive or directive[1] == 'line':
-            return ''
+            return []
         name = directive[1]
         if name in ('if', 'ifdef', 'ifndef'):
             depth += 1
         elif name == 'endif':
             depth -= 1
         if depth < 0:
-            return ''
+            return []
         if name == 'include':
             pending_include = True
         end = finish
         if depth == 0 and pending_include:
-            balanced = end
+            if school_includes(text[:end]):
+                prefixes.append(text[:end])
             pending_include = False
-    prefix = text[:balanced]
-    return prefix if school_includes(prefix) else ''
+    return prefixes
+
+
+
+def school_preamble_prefix(text):
+    prefixes = school_preamble_prefixes(text)
+    return prefixes[-1] if prefixes else ''
 
 
 def school_json_roots(output):
@@ -93,7 +129,7 @@ def school_ast_root(output):
 
 def school_cpp_preamble(source, text, clang, args):
     prefix = school_preamble_prefix(text)
-    if not prefix:
+    if not prefix or format_volatile_inputs(prefix, []):
         return None
     key = (str(source.parent), prefix, tuple(args), tuple(format_file_identity(clang) or ()),
            str(Path.cwd()), tuple(os.environ.get(name) for name in SCHOOL_FRONTEND_ENVIRONMENT))
@@ -103,30 +139,54 @@ def school_cpp_preamble(source, text, clang, args):
     if entry:
         entry['temporary'].cleanup()
         del SCHOOL_PREAMBLES[key]
+    search = school_header_search(clang, 'c++', [*args, '-iquote', str(source.parent)])
+    cache_key = school_preamble_cache_key(source, prefix, clang, ['clang-pch', *args, search])
+    restored = school_preamble_cache_load(source, prefix, cache_key)
+    if restored is not None:
+        SCHOOL_PREAMBLES[key] = restored
+        school_preamble_trim()
+        return restored
     temporary = tempfile.TemporaryDirectory(prefix='cp-format-preamble-')
     pch, dependency = Path(temporary.name) / 'prefix.pch', Path(temporary.name) / 'prefix.d'
-    result = school_tool([clang, '-x', 'c++-header', '-std=gnu++17', *args,
-                         '-iquote', str(source.parent), '-MD', '-MF', str(dependency),
-                         '-MT', 'cp_source', '-o', str(pch), '-'],
-                        input=prefix, text=True, capture_output=True)
-    if result.returncode or not pch.is_file() or not dependency.is_file():
+    prefixes = school_preamble_prefixes(text)
+    attempts = list(dict.fromkeys([prefix, prefixes[0]]))
+    for prepared in attempts:
+        result = school_tool([clang, '-x', 'c++-header', '-std=gnu++17', *args,
+                             '-iquote', str(source.parent), '-MD', '-MF', str(dependency),
+                             '-MT', 'cp_source', '-o', str(pch), '-'],
+                            input=prepared, text=True, capture_output=True)
+        if not result.returncode and pch.is_file() and dependency.is_file():
+            break
+    else:
         temporary.cleanup()
         return None
-    dependencies = format_dependency_paths(dependency.read_text())
+    dependencies = [str(Path(value).absolute()) for value in format_dependency_paths(dependency.read_text())]
+    if format_volatile_inputs(prefix, dependencies):
+        temporary.cleanup()
+        return None
+    dependencies = list(dict.fromkeys(dependencies))
+    cacheable = True
     try:
-        dependencies = list(dict.fromkeys([
-            *dependencies, *format_include_candidates(source, prefix, dependencies)]))
-        identities = {value: format_file_identity(value) for value in dependencies}
+        watched = set(dependencies) | format_include_candidates(source, prefix, dependencies, search)
+        identities = {value: format_file_identity(value) for value in watched}
     except (OSError, ValueError):
-        temporary.cleanup()
-        return None
-    entry = dict(temporary=temporary, pch=str(pch), prefix=prefix,
+        # Still use this invocation's PCH; unknown lookup alternatives only
+        # prevent reuse, not full source analysis.
+        identities = {value: format_file_identity(value) for value in dependencies}
+        cacheable = False
+    entry = dict(temporary=temporary, pch=str(pch), prefix=prepared,
                  dependencies=dependencies, identities=identities)
-    if len(SCHOOL_PREAMBLES) >= 4:
-        _, previous = SCHOOL_PREAMBLES.popitem()
-        previous['temporary'].cleanup()
-    SCHOOL_PREAMBLES[key] = entry
+    if cacheable:
+        school_preamble_cache_store(source, cache_key, entry)
+        SCHOOL_PREAMBLES[key] = entry
+        school_preamble_trim()
     return entry
+
+
+def school_preamble_trim():
+    while len(SCHOOL_PREAMBLES) > 4:
+        key = next(iter(SCHOOL_PREAMBLES))
+        SCHOOL_PREAMBLES.pop(key)['temporary'].cleanup()
 
 
 def school_preamble_input(text, entry):
@@ -236,6 +296,14 @@ def school_frontend_parse(source, text, clang, cpp):
         invocation = [clang, '-x', 'c++' if cpp else 'c', '-std=gnu++17' if cpp else '-std=gnu99',
                       *args, '-iquote', str(source.parent), '-Xclang', '-ast-dump=json',
                       '-fsyntax-only', '-MD', '-MF', str(dependency), '-MT', 'cp_source']
+        if cpp and entry is None and school_preamble_prefix(text):
+            probe = school_tool([clang, '-x', 'c++', '-std=gnu++17', *args,
+                                 '-iquote', str(source.parent), '-fsyntax-only', '-MD',
+                                 '-MF', str(dependency), '-MT', 'cp_source', '-'],
+                                input=text, text=True, capture_output=True)
+            if probe.returncode:
+                dependencies = format_dependency_paths(dependency.read_text()) if dependency.exists() else []
+                return None, SchoolParseIssues([str(source) + ': school parser error:\\n' + probe.stderr], dependencies)
         result = school_tool([*invocation, *(['-include-pch', entry['pch']] if entry else []), '-'],
                              input=school_preamble_input(text, entry) if entry else text,
                              text=True, capture_output=True)

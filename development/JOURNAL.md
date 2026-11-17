@@ -192,3 +192,13 @@ Final 1.5.1 verification: source and extracted archive each passed 745 tests on 
 - Full local source suite passed 759 tests on Python 3.9.6 (one expected GNU-reference skip). Subsequent cache-shadow, locale, pointer/reference and real-PTY regressions were checked separately. A real algorithm copy completed error justification and warning review: 32 justified errors, 11 denied warnings, no pending findings; the original file remained unchanged.
 - The installed script was upgraded with all 69 configuration fields compared equal and an original-script/settings backup retained outside Git. GNU helper formatting/checking passed through the installed CLI. Factory defaults stay clang; the local default stays school.
 - The first CI commit passed GNU 11.3.0, Linux x64/ARM64 and macOS Intel; macOS ARM is waiting for a hosted runner. Final conservative dependency/resource-path changes and the additional PTY regression need the updated branch CI. Published 1.5.1 remains unchanged; 1.5.2 is prepared, not published.
+
+### 1.5.2 real-code performance checkpoint
+
+A private snapshot of 234 C++ files was copied outside Git; source files and repository history are not release contents. Added a reproducible benchmark runner that pins the one-file artifact, works on copies, checks idempotence and terminates its own compiler process group on timeout. The baseline 25-file sample measured medians of 3.12 s first pass, 2.77 s edited and 0.23 s unchanged.
+
+Implemented persistent Clang preambles with private ownership checks, nonblocking publication, reader-owned links/copies, atomic indexes and 8-entry/256 MiB bounds. Dependency validation includes lookup alternatives, macro includes, file-presence expressions, framework roots, dangling links and SDK configuration. Atomic editor saves do not discard preparation; clock-dependent preprocessing stays uncached. A failed later include can reuse an earlier valid prefix, keeping parser failures small and their locations current after layout edits.
+
+GNU verification retains every canonical flag. JSON/SARIF warning identities distinguish promoted warnings from syntax/tool errors and avoid a second GNU invocation only with positive evidence. Pointer/container fields, destructor calls and this-capturing closures retain resource analysis; scalar this-fields alone no longer start it. N enum constants are explicitly covered; I/O macros now join existing forbidden-identifier checks.
+
+Focused cache, frontend, compiler-diagnostic and naming/resource checks passed. Full source verification, full private-corpus qualification, extracted-archive checks and final CI are running/pending. GNU PCH experiments were rejected: about 2.3 s preparation and 122.5 MiB per prefix worsened first-run cost.

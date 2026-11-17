@@ -76,3 +76,14 @@ python3 -B development/package.py
 The generated `cp-run.zsh` is the only installed file. The ZIP includes that script, source modules, tests, docs and examples. Building or packaging never requires optional formatters; their integration tests run when the executables are available. The service uses only Python's standard library.
 
 Before release, verify the extracted ZIP, rebuild it byte-for-byte, run the documented examples, check Markdown links/tables, and review the change against the release checklist. Record passed checks and remaining limits in `development/JOURNAL.md`. Keep published snapshots unchanged.
+
+## Formatting benchmarks
+
+Use an external, private corpus; do not commit solutions or measurement state. The runner copies inputs, pins the tested script, records outcomes and checks repeated formatting for idempotence. It never executes submitted programs.
+
+```sh
+python3 -B development/benchmark_format.py /path/to/corpus \
+  --script ./cp-run.zsh --work /path/to/new-run --output /path/to/report.json --edited
+```
+
+An optional --sample JSON file selects relative source paths. First-pass measurements use an initially empty private cache; preparations may be shared by later files in the same directory. Warm measurements immediately repeat each source. Edited measurements change the last textual return 0 to return 1 when available, otherwise append a comment. Compare identical samples and compiler environments without concurrent CPU-heavy checks; a full corpus run can separately qualify behavior under load.

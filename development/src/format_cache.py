@@ -78,37 +78,147 @@ def format_cache_load(source, text, tools, config):
 
 
 
-def format_include_candidates(source, text, dependencies):
-    """Conservatively track include shadows, without lexing header bodies."""
-    candidates = set()
+def format_include_candidates(source, text, dependencies, search_directories=()):
+    """Conservatively watch lookup alternatives without caching compiler output."""
+    candidates, macro_owners, names, directories = set(), set(), set(), set()
+    roots = list(dict.fromkeys([*search_directories, (str(source.parent), False)]))
+    roots = [(Path(value), framework) for value, framework in roots]
+    canonical_roots = [(root, framework, root.resolve()) for root, framework in roots]
+    project = source.parent.resolve()
+    local = {}
+
+    def in_project(directory):
+        if directory not in local:
+            local[directory] = directory.resolve().is_relative_to(project)
+        return local[directory]
+
     gap = r'(?:[ \t\v\f]|/\*.*?\*/)*'
-    literal = re.compile(r'#' + gap + r'include' + gap + r'([<"])([^>"\r\n\0]+)[>"]', re.S)
+    literal = re.compile(r'#' + gap + r'include(?:_next)?\b' + gap + r'([<"])([^>"\r\n\0]+)[>"]', re.S)
+    macro = re.compile(r'#' + gap + r'include(?:_next)?\b' + gap + r'[A-Za-z_]', re.S)
+    presence = re.compile(r'__has_(?:include(?:_next)?|embed)\s*\(\s*([<"])([^>"\r\n\0]+)[>"]', re.S)
+    opaque_presence = re.compile(r'__has_(?:include(?:_next)?|embed)\s*\(\s*[A-Za-z_]', re.S)
+
+    def watch(candidate, directory=False):
+        if directory and not in_project(candidate.parent):
+            directories.add(candidate.parent)
+        else:
+            candidates.add(str(candidate.absolute()))
+
+    def search_candidates(name, owner, directory=False):
+        watch(owner / name, directory)
+        for root, framework in roots:
+            if framework:
+                library, separator, remainder = name.partition('/')
+                if separator:
+                    for folder in ('Headers', 'PrivateHeaders'):
+                        watch(root / (library + '.framework') / folder / remainder, directory)
+            else:
+                watch(root / name, directory)
+
+    uncovered = False
     for owner in [source, *(Path(value) for value in dependencies)]:
         try:
             contents = text if owner == source else owner.read_text()
         except (OSError, UnicodeDecodeError):
             continue
-        # This is a dependency superset, not a policy diagnostic: apparent
-        # includes inside comments/strings only cause extra invalidation.
         contents = contents.replace('\\\r\n', '').replace('\\\n', '')
         for directive in literal.finditer(contents):
-            candidates.add(str((owner.parent / directive[2]).absolute()))
+            search_candidates(directive[2], owner.parent, directory=True)
+        for expression in presence.finditer(contents):
+            search_candidates(expression[2], owner.parent, directory=True)
+        unknown = list(opaque_presence.finditer(contents))
+        if unknown:
+            ignored = [(token.start(), token.end()) for token in SCHOOL_LEXER.finditer(contents)]
+            for expression in unknown:
+                before = contents[contents.rfind('\n', 0, expression.start()) + 1:expression.start()]
+                signature = re.fullmatch(r'\s*#\s*define\s+', before)
+                if not signature and not any(start <= expression.start() < end for start, end in ignored):
+                    raise ValueError('nonliteral file-presence expression requires fresh preprocessing')
+        if macro.search(contents):
+            macro_owners.add(owner.parent)
+        if owner != source:
+            names.add(owner.name)
+            covered = False
+            resolved = owner.resolve()
+            for root, framework, canonical in canonical_roots:
+                if owner.is_relative_to(root):
+                    covered = True
+                    relative = owner.relative_to(root)
+                elif resolved.is_relative_to(canonical):
+                    covered = True
+                    relative = resolved.relative_to(canonical)
+                else:
+                    continue
+                if not framework:
+                    names.add(str(relative))
+                elif relative.parts[0].endswith('.framework'):
+                    for folder in ('Headers', 'PrivateHeaders'):
+                        if folder in relative.parts:
+                            position = relative.parts.index(folder)
+                            names.add(relative.parts[0][:-len('.framework')] + '/' +
+                                      '/'.join(relative.parts[position + 1:]))
+            uncovered = uncovered or not covered
+    if macro_owners and uncovered:
+        raise ValueError('macro include has prerequisites outside the known search roots')
+    # Macro spellings cannot always be reconstructed. Watch external lookup
+    # directories; keep exact paths in the project so atomic editor saves do
+    # not discard reusable preparation.
+    for owner in macro_owners:
+        for name in names:
+            search_candidates(name, owner, directory=True)
+    for directory in directories:
+        candidates.add(str(directory.absolute()))
+        try:
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    # A dangling file link can become usable when its target
+                    # appears without any change to this directory's entries.
+                    if entry.is_symlink():
+                        candidates.add(str(Path(entry.path).absolute()))
+        except (FileNotFoundError, NotADirectoryError):
+            continue
     return candidates
+
+
+def format_volatile_inputs(text, dependencies):
+    """Clock-dependent preprocessing must never become a reusable result."""
+    names = ('__DATE__', '__TIME__', '__TIMESTAMP__')
+    if any(name in text for name in names):
+        return True
+    for value in dependencies:
+        try:
+            if Path(value).is_dir():
+                continue
+            contents = Path(value).read_bytes()
+        except FileNotFoundError:
+            continue
+        except (OSError, ValueError):
+            return True
+        if any(name.encode() in contents for name in names):
+            return True
+    return False
 
 
 def format_cache_store(source, candidate, findings, dependencies, tools, config):
     path = format_cache_location(source, config)
-    if path is None or len(candidate.encode('utf-8')) > 2 * 1024 * 1024:
+    if (path is None or len(candidate.encode('utf-8')) > 2 * 1024 * 1024
+            or format_volatile_inputs(candidate, dependencies)):
         return
-    # Parent/negative dependencies cover files consulted by the project auditor.
-    dependencies = set(dependencies) | {str(source.with_suffix('.h')),
-                    str(source.parent / 'Makefile'), str(source.parent / 'makefile')}
-    headers = [value for value in dependencies if Path(value).suffix in ('.h', '.hpp', '.hh', '.hxx')]
+    # Production callers pass the snapshot captured by the analysis, not a
+    # fresh identity that could accidentally bless a concurrent header edit.
     try:
-        dependencies.update(format_include_candidates(source, candidate, headers))
+        if isinstance(dependencies, dict):
+            snapshot = dict(dependencies)
+        else:
+            dependencies = set(dependencies) | {str(source.with_suffix('.h')),
+                            str(source.parent / 'Makefile'), str(source.parent / 'makefile')}
+            headers = [value for value in dependencies if Path(value).suffix in ('.h', '.hpp', '.hh', '.hxx')]
+            dependencies.update(format_include_candidates(source, candidate, headers))
+            snapshot = {value: format_file_identity(value) for value in dependencies}
+        if any(format_file_identity(value) != identity for value, identity in snapshot.items()):
+            return
         record = dict(key=format_cache_key(candidate, tools), candidate=candidate,
-                      dependencies={value: format_file_identity(value) for value in dependencies},
-                      findings=[item.record() for item in findings])
+                      dependencies=snapshot, findings=[item.record() for item in findings])
     except (OSError, ValueError):
         return  # An unusable conservative candidate disables optional caching.
     temporary = None

@@ -87,6 +87,33 @@ class FormatCacheTest(unittest.TestCase):
             self.assertTrue(any('-ast-dump=json' in argv for argv in fresh))
             self.assertTrue(any(item.rule == '5.7' for item in result.errors), result.findings)
 
+    def test_new_earlier_search_root_header_invalidates_literal_and_macro_results(self):
+        for form in ('#include <remote.h>\n', '#define HEADER "remote.h"\n#include HEADER\n'):
+            with self.subTest(form=form), tempfile.TemporaryDirectory(prefix='cp-shadow-roots-') as directory:
+                first, fallback = Path(directory) / 'first', Path(directory) / 'fallback'
+                first.mkdir()
+                fallback.mkdir()
+                (fallback / 'remote.h').write_text('enum { STATUS = 0 };\n')
+                self.source.write_text(form + 'int\nmain(void) {\n    return STATUS;\n}\n')
+                with mock.patch.dict(engine.os.environ, CPATH=str(first) + engine.os.pathsep + str(fallback)):
+                    self.collect_calls()
+                    _, warm = self.collect_calls()
+                    self.assertFalse(any('-c' in args for args in warm))
+                    (first / 'remote.h').write_text('enum { STATUS = 128 };\n')
+                    result, fresh = self.collect_calls()
+                self.assertTrue(any('-c' in args for args in fresh))
+                self.assertTrue(any(item.rule == '5.7' for item in result.errors), result.findings)
+
+    def test_header_edit_after_analysis_cannot_bless_stale_findings(self):
+        header = self.case.root / 'remote.h'
+        header.write_text('enum { STATUS = 0 };\n')
+        self.source.write_text('#include "remote.h"\nint\nmain(void) {\n    return STATUS;\n}\n')
+        result = engine.school_analyze(self.config)
+        header.write_text('enum { STATUS = 128 };\n')
+        for source, candidate, findings, dependencies, tools in result.cache_jobs:
+            engine.format_cache_store(source, candidate, findings, dependencies, tools, self.config)
+        self.assertFalse(list(self.cache.rglob('school-*.json')))
+
     def test_unusable_extra_dependency_disables_optional_cache(self):
         with mock.patch.object(engine, 'format_include_candidates', return_value={'bad\0name.h'}):
             result, _ = self.collect_calls()

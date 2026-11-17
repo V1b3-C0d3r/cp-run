@@ -30,6 +30,34 @@ class School151PolicyTest(unittest.TestCase):
                            ('int f(void) { return 0; } int main(void) { return f(); }', '3.1')):
             self.assertTrue(self.case.has_rule(self.case.check(code), rule, 'error'), code)
 
+    def test_enum_N_is_allowed_in_c_and_cpp(self):
+        for extension in ('main.c', 'main.cpp'):
+            findings = self.case.check('enum { N = 16 }; int main(void) { return N != 0; }', extension)
+            self.assertFalse(any(item.rule in ('3.1', '3.3', '3.7') for item in findings), findings)
+
+    def test_ambiguous_constants_are_rejected_in_each_declaration_form(self):
+        for name in ('I', 'O'):
+            for declaration in ('enum { NAME = 2 };', 'const int NAME = 2;', '#define NAME 2\n'):
+                code = declaration.replace('NAME', name) + '\nint main(void) { return ' + name + ' != 0; }'
+                findings = self.case.check(code)
+                self.assertTrue(self.case.has_rule(findings, '3.7', 'error'), code)
+
+    def test_this_field_access_alone_needs_no_resource_analysis(self):
+        source = self.case.root / 'main.cpp'
+        for code, expected in (
+            ('struct Value { int count = 0; int get() { return this->count; } };', False),
+            ('struct Value { int count = 0; int get() { return count; } };', False),
+            ('struct Value { int count; }; int get(Value *value) { return value->count; }', True),
+            ('struct Value { int *data; int get() { return data[0]; } };', True),
+            ('struct Value { void reset() { delete this; } };', True),
+            ('struct Value { int count = 0; auto closure() { return [this] { return count; }; } };', True),
+            ('struct Value { int count = 0; ~Value() {} int stop() { this->~Value(); return count; } };', True),
+            ('#include <vector>\\nstruct Value { std::vector<int> data; int get() { return data[0]; } };', True),
+        ):
+            tree, errors = engine.school_parse(source, code, self.case.clang)
+            self.assertFalse(errors, errors)
+            self.assertEqual(engine.school_needs_resource_analysis(source, code, tree), expected, code)
+
     def test_transliteration_is_whole_word_and_conservative(self):
         for name in ('vychislenie', 'kolichestvo', 'massiv_razmer'):
             code = 'int ' + name + '(void) { return 0; }'

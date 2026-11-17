@@ -135,6 +135,11 @@ def school_analyze(config):
             inputs.update(cached[1])
             jobs.append((source, original, clean.encode('utf-8')))
             continue
+        cpp = source.suffix not in ('.c', '.h')
+        language = 'c++' if cpp else 'c'
+        search = [*school_header_search(cpp_driver if cpp else gcc, language),
+                  *school_header_search(clang, language,
+                      [*(school_cpp_context() if cpp else []), '-iquote', str(source.parent)])]
         original_tree, parse_issues = school_parse(source, clean, clang)
         candidate, issues = clean, []
         if original_tree is not None:
@@ -148,6 +153,7 @@ def school_analyze(config):
             raise CheckSetupError(formatted.stderr)
         candidate = formatted.stdout
         tree = None
+        parser_locations_current = candidate == clean
         if original_tree is not None:
             candidate, tree, final_parse = school_apply_layout(source, candidate, clang, original_tree if candidate == clean else None)
             if tree is None:
@@ -158,6 +164,11 @@ def school_analyze(config):
         else:
             if [token for token, _ in school_tokens(clean)] != [token for token, _ in school_tokens(candidate)]:
                 raise CheckSetupError(str(source) + ': school: unsupported syntax prevents verifying token changes.')
+            if candidate != clean:
+                parsed_candidate, current_issues = school_parse(source, candidate, clang)
+                if parsed_candidate is None:
+                    parse_issues = current_issues
+                    parser_locations_current = True
             issues.append(FormatFinding(source, 1, 1, 'frontend', 'error',
                           'token layout only; AST checks unavailable: Clang could not parse this source.\n' + '\n'.join(parse_issues)))
         dependency_identities = original_tree.get('school_dependency_identities', {}) if original_tree else getattr(parse_issues, 'identities', {})
@@ -168,14 +179,13 @@ def school_analyze(config):
             argv, flags, main, input_path, includes = school_gcc_arguments(source, path, directory, gcc, tree)
             output = str(Path(directory) / 'verify.out')
             dependency = Path(directory) / 'gcc.d'
-            checked = school_tool([*argv, *flags, '-c', '-MD', '-MF', str(dependency), '-MT', 'cp_source', '-o', output],
-                                  capture_output=True, text=True)
+            checked, warning_failure = school_gcc_check(argv, flags, output, dependency, banner.stdout)
             if dependency.exists():
                 dependencies.extend(value for value in format_dependency_paths(dependency.read_text())
                                     if not Path(value).is_relative_to(directory))
             if checked.returncode:
-                syntax = school_syntax_gate(argv, flags)
-                if syntax.returncode:
+                syntax = None if warning_failure else school_syntax_gate(argv, flags)
+                if syntax is not None and syntax.returncode:
                     raise CheckSetupError(str(source) + ': school: syntax prevents safe publication:\n' +
                                           syntax.stderr.replace(str(path), str(source)))
                 issues.append(FormatFinding(source, 1, 1, 'GCC', 'error', 'fix compiler diagnostics:\n' +
@@ -184,6 +194,16 @@ def school_analyze(config):
                 for finding in school_resource_analysis(source, path, input_path, clang, includes):
                     if finding.source != str(source) or (finding.rule, finding.line) not in policy.error_justifications:
                         issues.append(finding)
+        dependencies = set(dependencies) | {str(source.with_suffix('.h')),
+                       str(source.parent / 'Makefile'), str(source.parent / 'makefile')}
+        snapshot = None
+        if config.get('format_cache', True):
+            try:
+                expanded = dependencies | format_include_candidates(source, candidate, dependencies, search)
+                snapshot = {value: format_file_identity(value) for value in expanded}
+                dependencies = expanded
+            except (OSError, ValueError):
+                pass  # Unusable speculative include paths disable optional result caching.
         for dependency_name, identity in dependency_identities.items():
             if format_file_identity(dependency_name) != identity:
                 raise CheckSetupError('dependency changed during formatting: ' + dependency_name)
@@ -191,8 +211,8 @@ def school_analyze(config):
         inputs.update(str(value) for value in (source.with_suffix('.h'), source.parent / 'Makefile', source.parent / 'makefile'))
         # A backend limitation remains an error in the cache; only unchanged
         # layout is eligible so parser locations still describe the source.
-        if tree is not None or candidate == clean:
-            cache_jobs.append((source, candidate, list(issues), dependencies, tools))
+        if snapshot is not None and (tree is not None or parser_locations_current):
+            cache_jobs.append((source, candidate, list(issues), snapshot, tools))
         diagnostics.extend(issues)
         jobs.append((source, original, candidate.encode('utf-8')))
     return FormatResult(diagnostics, jobs, identities, cache_jobs, list(inputs))

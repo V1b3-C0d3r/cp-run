@@ -85,6 +85,8 @@ The initial gate is read-only. Every selected source role is checked before any 
 
 School reports observable evidence, not blanket obligations to prove meaning or ownership. `0`, `1`, `2` and `-1` need no named constants. `const`/`#define` definitions of `2` and `-1` also need no enum conversion.
 
+`N` is allowed as an enum constant. Ambiguous constants `I` and `O` are rejected, including object-like macros.
+
 English meaning, message intent, unresolved ownership and recipe correctness need human judgment. The [numbered coverage table](SCHOOL_FORMAT.md) separates automatic checks from exclusions.
 
 ## Speed and fresh verification
@@ -93,11 +95,11 @@ School reuses a result only while source bytes, tool identities, policy version,
 
 C++ parsing uses the selected GNU compiler's available libstdc++ headers, including GNU helpers such as `std::__lg`. It disables Clang's default C++ headers to avoid mixing libstdc++ with libc++. If a remote/container compiler's headers are unavailable locally, Clang keeps its own header search.
 
-Within one review session, up to four precompiled include prefixes are reused while their headers and include environment remain unchanged. Code and source macros are parsed again after edits. Used external enum values and exception ancestry are recovered separately; unsupported metadata falls back to the full AST.
+Prepared C++ headers are reused across runs while compiler, include environment and dependencies remain unchanged. Up to eight preparations / 256 MiB are kept privately; active runs retain their own artifact. Code and source macros are parsed again after edits. Used external enum values and exception ancestry remain checked. If a later include fails, an earlier valid prefix can still avoid dumping the standard library.
 
 A parser limitation remains an error even when GNU GCC accepts the source. Unchanged, dependency-validated failures can be cached; missing AST checks never become a successful result.
 
-Use `--no-cache` with format/check/strict-format to force fresh verification. The cache is bounded to 64 source entries under the normal XDG cache/state directory. An unavailable or corrupt cache falls back to full checks.
+Use `--no-cache` to bypass saved findings and rerun source verification. Dependency-validated compiler preparation can still be reused. The result cache holds at most 64 source entries under the normal XDG cache/state directory. Unavailable or corrupt preparation is rebuilt; clock-dependent inputs are not reused.
 
 ## Exit status
 

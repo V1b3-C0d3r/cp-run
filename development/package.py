@@ -63,7 +63,7 @@ def release_files():
     for path in docs.glob('*.md'):
         if path.name != 'README.md': files[path] = 'docs/' + path.name
     if (ROOT / 'JOURNAL.md').exists(): files[ROOT / 'JOURNAL.md'] = 'development/JOURNAL.md'
-    for name in ('build.py', 'package.py'):
+    for name in ('build.py', 'package.py', 'benchmark_format.py'):
         files[ROOT / name] = 'development/' + name
     for name in ('src', 'tests'):
         for path in (ROOT / name).rglob('*'):

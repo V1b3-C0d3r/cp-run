@@ -43,6 +43,7 @@ class SchoolFrontendTest(unittest.TestCase):
         output = '#include <...> search starts here:\n ' + str(headers) + '\nEnd of search list.\n'
         result = subprocess.CompletedProcess([], 0, '', output)
         with mock.patch.dict(engine.SCHOOL_CPP_CONTEXTS, clear=True), \
+             mock.patch.dict(engine.SCHOOL_HEADER_SEARCHES, clear=True), \
              mock.patch.dict(engine.os.environ, LC_ALL='user-locale'), \
              mock.patch.object(engine, 'school_tool', return_value=result) as tool:
             context = engine.school_cpp_context()
@@ -54,6 +55,7 @@ class SchoolFrontendTest(unittest.TestCase):
         output = '#include <...> search starts here:\n /nonexistent-cp-run/include/c++/99\nEnd of search list.\n'
         result = subprocess.CompletedProcess([], 0, '', output)
         with mock.patch.dict(engine.SCHOOL_CPP_CONTEXTS, clear=True), \
+             mock.patch.dict(engine.SCHOOL_HEADER_SEARCHES, clear=True), \
              mock.patch.object(engine, 'school_tool', return_value=result):
             self.assertEqual(engine.school_cpp_context(), [])
 

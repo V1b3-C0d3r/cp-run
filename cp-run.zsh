@@ -4523,7 +4523,7 @@ def format_clang_analyze(config):
 
 # Source: format_cache.py
 """Bounded result cache; unchanged source, tools and dependencies are mandatory."""
-SCHOOL_ENGINE_ID = 'e187daad3970575eeb095990fd8031bbb837bbb4eb1aa213ceed18023a9c6683'
+SCHOOL_ENGINE_ID = 'c976214c03682016d172b19c4bf3555b68e3ae3598bb3ded7682951e38dbf08c'
 
 
 def format_file_identity(value):
@@ -4602,37 +4602,147 @@ def format_cache_load(source, text, tools, config):
 
 
 
-def format_include_candidates(source, text, dependencies):
-    """Conservatively track include shadows, without lexing header bodies."""
-    candidates = set()
+def format_include_candidates(source, text, dependencies, search_directories=()):
+    """Conservatively watch lookup alternatives without caching compiler output."""
+    candidates, macro_owners, names, directories = set(), set(), set(), set()
+    roots = list(dict.fromkeys([*search_directories, (str(source.parent), False)]))
+    roots = [(Path(value), framework) for value, framework in roots]
+    canonical_roots = [(root, framework, root.resolve()) for root, framework in roots]
+    project = source.parent.resolve()
+    local = {}
+
+    def in_project(directory):
+        if directory not in local:
+            local[directory] = directory.resolve().is_relative_to(project)
+        return local[directory]
+
     gap = r'(?:[ \t\v\f]|/\*.*?\*/)*'
-    literal = re.compile(r'#' + gap + r'include' + gap + r'([<"])([^>"\r\n\0]+)[>"]', re.S)
+    literal = re.compile(r'#' + gap + r'include(?:_next)?\b' + gap + r'([<"])([^>"\r\n\0]+)[>"]', re.S)
+    macro = re.compile(r'#' + gap + r'include(?:_next)?\b' + gap + r'[A-Za-z_]', re.S)
+    presence = re.compile(r'__has_(?:include(?:_next)?|embed)\s*\(\s*([<"])([^>"\r\n\0]+)[>"]', re.S)
+    opaque_presence = re.compile(r'__has_(?:include(?:_next)?|embed)\s*\(\s*[A-Za-z_]', re.S)
+
+    def watch(candidate, directory=False):
+        if directory and not in_project(candidate.parent):
+            directories.add(candidate.parent)
+        else:
+            candidates.add(str(candidate.absolute()))
+
+    def search_candidates(name, owner, directory=False):
+        watch(owner / name, directory)
+        for root, framework in roots:
+            if framework:
+                library, separator, remainder = name.partition('/')
+                if separator:
+                    for folder in ('Headers', 'PrivateHeaders'):
+                        watch(root / (library + '.framework') / folder / remainder, directory)
+            else:
+                watch(root / name, directory)
+
+    uncovered = False
     for owner in [source, *(Path(value) for value in dependencies)]:
         try:
             contents = text if owner == source else owner.read_text()
         except (OSError, UnicodeDecodeError):
             continue
-        # This is a dependency superset, not a policy diagnostic: apparent
-        # includes inside comments/strings only cause extra invalidation.
         contents = contents.replace('\\\r\n', '').replace('\\\n', '')
         for directive in literal.finditer(contents):
-            candidates.add(str((owner.parent / directive[2]).absolute()))
+            search_candidates(directive[2], owner.parent, directory=True)
+        for expression in presence.finditer(contents):
+            search_candidates(expression[2], owner.parent, directory=True)
+        unknown = list(opaque_presence.finditer(contents))
+        if unknown:
+            ignored = [(token.start(), token.end()) for token in SCHOOL_LEXER.finditer(contents)]
+            for expression in unknown:
+                before = contents[contents.rfind('\n', 0, expression.start()) + 1:expression.start()]
+                signature = re.fullmatch(r'\s*#\s*define\s+', before)
+                if not signature and not any(start <= expression.start() < end for start, end in ignored):
+                    raise ValueError('nonliteral file-presence expression requires fresh preprocessing')
+        if macro.search(contents):
+            macro_owners.add(owner.parent)
+        if owner != source:
+            names.add(owner.name)
+            covered = False
+            resolved = owner.resolve()
+            for root, framework, canonical in canonical_roots:
+                if owner.is_relative_to(root):
+                    covered = True
+                    relative = owner.relative_to(root)
+                elif resolved.is_relative_to(canonical):
+                    covered = True
+                    relative = resolved.relative_to(canonical)
+                else:
+                    continue
+                if not framework:
+                    names.add(str(relative))
+                elif relative.parts[0].endswith('.framework'):
+                    for folder in ('Headers', 'PrivateHeaders'):
+                        if folder in relative.parts:
+                            position = relative.parts.index(folder)
+                            names.add(relative.parts[0][:-len('.framework')] + '/' +
+                                      '/'.join(relative.parts[position + 1:]))
+            uncovered = uncovered or not covered
+    if macro_owners and uncovered:
+        raise ValueError('macro include has prerequisites outside the known search roots')
+    # Macro spellings cannot always be reconstructed. Watch external lookup
+    # directories; keep exact paths in the project so atomic editor saves do
+    # not discard reusable preparation.
+    for owner in macro_owners:
+        for name in names:
+            search_candidates(name, owner, directory=True)
+    for directory in directories:
+        candidates.add(str(directory.absolute()))
+        try:
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    # A dangling file link can become usable when its target
+                    # appears without any change to this directory's entries.
+                    if entry.is_symlink():
+                        candidates.add(str(Path(entry.path).absolute()))
+        except (FileNotFoundError, NotADirectoryError):
+            continue
     return candidates
+
+
+def format_volatile_inputs(text, dependencies):
+    """Clock-dependent preprocessing must never become a reusable result."""
+    names = ('__DATE__', '__TIME__', '__TIMESTAMP__')
+    if any(name in text for name in names):
+        return True
+    for value in dependencies:
+        try:
+            if Path(value).is_dir():
+                continue
+            contents = Path(value).read_bytes()
+        except FileNotFoundError:
+            continue
+        except (OSError, ValueError):
+            return True
+        if any(name.encode() in contents for name in names):
+            return True
+    return False
 
 
 def format_cache_store(source, candidate, findings, dependencies, tools, config):
     path = format_cache_location(source, config)
-    if path is None or len(candidate.encode('utf-8')) > 2 * 1024 * 1024:
+    if (path is None or len(candidate.encode('utf-8')) > 2 * 1024 * 1024
+            or format_volatile_inputs(candidate, dependencies)):
         return
-    # Parent/negative dependencies cover files consulted by the project auditor.
-    dependencies = set(dependencies) | {str(source.with_suffix('.h')),
-                    str(source.parent / 'Makefile'), str(source.parent / 'makefile')}
-    headers = [value for value in dependencies if Path(value).suffix in ('.h', '.hpp', '.hh', '.hxx')]
+    # Production callers pass the snapshot captured by the analysis, not a
+    # fresh identity that could accidentally bless a concurrent header edit.
     try:
-        dependencies.update(format_include_candidates(source, candidate, headers))
+        if isinstance(dependencies, dict):
+            snapshot = dict(dependencies)
+        else:
+            dependencies = set(dependencies) | {str(source.with_suffix('.h')),
+                            str(source.parent / 'Makefile'), str(source.parent / 'makefile')}
+            headers = [value for value in dependencies if Path(value).suffix in ('.h', '.hpp', '.hh', '.hxx')]
+            dependencies.update(format_include_candidates(source, candidate, headers))
+            snapshot = {value: format_file_identity(value) for value in dependencies}
+        if any(format_file_identity(value) != identity for value, identity in snapshot.items()):
+            return
         record = dict(key=format_cache_key(candidate, tools), candidate=candidate,
-                      dependencies={value: format_file_identity(value) for value in dependencies},
-                      findings=[item.record() for item in findings])
+                      dependencies=snapshot, findings=[item.record() for item in findings])
     except (OSError, ValueError):
         return  # An unusable conservative candidate disables optional caching.
     temporary = None
@@ -4651,6 +4761,256 @@ def format_cache_store(source, candidate, findings, dependencies, tools, config)
     finally:
         if temporary and os.path.exists(temporary):
             os.unlink(temporary)
+
+
+# Source: format_preamble.py
+"""Private, bounded compiler preambles; each reader owns its artifact lifetime."""
+SCHOOL_PREAMBLE_CACHE_VERSION = 4
+SCHOOL_PREAMBLE_CACHE_ENTRIES = 8
+SCHOOL_PREAMBLE_CACHE_BYTES = 256 * 1024 * 1024
+
+
+def school_preamble_cache_key(source, prefix, compiler, arguments):
+    record = dict(version=SCHOOL_PREAMBLE_CACHE_VERSION, directory=str(source.parent),
+                  prefix=prefix, compiler=format_file_identity(compiler), arguments=arguments,
+                  cwd=str(Path.cwd()),
+                  environment={name: os.environ.get(name) for name in SCHOOL_FRONTEND_ENVIRONMENT})
+    return hashlib.sha256(json.dumps(record, sort_keys=True).encode()).hexdigest()
+
+
+def school_preamble_cache_root(source):
+    record = format_cache_location(source, {})
+    if record is None:
+        return None
+    root = record.parent / 'preambles'
+    try:
+        root.mkdir(mode=0o700, exist_ok=True)
+        info = root.stat()
+        if root.is_symlink() or info.st_uid != os.getuid() or info.st_mode & 0o022:
+            return None
+    except OSError:
+        return None
+    return root
+
+
+def school_preamble_blob_name(key, value):
+    return (isinstance(value, str) and Path(value).name == value and
+            re.fullmatch(r'pch-' + re.escape(key) + r'-[\w-]+\.pch', value) is not None)
+
+
+def school_preamble_blob_info(value):
+    info = Path(value).stat()
+    if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o022
+            or Path(value).is_symlink()):
+        raise ValueError('untrusted preamble artifact')
+    # Reader hardlinks change ctime/link count, but never artifact bytes.
+    return [info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns]
+
+
+def school_preamble_link(original, destination):
+    try:
+        os.link(original, destination)
+    except OSError:
+        shutil.copyfile(original, destination)
+
+
+def school_preamble_cache_load(source, prefix, key):
+    root = school_preamble_cache_root(source)
+    if root is None:
+        return None
+    temporary = None
+    try:
+        index = root / (key + '.json')
+        if index.is_symlink() or index.stat().st_size > 4 * 1024 * 1024:
+            return None
+        record = json.loads(index.read_text())
+        if (record.get('version') != SCHOOL_PREAMBLE_CACHE_VERSION or record.get('key') != key
+                or record.get('clock_independent') is not True
+                or not school_preamble_blob_name(key, record.get('blob'))
+                or not isinstance(record.get('dependencies'), dict)
+                or not isinstance(record.get('inputs'), list)
+                or not isinstance(record.get('prefix'), str) or not record['prefix']
+                or not prefix.startswith(record['prefix'])
+                or any(value not in record['dependencies'] for value in record['inputs'])):
+            return None
+        dependencies = record['dependencies']
+        if any(not Path(value).is_absolute() or format_file_identity(value) != identity
+               for value, identity in dependencies.items()):
+            return None
+        blob = root / record['blob']
+        if school_preamble_blob_info(blob) != record.get('artifact'):
+            return None
+        temporary = tempfile.TemporaryDirectory(prefix='cp-format-preamble-')
+        target = Path(temporary.name) / 'prefix.pch'
+        school_preamble_link(blob, target)
+        # An evicted blob can disappear before linking; an active reader's
+        # private link/copy remains valid throughout compiler execution.
+        if school_preamble_blob_info(blob) != record['artifact'] or target.stat().st_size != record['artifact'][2]:
+            temporary.cleanup()
+            return None
+        os.utime(index, None)
+        return dict(temporary=temporary, pch=str(target), prefix=record['prefix'],
+                    dependencies=record['inputs'], identities=dependencies, cache_key=key)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        if temporary is not None:
+            temporary.cleanup()
+        return None
+
+
+def school_preamble_cache_prune(root):
+    """Called under the publisher lock; loaded readers already own their link."""
+    records = sorted(root.glob('*.json'), key=lambda value: value.stat().st_mtime_ns, reverse=True)
+    retained, total = set(), 0
+    for index in records:
+        if not re.fullmatch(r'[0-9a-f]{64}\.json', index.name):
+            continue
+        try:
+            record = json.loads(index.read_text())
+            blob = root / record['blob']
+            if not school_preamble_blob_name(index.stem, blob.name):
+                raise ValueError('invalid preamble blob')
+            size = blob.stat().st_size
+            if len(retained) >= SCHOOL_PREAMBLE_CACHE_ENTRIES or total + size > SCHOOL_PREAMBLE_CACHE_BYTES:
+                index.unlink()
+            else:
+                retained.add(blob.name)
+                total += size
+        except (OSError, ValueError, KeyError, TypeError):
+            index.unlink(missing_ok=True)
+    for blob in root.glob('pch-*.pch'):
+        if re.fullmatch(r'pch-[0-9a-f]{64}-[\w-]+\.pch', blob.name) and blob.name not in retained:
+            blob.unlink(missing_ok=True)
+
+
+def school_preamble_cache_store(source, key, entry):
+    root = school_preamble_cache_root(source)
+    if root is None or Path(entry['pch']).stat().st_size > SCHOOL_PREAMBLE_CACHE_BYTES:
+        return
+    descriptor, blob, temporary = None, None, None
+    try:
+        # No waiting behind another process: a preparation cache is optional.
+        descriptor = os.open(root / '.lock', os.O_RDWR | os.O_CREAT | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o022:
+            return
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        old = root / (key + '.json')
+        handle, name = tempfile.mkstemp(prefix='pch-' + key + '-', suffix='.pch', dir=root)
+        os.close(handle)
+        blob = Path(name)
+        blob.unlink()
+        school_preamble_link(entry['pch'], blob)
+        os.chmod(blob, 0o600)
+        record = dict(version=SCHOOL_PREAMBLE_CACHE_VERSION, key=key, clock_independent=True, blob=blob.name,
+                      artifact=school_preamble_blob_info(blob), dependencies=entry['identities'],
+                      inputs=entry['dependencies'], prefix=entry['prefix'])
+        with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', prefix='.index-', dir=root, delete=False) as stream:
+            temporary = Path(stream.name)
+            json.dump(record, stream)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, old)
+        temporary, blob = None, None
+        school_preamble_cache_prune(root)
+    except (OSError, ValueError, TypeError):
+        pass  # Full parsing is still mandatory if preparation cannot be reused.
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+        if blob is not None:
+            blob.unlink(missing_ok=True)
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+# Source: school_compiler.py
+"""Structured GNU diagnostics preserve the syntax gate without duplicate builds."""
+from urllib.parse import unquote as school_unquote, urlsplit as school_urlsplit
+
+
+def school_gcc_diagnostic_option(banner):
+    version = re.search(r'\b(\d+)\.\d+(?:\.\d+)?\b', banner)
+    if version is None or int(version[1]) < 9:
+        return None
+    # GCC 16 removed its old JSON format; SARIF keeps the warning rule identity.
+    return '-fdiagnostics-format=' + ('sarif-stderr' if int(version[1]) >= 16 else 'json')
+
+
+def school_gcc_diagnostics(text):
+    """Return (only promoted warnings, human text), or None for unknown output."""
+    try:
+        record = json.loads(text)
+        messages = []
+        if isinstance(record, list):
+            def visit(item):
+                kind, message = item['kind'], item['message']
+                if kind not in ('error', 'fatal error', 'warning', 'note', 'sorry, unimplemented') or not isinstance(message, str):
+                    raise ValueError('unsupported GNU diagnostic')
+                locations = item.get('locations', [])
+                caret = locations[0].get('caret', {}) if locations else {}
+                messages.append((kind, item.get('option', ''), message, caret.get('file', ''),
+                                 caret.get('line', 1), caret.get('display-column', caret.get('column', 1))))
+                for child in item.get('children', []):
+                    visit(child)
+            for item in record:
+                visit(item)
+        elif isinstance(record, dict) and record.get('version') == '2.1.0' and isinstance(record.get('runs'), list):
+            for run in record['runs']:
+                # Tool crashes/incomplete results must retain the conservative gate.
+                for invocation in run.get('invocations', []):
+                    arguments = invocation.get('arguments', [])
+                    if (invocation.get('toolExecutionNotifications') or '-Wfatal-errors' in arguments
+                            or any(arg.startswith('-fmax-errors=') and arg != '-fmax-errors=0' for arg in arguments)):
+                        return None
+                for item in run.get('results', []):
+                    kind, rule = item.get('level'), item.get('ruleId', '')
+                    if kind not in ('error', 'warning', 'note'):
+                        return None
+                    location = next(iter(item.get('locations', [])), {}).get('physicalLocation', {})
+                    uri = location.get('artifactLocation', {}).get('uri', '')
+                    filename = school_unquote(school_urlsplit(uri).path) if uri.startswith('file:') else school_unquote(uri)
+                    region = location.get('region', {})
+                    message = item['message']['text']
+                    if not isinstance(message, str):
+                        return None
+                    messages.append((kind, rule, message, filename, region.get('startLine', 1),
+                                     region.get('startColumn', 1)))
+                    for related in item.get('relatedLocations', []):
+                        detail = related.get('message', {}).get('text', '')
+                        if detail:
+                            messages.append(('note', '', detail, '', 1, 1))
+        else:
+            return None
+        errors = [item for item in messages if item[0] in ('error', 'fatal error', 'sorry, unimplemented')]
+        only_warnings = bool(errors) and all(isinstance(item[1], str) and item[1].startswith('-Werror=') for item in errors)
+        lines = []
+        for kind, option, message, filename, line, column in messages:
+            if not isinstance(filename, str) or type(line) is not int or type(column) is not int:
+                return None
+            prefix = '{}:{}:{}: '.format(filename, line, column) if filename else ''
+            suffix = ' [' + option + ']' if isinstance(option, str) and option.startswith('-W') else ''
+            lines.append(prefix + kind + ': ' + message + suffix)
+        return only_warnings, '\n'.join(lines)
+    except (ValueError, KeyError, TypeError, AttributeError, IndexError):
+        return None
+
+
+def school_gcc_check(argv, flags, output, dependency, banner):
+    """Run every canonical flag; skip syntax-only only with positive warning evidence."""
+    options = ['-c', '-MD', '-MF', str(dependency), '-MT', 'cp_source', '-o', str(output)]
+    diagnostic = school_gcc_diagnostic_option(banner)
+    checked = school_tool([*argv, *flags, *([diagnostic] if diagnostic else []), *options],
+                          capture_output=True, text=True)
+    structured = school_gcc_diagnostics(checked.stderr) if diagnostic else None
+    if diagnostic and structured is None:
+        # Older/custom compiler wrappers may not implement the advertised format.
+        checked = school_tool([*argv, *flags, *options], capture_output=True, text=True)
+    elif structured is not None:
+        only_warnings, rendered = structured
+        checked.stderr = rendered
+        if checked.returncode == 1 and only_warnings:
+            return checked, True
+    return checked, False
 
 
 # Source: school_format.py
@@ -4791,6 +5151,11 @@ def school_analyze(config):
             inputs.update(cached[1])
             jobs.append((source, original, clean.encode('utf-8')))
             continue
+        cpp = source.suffix not in ('.c', '.h')
+        language = 'c++' if cpp else 'c'
+        search = [*school_header_search(cpp_driver if cpp else gcc, language),
+                  *school_header_search(clang, language,
+                      [*(school_cpp_context() if cpp else []), '-iquote', str(source.parent)])]
         original_tree, parse_issues = school_parse(source, clean, clang)
         candidate, issues = clean, []
         if original_tree is not None:
@@ -4804,6 +5169,7 @@ def school_analyze(config):
             raise CheckSetupError(formatted.stderr)
         candidate = formatted.stdout
         tree = None
+        parser_locations_current = candidate == clean
         if original_tree is not None:
             candidate, tree, final_parse = school_apply_layout(source, candidate, clang, original_tree if candidate == clean else None)
             if tree is None:
@@ -4814,6 +5180,11 @@ def school_analyze(config):
         else:
             if [token for token, _ in school_tokens(clean)] != [token for token, _ in school_tokens(candidate)]:
                 raise CheckSetupError(str(source) + ': school: unsupported syntax prevents verifying token changes.')
+            if candidate != clean:
+                parsed_candidate, current_issues = school_parse(source, candidate, clang)
+                if parsed_candidate is None:
+                    parse_issues = current_issues
+                    parser_locations_current = True
             issues.append(FormatFinding(source, 1, 1, 'frontend', 'error',
                           'token layout only; AST checks unavailable: Clang could not parse this source.\n' + '\n'.join(parse_issues)))
         dependency_identities = original_tree.get('school_dependency_identities', {}) if original_tree else getattr(parse_issues, 'identities', {})
@@ -4824,14 +5195,13 @@ def school_analyze(config):
             argv, flags, main, input_path, includes = school_gcc_arguments(source, path, directory, gcc, tree)
             output = str(Path(directory) / 'verify.out')
             dependency = Path(directory) / 'gcc.d'
-            checked = school_tool([*argv, *flags, '-c', '-MD', '-MF', str(dependency), '-MT', 'cp_source', '-o', output],
-                                  capture_output=True, text=True)
+            checked, warning_failure = school_gcc_check(argv, flags, output, dependency, banner.stdout)
             if dependency.exists():
                 dependencies.extend(value for value in format_dependency_paths(dependency.read_text())
                                     if not Path(value).is_relative_to(directory))
             if checked.returncode:
-                syntax = school_syntax_gate(argv, flags)
-                if syntax.returncode:
+                syntax = None if warning_failure else school_syntax_gate(argv, flags)
+                if syntax is not None and syntax.returncode:
                     raise CheckSetupError(str(source) + ': school: syntax prevents safe publication:\n' +
                                           syntax.stderr.replace(str(path), str(source)))
                 issues.append(FormatFinding(source, 1, 1, 'GCC', 'error', 'fix compiler diagnostics:\n' +
@@ -4840,6 +5210,16 @@ def school_analyze(config):
                 for finding in school_resource_analysis(source, path, input_path, clang, includes):
                     if finding.source != str(source) or (finding.rule, finding.line) not in policy.error_justifications:
                         issues.append(finding)
+        dependencies = set(dependencies) | {str(source.with_suffix('.h')),
+                       str(source.parent / 'Makefile'), str(source.parent / 'makefile')}
+        snapshot = None
+        if config.get('format_cache', True):
+            try:
+                expanded = dependencies | format_include_candidates(source, candidate, dependencies, search)
+                snapshot = {value: format_file_identity(value) for value in expanded}
+                dependencies = expanded
+            except (OSError, ValueError):
+                pass  # Unusable speculative include paths disable optional result caching.
         for dependency_name, identity in dependency_identities.items():
             if format_file_identity(dependency_name) != identity:
                 raise CheckSetupError('dependency changed during formatting: ' + dependency_name)
@@ -4847,8 +5227,8 @@ def school_analyze(config):
         inputs.update(str(value) for value in (source.with_suffix('.h'), source.parent / 'Makefile', source.parent / 'makefile'))
         # A backend limitation remains an error in the cache; only unchanged
         # layout is eligible so parser locations still describe the source.
-        if tree is not None or candidate == clean:
-            cache_jobs.append((source, candidate, list(issues), dependencies, tools))
+        if snapshot is not None and (tree is not None or parser_locations_current):
+            cache_jobs.append((source, candidate, list(issues), snapshot, tools))
         diagnostics.extend(issues)
         jobs.append((source, original, candidate.encode('utf-8')))
     return FormatResult(diagnostics, jobs, identities, cache_jobs, list(inputs))
@@ -4861,6 +5241,7 @@ def execute_school_format(config):
 # Source: school_frontend.py
 """GNU-compatible Clang parsing with dependency-validated precompiled preambles."""
 SCHOOL_CPP_CONTEXTS = {}
+SCHOOL_HEADER_SEARCHES = {}
 SCHOOL_PREAMBLES = {}
 SCHOOL_FRONTEND_ENVIRONMENT = (
     'CPATH', 'C_INCLUDE_PATH', 'CPLUS_INCLUDE_PATH', 'SDKROOT', 'DEVELOPER_DIR',
@@ -4875,6 +5256,46 @@ class SchoolParseIssues(list):
         self.identities = {value: format_file_identity(value) for value in self.dependencies}
 
 
+
+def school_header_search(compiler, language, arguments=()):
+    """Read real search roots, including framework and nonexistent env roots."""
+    key = (str(Path(compiler).resolve()), tuple(format_file_identity(compiler) or ()),
+           language, tuple(arguments), str(Path.cwd()),
+           tuple(os.environ.get(name) for name in SCHOOL_FRONTEND_ENVIRONMENT))
+    if key not in SCHOOL_HEADER_SEARCHES:
+        probe = school_tool([compiler, '-E', '-x', language, '-v', *arguments, '-'],
+                            input='', text=True, capture_output=True, env=dict(os.environ, LC_ALL='C'))
+        paths, inside = [], False
+        if not probe.returncode:
+            for line in probe.stderr.splitlines():
+                value = line.strip()
+                if value in ('#include <...> search starts here:', '#include "..." search starts here:'):
+                    inside = True
+                    continue
+                if value == 'End of search list.':
+                    break
+                if inside and value:
+                    framework = value.endswith(' (framework directory)')
+                    path = value.removesuffix(' (framework directory)')
+                    paths.append((str(Path(path).absolute()), framework))
+        # Clang also emits SDK configuration as a prerequisite. Its directory
+        # is a conservative dependency root, not an extra compiler include flag.
+        for line in probe.stderr.splitlines():
+            try:
+                words = shlex.split(line)
+            except ValueError:
+                continue
+            for word in words:
+                if word.startswith('-fdepfile-entry='):
+                    paths.append((str(Path(word.split('=', 1)[1]).absolute().parent), False))
+        for name in ('CPATH', 'CPLUS_INCLUDE_PATH' if language == 'c++' else 'C_INCLUDE_PATH'):
+            if name in os.environ:
+                paths.extend((str(Path(value or '.').absolute()), False)
+                             for value in os.environ[name].split(os.pathsep))
+        SCHOOL_HEADER_SEARCHES[key] = list(dict.fromkeys(paths))
+    return SCHOOL_HEADER_SEARCHES[key]
+
+
 def school_cpp_context():
     """Query the selected GNU driver; never mix its headers with libc++."""
     gcc = shutil.which(os.environ.get('CP_RUN_GCC', 'gcc-16')) or shutil.which('gcc')
@@ -4884,49 +5305,44 @@ def school_cpp_context():
     key = (str(Path(driver).resolve()), tuple(format_file_identity(driver) or ()),
            str(Path.cwd()), tuple(os.environ.get(name) for name in SCHOOL_FRONTEND_ENVIRONMENT))
     if key not in SCHOOL_CPP_CONTEXTS:
-        probe = school_tool([driver, '-E', '-x', 'c++', '-v', '-'],
-                            input='', text=True, capture_output=True, env=dict(os.environ, LC_ALL='C'))
-        paths, inside = [], False
-        if not probe.returncode:
-            for line in probe.stderr.splitlines():
-                if line.strip() == '#include <...> search starts here:':
-                    inside = True
-                    continue
-                if line.strip() == 'End of search list.':
-                    break
-                value = line.strip()
-                if inside and '/c++/' in value and Path(value).is_dir():
-                    paths.append(str(Path(value).resolve()))
+        paths = [str(Path(value).resolve()) for value, _ in school_header_search(driver, 'c++')
+                 if '/c++/' in value and Path(value).is_dir()]
         SCHOOL_CPP_CONTEXTS[key] = ['-nostdinc++', *[arg for value in dict.fromkeys(paths)
                                                   for arg in ('-isystem', value)]] if paths else []
     return SCHOOL_CPP_CONTEXTS[key]
 
 
-def school_preamble_prefix(text):
+def school_preamble_prefixes(text):
     """End at the last balanced include, leaving later source macros editable."""
-    code, end, balanced, depth = school_mask(text), 0, 0, 0
+    code, end, depth, prefixes = school_mask(text), 0, 0, []
     pending_include = False
     for start, finish in school_directive_spans(text):
         if code[end:start].strip():
             break
         directive = re.match(r'\s*#\s*([A-Za-z_]\w*)', code[start:finish])
         if not directive or directive[1] == 'line':
-            return ''
+            return []
         name = directive[1]
         if name in ('if', 'ifdef', 'ifndef'):
             depth += 1
         elif name == 'endif':
             depth -= 1
         if depth < 0:
-            return ''
+            return []
         if name == 'include':
             pending_include = True
         end = finish
         if depth == 0 and pending_include:
-            balanced = end
+            if school_includes(text[:end]):
+                prefixes.append(text[:end])
             pending_include = False
-    prefix = text[:balanced]
-    return prefix if school_includes(prefix) else ''
+    return prefixes
+
+
+
+def school_preamble_prefix(text):
+    prefixes = school_preamble_prefixes(text)
+    return prefixes[-1] if prefixes else ''
 
 
 def school_json_roots(output):
@@ -4954,7 +5370,7 @@ def school_ast_root(output):
 
 def school_cpp_preamble(source, text, clang, args):
     prefix = school_preamble_prefix(text)
-    if not prefix:
+    if not prefix or format_volatile_inputs(prefix, []):
         return None
     key = (str(source.parent), prefix, tuple(args), tuple(format_file_identity(clang) or ()),
            str(Path.cwd()), tuple(os.environ.get(name) for name in SCHOOL_FRONTEND_ENVIRONMENT))
@@ -4964,30 +5380,54 @@ def school_cpp_preamble(source, text, clang, args):
     if entry:
         entry['temporary'].cleanup()
         del SCHOOL_PREAMBLES[key]
+    search = school_header_search(clang, 'c++', [*args, '-iquote', str(source.parent)])
+    cache_key = school_preamble_cache_key(source, prefix, clang, ['clang-pch', *args, search])
+    restored = school_preamble_cache_load(source, prefix, cache_key)
+    if restored is not None:
+        SCHOOL_PREAMBLES[key] = restored
+        school_preamble_trim()
+        return restored
     temporary = tempfile.TemporaryDirectory(prefix='cp-format-preamble-')
     pch, dependency = Path(temporary.name) / 'prefix.pch', Path(temporary.name) / 'prefix.d'
-    result = school_tool([clang, '-x', 'c++-header', '-std=gnu++17', *args,
-                         '-iquote', str(source.parent), '-MD', '-MF', str(dependency),
-                         '-MT', 'cp_source', '-o', str(pch), '-'],
-                        input=prefix, text=True, capture_output=True)
-    if result.returncode or not pch.is_file() or not dependency.is_file():
+    prefixes = school_preamble_prefixes(text)
+    attempts = list(dict.fromkeys([prefix, prefixes[0]]))
+    for prepared in attempts:
+        result = school_tool([clang, '-x', 'c++-header', '-std=gnu++17', *args,
+                             '-iquote', str(source.parent), '-MD', '-MF', str(dependency),
+                             '-MT', 'cp_source', '-o', str(pch), '-'],
+                            input=prepared, text=True, capture_output=True)
+        if not result.returncode and pch.is_file() and dependency.is_file():
+            break
+    else:
         temporary.cleanup()
         return None
-    dependencies = format_dependency_paths(dependency.read_text())
+    dependencies = [str(Path(value).absolute()) for value in format_dependency_paths(dependency.read_text())]
+    if format_volatile_inputs(prefix, dependencies):
+        temporary.cleanup()
+        return None
+    dependencies = list(dict.fromkeys(dependencies))
+    cacheable = True
     try:
-        dependencies = list(dict.fromkeys([
-            *dependencies, *format_include_candidates(source, prefix, dependencies)]))
-        identities = {value: format_file_identity(value) for value in dependencies}
+        watched = set(dependencies) | format_include_candidates(source, prefix, dependencies, search)
+        identities = {value: format_file_identity(value) for value in watched}
     except (OSError, ValueError):
-        temporary.cleanup()
-        return None
-    entry = dict(temporary=temporary, pch=str(pch), prefix=prefix,
+        # Still use this invocation's PCH; unknown lookup alternatives only
+        # prevent reuse, not full source analysis.
+        identities = {value: format_file_identity(value) for value in dependencies}
+        cacheable = False
+    entry = dict(temporary=temporary, pch=str(pch), prefix=prepared,
                  dependencies=dependencies, identities=identities)
-    if len(SCHOOL_PREAMBLES) >= 4:
-        _, previous = SCHOOL_PREAMBLES.popitem()
-        previous['temporary'].cleanup()
-    SCHOOL_PREAMBLES[key] = entry
+    if cacheable:
+        school_preamble_cache_store(source, cache_key, entry)
+        SCHOOL_PREAMBLES[key] = entry
+        school_preamble_trim()
     return entry
+
+
+def school_preamble_trim():
+    while len(SCHOOL_PREAMBLES) > 4:
+        key = next(iter(SCHOOL_PREAMBLES))
+        SCHOOL_PREAMBLES.pop(key)['temporary'].cleanup()
 
 
 def school_preamble_input(text, entry):
@@ -5097,6 +5537,14 @@ def school_frontend_parse(source, text, clang, cpp):
         invocation = [clang, '-x', 'c++' if cpp else 'c', '-std=gnu++17' if cpp else '-std=gnu99',
                       *args, '-iquote', str(source.parent), '-Xclang', '-ast-dump=json',
                       '-fsyntax-only', '-MD', '-MF', str(dependency), '-MT', 'cp_source']
+        if cpp and entry is None and school_preamble_prefix(text):
+            probe = school_tool([clang, '-x', 'c++', '-std=gnu++17', *args,
+                                 '-iquote', str(source.parent), '-fsyntax-only', '-MD',
+                                 '-MF', str(dependency), '-MT', 'cp_source', '-'],
+                                input=text, text=True, capture_output=True)
+            if probe.returncode:
+                dependencies = format_dependency_paths(dependency.read_text()) if dependency.exists() else []
+                return None, SchoolParseIssues([str(source) + ': school parser error:\\n' + probe.stderr], dependencies)
         result = school_tool([*invocation, *(['-include-pch', entry['pch']] if entry else []), '-'],
                              input=school_preamble_input(text, entry) if entry else text,
                              text=True, capture_output=True)
@@ -5978,6 +6426,9 @@ class SchoolPolicy:
                 self.emit('5.12', 'remove commented-out debugging code or explain why this is documentation.',
                           line=self.text[:match.start()].count('\n') + 1, review=True)
         for number, line in enumerate(self.code.splitlines(), 1):
+            name = re.match(r'\s*#\s*define\s+([A-Za-z_]\w*)', line)
+            if name and name[1] in ('I', 'O'):
+                self.emit('3.7', 'rename visually ambiguous constant ' + name[1], line=number)
             macro = re.match(r'\s*#\s*define\s+\w+\s+(.+)', line)
             integer_macro = macro and re.search(r'\b(?:0[xX][\da-fA-F]+|\d+)[uUlL]*\b', macro[1]) and not re.search(r'\d\.\d|\d[eEpP][+-]?\d', macro[1])
             exception = macro and re.fullmatch(r'[()\s]*(-\s*1|2)[uUlL]*[()\s]*', macro[1])
@@ -6169,7 +6620,21 @@ def school_needs_resource_analysis(source, text, tree):
             if (base.get('kind') != 'DeclRefExpr' or reference.get('kind') != 'VarDecl'
                     or '[' not in typ or '*' in typ or '&' in typ):
                 return True
-        if kind == 'UnaryOperator' and node.get('opcode') == '*' or kind == 'MemberExpr' and node.get('isArrow'):
+        if kind == 'UnaryOperator' and node.get('opcode') == '*':
+            return True
+        if kind == 'MemberExpr' and node.get('isArrow'):
+            base = school_unwrap(next(iter(node.get('inner', [])), {}))
+            details = node.get('type', {})
+            typ = details.get('desugaredQualType', details.get('qualType', ''))
+            scalar_words = {'const', 'volatile', 'signed', 'unsigned', 'short', 'long',
+                            'int', 'char', 'bool', 'float', 'double', 'wchar_t',
+                            'char8_t', 'char16_t', 'char32_t', '__int128', '_Bool'}
+            plain_scalar = bool(typ.split()) and set(typ.split()) <= scalar_words
+            # Only a plain scalar field through this is harmless by itself.
+            # Pointer/container fields, method calls and closures retain analysis.
+            if base.get('kind') != 'CXXThisExpr' or not plain_scalar:
+                return True
+        if kind == 'LambdaExpr' and any(child.get('kind') == 'CXXThisExpr' for child in school_nodes(node)):
             return True
         if kind == 'CallExpr' and policy.callee(node) in calls:
             return True
