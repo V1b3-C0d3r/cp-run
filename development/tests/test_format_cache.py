@@ -34,6 +34,23 @@ class FormatCacheTest(unittest.TestCase):
             result = engine.format_collect(dict(self.config, **changes))
         return result, calls
 
+    def test_parser_failure_is_cached_as_an_error_with_dependency_invalidation(self):
+        header = self.case.root / 'values.h'
+        header.write_text('#pragma once\nenum { STATUS = 0 };\n')
+        self.source.write_text('#include "values.h"\nint\nmain(void) {\n    return STATUS;\n}\n')
+        def failed_parse(*args, **options):
+            return None, engine.SchoolParseIssues(['unsupported frontend construct'], [str(header)])
+        with mock.patch.object(engine, 'school_parse', side_effect=failed_parse) as parse:
+            first, _ = self.collect_calls()
+            self.assertTrue(any(item.rule == 'frontend' for item in first.errors))
+            repeated, calls = self.collect_calls()
+            self.assertEqual(parse.call_count, 1)
+            self.assertFalse(any('-c' in argv for argv in calls), calls)
+            self.assertTrue(any(item.rule == 'frontend' for item in repeated.errors))
+            header.write_text('#pragma once\nenum { STATUS = 128 };\n')
+            self.collect_calls()
+            self.assertEqual(parse.call_count, 2)
+
     def test_unchanged_second_pass_does_not_repeat_frontend_or_compile(self):
         first, initial = self.collect_calls()
         second, repeated = self.collect_calls()

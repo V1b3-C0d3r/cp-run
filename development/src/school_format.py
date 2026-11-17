@@ -159,9 +159,9 @@ def school_analyze(config):
             if [token for token, _ in school_tokens(clean)] != [token for token, _ in school_tokens(candidate)]:
                 raise CheckSetupError(str(source) + ': school: unsupported syntax prevents verifying token changes.')
             issues.append(FormatFinding(source, 1, 1, 'frontend', 'error',
-                          'token layout only; rewrite the GNU-only construct to enable all AST checks.\n' + '\n'.join(parse_issues)))
-        dependency_identities = original_tree.get('school_dependency_identities', {}) if original_tree else {}
-        dependencies = list(tree.get('school_dependencies', [])) if tree is not None else []
+                          'token layout only; AST checks unavailable: Clang could not parse this source.\n' + '\n'.join(parse_issues)))
+        dependency_identities = original_tree.get('school_dependency_identities', {}) if original_tree else getattr(parse_issues, 'identities', {})
+        dependencies = list(tree.get('school_dependencies', [])) if tree is not None else list(getattr(parse_issues, 'dependencies', []))
         with tempfile.TemporaryDirectory(prefix='cp-school-') as directory:
             path = Path(directory) / source.name
             path.write_text(candidate)
@@ -189,7 +189,9 @@ def school_analyze(config):
                 raise CheckSetupError('dependency changed during formatting: ' + dependency_name)
         inputs.update(dependencies)
         inputs.update(str(value) for value in (source.with_suffix('.h'), source.parent / 'Makefile', source.parent / 'makefile'))
-        if tree is not None:
+        # A backend limitation remains an error in the cache; only unchanged
+        # layout is eligible so parser locations still describe the source.
+        if tree is not None or candidate == clean:
             cache_jobs.append((source, candidate, list(issues), dependencies, tools))
         diagnostics.extend(issues)
         jobs.append((source, original, candidate.encode('utf-8')))

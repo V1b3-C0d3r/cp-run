@@ -51,29 +51,15 @@ def school_mask(text):
 def school_parse(source, text, clang, cpp=None):
     if cpp is None:
         cpp = source.suffix not in ('.c', '.h')
-    with tempfile.TemporaryDirectory(prefix='cp-format-deps-') as directory:
-        dependency = Path(directory) / 'source.d'
-        result = school_tool(
-            [clang, '-x', 'c++' if cpp else 'c',
-             '-std=gnu++17' if cpp else '-std=gnu99', '-iquote', str(source.parent),
-             '-Xclang', '-ast-dump=json', '-fsyntax-only', '-MD', '-MF', str(dependency),
-             '-MT', 'cp_source', '-'],
-            input=text, text=True, capture_output=True)
-        dependencies = format_dependency_paths(dependency.read_text()) if dependency.exists() else []
-    if result.returncode:
-        return None, [str(source) + ': school syntax/5.3/6.4: fix compiler diagnostics:\n' +
-                      result.stderr]
-    try:
-        tree = json.loads(result.stdout)
-    except json.JSONDecodeError as error:
-        raise CheckSetupError('school: Clang returned invalid AST JSON: ' + str(error)) from error
-    if not isinstance(tree, dict) or tree.get('kind') != 'TranslationUnitDecl':
-        raise CheckSetupError('school: Clang returned an unsupported AST root')
+    return school_frontend_parse(source, text, clang, cpp)
+
+
+def school_reduce_tree(tree, dependencies):
     # Header implementations are not part of the selected source. References
     # retain their name/type descriptors; project headers are audited separately.
     tree['school_dependencies'] = dependencies
     tree['school_dependency_identities'] = {value: format_file_identity(value) for value in dependencies}
-    kept, external_enums, external_bases = [], [], {}
+    kept, external_enums, external_bases = [], [], dict(tree.get('school_external_bases', {}))
     for node in tree.get('inner', []):
         if 'includedFrom' not in school_location(node) and not node.get('isImplicit'):
             kept.append(node)
@@ -85,11 +71,11 @@ def school_parse(source, text, clang, cpp=None):
                 external_enums.append(child)
             elif child.get('kind') == 'CXXRecordDecl' and child.get('completeDefinition'):
                 external_bases[child.get('name')] = [
-                    base.get('type', {}).get('qualType', '') for base in child.get('bases', [])]
+                    base.get('type', {}).get('desugaredQualType', base.get('type', {}).get('qualType', '')) for base in child.get('bases', [])]
     tree['school_external_enums'] = external_enums
     tree['school_external_bases'] = external_bases
     tree['inner'] = kept
-    return tree, []
+    return tree
 
 
 def school_tool(argv, **options):
@@ -172,13 +158,13 @@ class SchoolPolicy:
         self.justifications = {}
         self.error_justifications = {}
         self.accepted = set()
-        self.constants = {}
+        self.constants = dict(tree.get('school_external_values', {}))
         self.labels = {}
         self.functions = []
         self.symbols = {node['id']: node for node in school_nodes(tree)
                         if 'id' in node and node.get('kind', '').endswith('Decl')}
         self.record_bases = {**tree.get('school_external_bases', {}), **{
-            node.get('name'): [base.get('type', {}).get('qualType', '')
+            node.get('name'): [base.get('type', {}).get('desugaredQualType', base.get('type', {}).get('qualType', ''))
                                for base in node.get('bases', [])]
             for node in school_nodes(tree) if node.get('kind') == 'CXXRecordDecl'
             and node.get('completeDefinition')}}
@@ -1033,8 +1019,15 @@ def school_needs_resource_analysis(source, text, tree):
         if not policy.local(node):
             continue
         kind = node.get('kind')
-        if kind in ('CXXNewExpr', 'CXXDeleteExpr', 'ArraySubscriptExpr'):
+        if kind in ('CXXNewExpr', 'CXXDeleteExpr'):
             return True
+        if kind == 'ArraySubscriptExpr':
+            base = school_unwrap(next(iter(node.get('inner', [])), {}))
+            # Fixed arrays carry no nullable/owning pointer. Pointer indexing
+            # still needs the same null/lifetime analysis as dereferencing.
+            typ = base.get('type', {}).get('desugaredQualType', base.get('type', {}).get('qualType', ''))
+            if '[' not in typ or '*' in typ:
+                return True
         if kind == 'UnaryOperator' and node.get('opcode') == '*' or kind == 'MemberExpr' and node.get('isArrow'):
             return True
         if kind == 'CallExpr' and policy.callee(node) in calls:
@@ -1078,6 +1071,7 @@ def school_resource_analysis(source, candidate_path, input_path, clang, include_
     with tempfile.TemporaryDirectory(prefix='school-analysis-') as directory:
         result = school_tool(
             [clang, '--analyze', '-x', language, standard,
+             *(school_cpp_context() if language == 'c++' else []),
              '-iquote', str(source.parent), *include_args,
              '-Xanalyzer', '-analyzer-checker=' + ','.join(checkers),
              '-Xanalyzer', '-analyzer-output=text',

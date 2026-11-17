@@ -44,6 +44,44 @@ class InteractiveReviewTest(unittest.TestCase):
             status = engine.execute_format_review(config)
         return status, json.loads(self.report.read_text())
 
+    def test_parser_justification_or_comment_is_rejected_without_reanalysis(self):
+        source_code = 'int main(void) { return 0; }\n'
+        self.source.write_text(source_code)
+        for rule in ('frontend', 'GCC', 'backend'):
+            with self.subTest(rule=rule):
+                self.output.seek(0)
+                self.output.truncate()
+                failure = engine.FormatResult([engine.FormatFinding(
+                    self.source.resolve(), 1, 1, rule, 'error', 'parser/compiler failure')])
+                config = dict(protected=[str(self.source)], format_mode='school',
+                              prettier='format', review=True)
+                with mock.patch.object(engine, 'format_collect', return_value=failure) as collect, \
+                     mock.patch.object(engine.sys, 'stdin', InputTerminal(
+                         ['j GNU extension\n', 'j all GNU extension\n', 'j all\n', 'c note\n', 'd\n'])), \
+                     mock.patch.object(engine.sys, 'stderr', self.output):
+                    status = engine.execute_format_review(config)
+                self.assertEqual(status, 1)
+                self.assertEqual(collect.call_count, 1)
+                self.assertEqual(self.source.read_text(), source_code)
+                self.assertEqual(self.output.getvalue().count('parser/compiler failure'), 1)
+                self.assertIn('cannot be justified or annotated', self.output.getvalue())
+
+    def test_mixed_justified_all_does_not_hide_backend_error(self):
+        code = 'int main(void) { return 0; }\n'
+        self.source.write_text(code)
+        failure = engine.FormatFinding(self.source.resolve(), 1, 1, 'frontend', 'error', 'parser failure')
+        style = engine.FormatFinding(self.source.resolve(), 1, 1, '3.4', 'error', 'identifier style')
+        config = dict(protected=[str(self.source)], format_mode='school', prettier='format', review=True)
+        with mock.patch.object(engine, 'format_collect', side_effect=[
+                 engine.FormatResult([failure, style]), engine.FormatResult([failure])]) as collect, \
+             mock.patch.object(engine.sys, 'stdin', InputTerminal(['j all needed\n', 'd\n'])), \
+             mock.patch.object(engine.sys, 'stderr', self.output):
+            status = engine.execute_format_review(config)
+        self.assertEqual(status, 1)
+        self.assertEqual(collect.call_count, 2)
+        self.assertIn('school-error-justified 3.4: needed', self.source.read_text())
+        self.assertNotIn('school-error-justified frontend', self.source.read_text())
+
     def test_errors_hide_warnings_until_real_fix_then_review(self):
         def fix():
             self.assertNotIn('mutable global', self.output.getvalue())

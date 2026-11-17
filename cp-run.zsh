@@ -8,7 +8,7 @@
 emulate -LR zsh
 setopt NO_UNSET PIPE_FAIL EXTENDED_GLOB
 unsetopt ALIASES
-typeset -r PROGRAM=cp-run VERSION=1.5.1
+typeset -r PROGRAM=cp-run VERSION=1.5.2
 typeset -r SCRIPT_PATH=${0:A} # Settings follow the real script when invoked through a symlink.
 
 # CP_RUN_SETTINGS_BEGIN
@@ -4436,6 +4436,15 @@ def execute_format_review(config, report=None):
                     entry.update(decision='deny', reviewer_comment=text)
                 report.write()
                 continue
+            if command in ('comment', 'justified') or local_annotate:
+                eligible = [(item, entry) for item, entry in selected if item.rule in SCHOOL_RULES]
+                if len(eligible) != len(selected):
+                    print('parser/compiler diagnostics cannot be justified or annotated; fix the code or toolchain, then accept.',
+                          file=sys.stderr)
+                if not eligible and command != 'accept':
+                    continue
+                if command in ('comment', 'justified'):
+                    selected = eligible
             if command == 'comment':
                 for _, entry in selected:
                     entry['comments'].append(text)
@@ -4514,7 +4523,7 @@ def format_clang_analyze(config):
 
 # Source: format_cache.py
 """Bounded result cache; unchanged source, tools and dependencies are mandatory."""
-SCHOOL_ENGINE_ID = 'b4a09ad27a43fe99fa0d79b417afbf25ea991a54eb0c44ae128ba526344f6aea'
+SCHOOL_ENGINE_ID = 'd7bb4a66021d60f5be3f0b6030da80fd34d0e917938551dbf6477b734145404c'
 
 
 def format_file_identity(value):
@@ -4592,6 +4601,27 @@ def format_cache_load(source, text, tools, config):
         return None
 
 
+
+def format_include_candidates(source, text, dependencies):
+    """Track local header shadows without lexing every system implementation."""
+    candidates = set()
+    quoted = re.compile(r'^[^\S\r\n]*#[^\S\r\n]*include[^\S\r\n]*"', re.M)
+    for owner in [source, *(Path(value) for value in dependencies)]:
+        try:
+            contents = text if owner == source else owner.read_text()
+        except (OSError, UnicodeDecodeError):
+            continue
+        # All source include spellings affect the project auditor. In external
+        # headers only quoted includes consult a local directory first.
+        local = owner == source or owner.is_relative_to(source.parent)
+        if not local and not quoted.search(contents):
+            continue
+        for directive in school_includes(contents):
+            if local or directive[1] == '"':
+                candidates.add(str((owner.parent / directive[2]).absolute()))
+    return candidates
+
+
 def format_cache_store(source, candidate, findings, dependencies, tools, config):
     path = format_cache_location(source, config)
     if path is None or len(candidate.encode('utf-8')) > 2 * 1024 * 1024:
@@ -4599,13 +4629,8 @@ def format_cache_store(source, candidate, findings, dependencies, tools, config)
     # Parent/negative dependencies cover files consulted by the project auditor.
     dependencies = set(dependencies) | {str(source.with_suffix('.h')),
                     str(source.parent / 'Makefile'), str(source.parent / 'makefile')}
-    for owner in [source, *(Path(value) for value in list(dependencies) if Path(value).suffix in ('.h', '.hpp', '.hh', '.hxx'))]:
-        try:
-            contents = candidate if owner == source else owner.read_text()
-        except (OSError, UnicodeDecodeError):
-            continue
-        for directive in school_includes(contents):
-            dependencies.add(str((owner.parent / directive[2]).absolute()))
+    headers = [value for value in dependencies if Path(value).suffix in ('.h', '.hpp', '.hh', '.hxx')]
+    dependencies.update(format_include_candidates(source, candidate, headers))
     record = dict(key=format_cache_key(candidate, tools), candidate=candidate,
                   dependencies={value: format_file_identity(value) for value in dependencies},
                   findings=[item.record() for item in findings])
@@ -4789,9 +4814,9 @@ def school_analyze(config):
             if [token for token, _ in school_tokens(clean)] != [token for token, _ in school_tokens(candidate)]:
                 raise CheckSetupError(str(source) + ': school: unsupported syntax prevents verifying token changes.')
             issues.append(FormatFinding(source, 1, 1, 'frontend', 'error',
-                          'token layout only; rewrite the GNU-only construct to enable all AST checks.\n' + '\n'.join(parse_issues)))
-        dependency_identities = original_tree.get('school_dependency_identities', {}) if original_tree else {}
-        dependencies = list(tree.get('school_dependencies', [])) if tree is not None else []
+                          'token layout only; AST checks unavailable: Clang could not parse this source.\n' + '\n'.join(parse_issues)))
+        dependency_identities = original_tree.get('school_dependency_identities', {}) if original_tree else getattr(parse_issues, 'identities', {})
+        dependencies = list(tree.get('school_dependencies', [])) if tree is not None else list(getattr(parse_issues, 'dependencies', []))
         with tempfile.TemporaryDirectory(prefix='cp-school-') as directory:
             path = Path(directory) / source.name
             path.write_text(candidate)
@@ -4819,7 +4844,9 @@ def school_analyze(config):
                 raise CheckSetupError('dependency changed during formatting: ' + dependency_name)
         inputs.update(dependencies)
         inputs.update(str(value) for value in (source.with_suffix('.h'), source.parent / 'Makefile', source.parent / 'makefile'))
-        if tree is not None:
+        # A backend limitation remains an error in the cache; only unchanged
+        # layout is eligible so parser locations still describe the source.
+        if tree is not None or candidate == clean:
             cache_jobs.append((source, candidate, list(issues), dependencies, tools))
         diagnostics.extend(issues)
         jobs.append((source, original, candidate.encode('utf-8')))
@@ -4828,6 +4855,276 @@ def school_analyze(config):
 
 def execute_school_format(config):
     return execute_format_review(dict(config, format_mode='school'))
+
+
+# Source: school_frontend.py
+"""GNU-compatible Clang parsing with dependency-validated precompiled preambles."""
+SCHOOL_CPP_CONTEXTS = {}
+SCHOOL_PREAMBLES = {}
+SCHOOL_FRONTEND_ENVIRONMENT = (
+    'CPATH', 'C_INCLUDE_PATH', 'CPLUS_INCLUDE_PATH', 'SDKROOT', 'DEVELOPER_DIR',
+    'GCC_EXEC_PREFIX', 'COMPILER_PATH', 'SOURCE_DATE_EPOCH', 'LANG', 'LC_ALL',
+)
+
+
+class SchoolParseIssues(list):
+    def __init__(self, messages=(), dependencies=()):
+        super().__init__(messages)
+        self.dependencies = list(dependencies)
+        self.identities = {value: format_file_identity(value) for value in self.dependencies}
+
+
+def school_cpp_context():
+    """Query the selected GNU driver; never mix its headers with libc++."""
+    gcc = shutil.which(os.environ.get('CP_RUN_GCC', 'gcc-16')) or shutil.which('gcc')
+    if not gcc:
+        return []
+    driver = shutil.which(str(Path(gcc).with_name(Path(gcc).name.replace('gcc', 'g++')))) or gcc
+    key = (str(Path(driver).resolve()), tuple(format_file_identity(driver) or ()),
+           str(Path.cwd()), tuple(os.environ.get(name) for name in SCHOOL_FRONTEND_ENVIRONMENT))
+    if key not in SCHOOL_CPP_CONTEXTS:
+        probe = school_tool([driver, '-E', '-x', 'c++', '-v', '-'],
+                            input='', text=True, capture_output=True)
+        paths, inside = [], False
+        if not probe.returncode:
+            for line in probe.stderr.splitlines():
+                if line.strip() == '#include <...> search starts here:':
+                    inside = True
+                    continue
+                if line.strip() == 'End of search list.':
+                    break
+                value = line.strip()
+                if inside and '/c++/' in value and Path(value).is_dir():
+                    paths.append(str(Path(value).resolve()))
+        SCHOOL_CPP_CONTEXTS[key] = ['-nostdinc++', *[arg for value in dict.fromkeys(paths)
+                                                  for arg in ('-isystem', value)]] if paths else []
+    return SCHOOL_CPP_CONTEXTS[key]
+
+
+def school_preamble_prefix(text):
+    """End at the last balanced include, leaving later source macros editable."""
+    code, end, balanced, depth = school_mask(text), 0, 0, 0
+    pending_include = False
+    for start, finish in school_directive_spans(text):
+        if code[end:start].strip():
+            break
+        directive = re.match(r'\s*#\s*([A-Za-z_]\w*)', code[start:finish])
+        if not directive or directive[1] == 'line':
+            return ''
+        name = directive[1]
+        if name in ('if', 'ifdef', 'ifndef'):
+            depth += 1
+        elif name == 'endif':
+            depth -= 1
+        if depth < 0:
+            return ''
+        if name == 'include':
+            pending_include = True
+        end = finish
+        if depth == 0 and pending_include:
+            balanced = end
+            pending_include = False
+    prefix = text[:balanced]
+    return prefix if school_includes(prefix) else ''
+
+
+def school_json_roots(output):
+    decoder, roots, position = json.JSONDecoder(), [], 0
+    while position < len(output):
+        while position < len(output) and output[position].isspace():
+            position += 1
+        if position >= len(output):
+            break
+        value, position = decoder.raw_decode(output, position)
+        roots.append(value)
+    return roots
+
+
+
+def school_ast_root(output):
+    try:
+        tree = json.loads(output)
+    except (ValueError, TypeError) as error:
+        raise CheckSetupError('school: Clang returned invalid AST JSON: ' + str(error)) from error
+    if not isinstance(tree, dict) or tree.get('kind') != 'TranslationUnitDecl':
+        raise CheckSetupError('school: Clang returned an unsupported AST root')
+    return tree
+
+
+def school_cpp_preamble(source, text, clang, args):
+    prefix = school_preamble_prefix(text)
+    if not prefix:
+        return None
+    key = (str(source.parent), prefix, tuple(args), tuple(format_file_identity(clang) or ()),
+           str(Path.cwd()), tuple(os.environ.get(name) for name in SCHOOL_FRONTEND_ENVIRONMENT))
+    entry = SCHOOL_PREAMBLES.get(key)
+    if entry and all(format_file_identity(value) == identity for value, identity in entry['identities'].items()):
+        return entry
+    if entry:
+        entry['temporary'].cleanup()
+        del SCHOOL_PREAMBLES[key]
+    temporary = tempfile.TemporaryDirectory(prefix='cp-format-preamble-')
+    pch, dependency = Path(temporary.name) / 'prefix.pch', Path(temporary.name) / 'prefix.d'
+    result = school_tool([clang, '-x', 'c++-header', '-std=gnu++17', *args,
+                         '-iquote', str(source.parent), '-MD', '-MF', str(dependency),
+                         '-MT', 'cp_source', '-o', str(pch), '-'],
+                        input=prefix, text=True, capture_output=True)
+    if result.returncode or not pch.is_file() or not dependency.is_file():
+        temporary.cleanup()
+        return None
+    dependencies = format_dependency_paths(dependency.read_text())
+    dependencies = list(dict.fromkeys([
+        *dependencies, *format_include_candidates(source, prefix, dependencies)]))
+    entry = dict(temporary=temporary, pch=str(pch), prefix=prefix, dependencies=dependencies,
+                 identities={value: format_file_identity(value) for value in dependencies})
+    if len(SCHOOL_PREAMBLES) >= 4:
+        _, previous = SCHOOL_PREAMBLES.popitem()
+        previous['temporary'].cleanup()
+    SCHOOL_PREAMBLES[key] = entry
+    return entry
+
+
+def school_preamble_input(text, entry):
+    # Mask bytes, not Unicode code points: AST offsets are UTF-8 byte offsets.
+    prefix = entry['prefix'].encode('utf-8')
+    blank = bytes(byte if byte in (10, 13) else 32 for byte in prefix)
+    return (blank + text.encode('utf-8')[len(prefix):]).decode('utf-8')
+
+
+def school_query_ast(source, text, clang, args, entry, name, appended=''):
+    result = school_tool([clang, '-x', 'c++', '-std=gnu++17', *args,
+                         '-iquote', str(source.parent), '-include-pch', entry['pch'],
+                         '-Xclang', '-ast-dump=json', '-Xclang', '-ast-dump-filter=' + name,
+                         '-fsyntax-only', '-'],
+                        input=school_preamble_input(text, entry) + appended,
+                        text=True, capture_output=True)
+    if result.returncode:
+        return None
+    try:
+        return school_json_roots(result.stdout)
+    except (ValueError, TypeError):
+        return None
+
+
+def school_preamble_semantics(source, text, clang, args, entry, tree):
+    """Recover only used external enum values and catch ancestry, not header bodies."""
+    local_ids = {node.get('id') for node in school_nodes(tree) if node.get('kind') == 'EnumConstantDecl'}
+    references = {}
+    catch_types = set()
+    for node in school_nodes(tree):
+        reference = node.get('referencedDecl', {})
+        if reference.get('kind') == 'EnumConstantDecl' and reference.get('id') not in local_ids:
+            references[reference['id']] = reference
+        if node.get('kind') == 'CXXTryStmt':
+            handlers = [child for child in node.get('inner', []) if child.get('kind') == 'CXXCatchStmt']
+            if len(handlers) > 1:
+                for handler in handlers:
+                    for child in handler.get('inner', []):
+                        if child.get('kind') == 'VarDecl':
+                            typ = child.get('type', {}).get('desugaredQualType', child.get('type', {}).get('qualType', ''))
+                            catch_types.add(re.sub(r'\bconst\b|[&* ]', '', typ))
+    values = {}
+    if references:
+        tag = '__cp_format_value_' + hashlib.sha256(text.encode()).hexdigest()[:16]
+        while tag in text:
+            tag += '_'
+        declarations = []
+        identifiers = list(references)
+        for index, reference in enumerate(references.values()):
+            typ, name = reference.get('type', {}).get('qualType', ''), reference.get('name', '')
+            if not re.fullmatch(r'[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*', name):
+                return False
+            if '(unnamed enum' in typ or '(anonymous enum' in typ:
+                scope = typ.split('(', 1)[0].rstrip(': ')
+                expression = (scope + '::' if scope else '') + name
+            elif re.fullmatch(r'[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*', typ):
+                expression = typ + '::' + name
+            else:
+                return False
+            declarations.append('enum { ' + tag + str(index) +
+                                ' = static_cast<__underlying_type(decltype(' + expression + '))>(' + expression + ') };')
+        roots = school_query_ast(source, text, clang, args, entry, tag, '\n' + '\n'.join(declarations) + '\n')
+        if roots is None:
+            return False
+        for root in roots:
+            name = root.get('name', '')
+            if root.get('kind') == 'EnumConstantDecl' and name.startswith(tag):
+                try:
+                    index = int(name[len(tag):])
+                    value = next(node['value'] for node in school_nodes(root)
+                                 if node.get('kind') == 'ConstantExpr' and 'value' in node)
+                    values[identifiers[index]] = int(value)
+                except (ValueError, IndexError, StopIteration):
+                    return False
+        if len(values) != len(references):
+            return False
+    bases, pending = {}, list(catch_types)
+    builtin = {'int', 'char', 'long', 'short', 'bool', 'float', 'double', 'unsigned', '...'}
+    while pending:
+        name = pending.pop()
+        if name in bases or name in builtin:
+            continue
+        if len(bases) >= 32 or not re.fullmatch(r'[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*', name):
+            return False
+        roots = school_query_ast(source, text, clang, args, entry, name)
+        if roots is None:
+            return False
+        records = [node for root in roots for node in school_nodes(root)
+                   if node.get('kind') == 'CXXRecordDecl' and node.get('completeDefinition')
+                   and node.get('name') == name.rsplit('::', 1)[-1]]
+        if len(records) != 1:
+            return False
+        inherited = [base.get('type', {}).get('desugaredQualType', base.get('type', {}).get('qualType', '')) for base in records[0].get('bases', [])]
+        bases[name] = inherited
+        bases.setdefault(records[0]['name'], inherited)
+        pending.extend(inherited)
+    tree['school_external_values'] = values
+    tree['school_external_bases'] = bases
+    return True
+
+
+def school_frontend_parse(source, text, clang, cpp):
+    args = school_cpp_context() if cpp else []
+    entry = school_cpp_preamble(source, text, clang, args) if cpp else None
+    with tempfile.TemporaryDirectory(prefix='cp-format-deps-') as directory:
+        dependency = Path(directory) / 'source.d'
+        invocation = [clang, '-x', 'c++' if cpp else 'c', '-std=gnu++17' if cpp else '-std=gnu99',
+                      *args, '-iquote', str(source.parent), '-Xclang', '-ast-dump=json',
+                      '-fsyntax-only', '-MD', '-MF', str(dependency), '-MT', 'cp_source']
+        result = school_tool([*invocation, *(['-include-pch', entry['pch']] if entry else []), '-'],
+                             input=school_preamble_input(text, entry) if entry else text,
+                             text=True, capture_output=True)
+        dependencies = format_dependency_paths(dependency.read_text()) if dependency.exists() else []
+        if entry:
+            dependencies = [value for value in dependencies if value != entry['pch']]
+            dependencies.extend(entry['dependencies'])
+        if entry:
+            for value, identity in entry['identities'].items():
+                if format_file_identity(value) != identity:
+                    raise CheckSetupError('dependency changed during formatting: ' + value)
+        if result.returncode:
+            return None, SchoolParseIssues([str(source) + ': school parser error:\n' + result.stderr], dependencies)
+        tree = school_ast_root(result.stdout)
+        if entry and not school_preamble_semantics(source, text, clang, args, entry, tree):
+            # An uncommon expression inaccessible to the small metadata probes
+            # must receive full analysis, never an optimistic partial result.
+            result = school_tool([*invocation, '-'], input=text, text=True, capture_output=True)
+            if result.returncode:
+                return None, SchoolParseIssues([str(source) + ': school parser error:\n' + result.stderr], dependencies)
+            tree = school_ast_root(result.stdout)
+            if dependency.exists():
+                dependencies.extend(format_dependency_paths(dependency.read_text()))
+            for value, identity in entry['identities'].items():
+                if format_file_identity(value) != identity:
+                    raise CheckSetupError('dependency changed during formatting: ' + value)
+            entry = None
+    reduced = school_reduce_tree(tree, list(dict.fromkeys(dependencies)))
+    if entry:
+        for value, identity in entry['identities'].items():
+            if format_file_identity(value) != identity:
+                raise CheckSetupError('dependency changed during formatting: ' + value)
+        reduced['school_dependency_identities'].update(entry['identities'])
+    return reduced, SchoolParseIssues()
 
 
 # Source: school_policy.py
@@ -4884,29 +5181,15 @@ def school_mask(text):
 def school_parse(source, text, clang, cpp=None):
     if cpp is None:
         cpp = source.suffix not in ('.c', '.h')
-    with tempfile.TemporaryDirectory(prefix='cp-format-deps-') as directory:
-        dependency = Path(directory) / 'source.d'
-        result = school_tool(
-            [clang, '-x', 'c++' if cpp else 'c',
-             '-std=gnu++17' if cpp else '-std=gnu99', '-iquote', str(source.parent),
-             '-Xclang', '-ast-dump=json', '-fsyntax-only', '-MD', '-MF', str(dependency),
-             '-MT', 'cp_source', '-'],
-            input=text, text=True, capture_output=True)
-        dependencies = format_dependency_paths(dependency.read_text()) if dependency.exists() else []
-    if result.returncode:
-        return None, [str(source) + ': school syntax/5.3/6.4: fix compiler diagnostics:\n' +
-                      result.stderr]
-    try:
-        tree = json.loads(result.stdout)
-    except json.JSONDecodeError as error:
-        raise CheckSetupError('school: Clang returned invalid AST JSON: ' + str(error)) from error
-    if not isinstance(tree, dict) or tree.get('kind') != 'TranslationUnitDecl':
-        raise CheckSetupError('school: Clang returned an unsupported AST root')
+    return school_frontend_parse(source, text, clang, cpp)
+
+
+def school_reduce_tree(tree, dependencies):
     # Header implementations are not part of the selected source. References
     # retain their name/type descriptors; project headers are audited separately.
     tree['school_dependencies'] = dependencies
     tree['school_dependency_identities'] = {value: format_file_identity(value) for value in dependencies}
-    kept, external_enums, external_bases = [], [], {}
+    kept, external_enums, external_bases = [], [], dict(tree.get('school_external_bases', {}))
     for node in tree.get('inner', []):
         if 'includedFrom' not in school_location(node) and not node.get('isImplicit'):
             kept.append(node)
@@ -4918,11 +5201,11 @@ def school_parse(source, text, clang, cpp=None):
                 external_enums.append(child)
             elif child.get('kind') == 'CXXRecordDecl' and child.get('completeDefinition'):
                 external_bases[child.get('name')] = [
-                    base.get('type', {}).get('qualType', '') for base in child.get('bases', [])]
+                    base.get('type', {}).get('desugaredQualType', base.get('type', {}).get('qualType', '')) for base in child.get('bases', [])]
     tree['school_external_enums'] = external_enums
     tree['school_external_bases'] = external_bases
     tree['inner'] = kept
-    return tree, []
+    return tree
 
 
 def school_tool(argv, **options):
@@ -5005,13 +5288,13 @@ class SchoolPolicy:
         self.justifications = {}
         self.error_justifications = {}
         self.accepted = set()
-        self.constants = {}
+        self.constants = dict(tree.get('school_external_values', {}))
         self.labels = {}
         self.functions = []
         self.symbols = {node['id']: node for node in school_nodes(tree)
                         if 'id' in node and node.get('kind', '').endswith('Decl')}
         self.record_bases = {**tree.get('school_external_bases', {}), **{
-            node.get('name'): [base.get('type', {}).get('qualType', '')
+            node.get('name'): [base.get('type', {}).get('desugaredQualType', base.get('type', {}).get('qualType', ''))
                                for base in node.get('bases', [])]
             for node in school_nodes(tree) if node.get('kind') == 'CXXRecordDecl'
             and node.get('completeDefinition')}}
@@ -5866,8 +6149,15 @@ def school_needs_resource_analysis(source, text, tree):
         if not policy.local(node):
             continue
         kind = node.get('kind')
-        if kind in ('CXXNewExpr', 'CXXDeleteExpr', 'ArraySubscriptExpr'):
+        if kind in ('CXXNewExpr', 'CXXDeleteExpr'):
             return True
+        if kind == 'ArraySubscriptExpr':
+            base = school_unwrap(next(iter(node.get('inner', [])), {}))
+            # Fixed arrays carry no nullable/owning pointer. Pointer indexing
+            # still needs the same null/lifetime analysis as dereferencing.
+            typ = base.get('type', {}).get('desugaredQualType', base.get('type', {}).get('qualType', ''))
+            if '[' not in typ or '*' in typ:
+                return True
         if kind == 'UnaryOperator' and node.get('opcode') == '*' or kind == 'MemberExpr' and node.get('isArrow'):
             return True
         if kind == 'CallExpr' and policy.callee(node) in calls:
@@ -5911,6 +6201,7 @@ def school_resource_analysis(source, candidate_path, input_path, clang, include_
     with tempfile.TemporaryDirectory(prefix='school-analysis-') as directory:
         result = school_tool(
             [clang, '--analyze', '-x', language, standard,
+             *(school_cpp_context() if language == 'c++' else []),
              '-iquote', str(source.parent), *include_args,
              '-Xanalyzer', '-analyzer-checker=' + ','.join(checkers),
              '-Xanalyzer', '-analyzer-output=text',

@@ -52,7 +52,7 @@ Markers sit immediately before the affected line. Their rule, source location an
 
 **`--annotate` enables review with temporary notes beside active findings.** `a --annotate` enables a note for the selected finding. Temporary notes are removed after processing, including EOF, cancellation and Ctrl-C. Repeated runs do not accumulate them; leftovers after a killed process are cleared on the next format. Comments from `c` and exceptions from `j` remain.
 
-Syntax/tool failures cannot be justified as numbered style exceptions. Fix the source/environment and use `a`. A justification is an explicit reviewer exception, not proof that the original code followed the rule.
+Parser/compiler/tool failures cannot be justified or annotated as numbered style exceptions. A rejected `j` or `c` returns to the prompt immediately, without rerunning analysis. Fix the source/environment and use `a`. A justification is an explicit reviewer exception, not proof that the original code followed the rule.
 
 ## Export before and after decisions
 
@@ -90,6 +90,12 @@ English meaning, message intent, unresolved ownership and recipe correctness nee
 ## Speed and fresh verification
 
 School reuses a result only while source bytes, tool identities, policy version, include environment and compiler-discovered dependencies remain unchanged. Header or Makefile edits invalidate it. Review decisions are never cached.
+
+C++ parsing uses the selected GNU compiler's available libstdc++ headers, including GNU helpers such as `std::__lg`. It disables Clang's default C++ headers to avoid mixing libstdc++ with libc++. If a remote/container compiler's headers are unavailable locally, Clang keeps its own header search.
+
+Within one review session, up to four precompiled include prefixes are reused while their headers and include environment remain unchanged. Code and source macros are parsed again after edits. Used external enum values and exception ancestry are recovered separately; unsupported metadata falls back to the full AST.
+
+A parser limitation remains an error even when GNU GCC accepts the source. Unchanged, dependency-validated failures can be cached; missing AST checks never become a successful result.
 
 Use `--no-cache` with format/check/strict-format to force fresh verification. The cache is bounded to 64 source entries under the normal XDG cache/state directory. An unavailable or corrupt cache falls back to full checks.
 

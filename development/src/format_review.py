@@ -349,6 +349,15 @@ def execute_format_review(config, report=None):
                     entry.update(decision='deny', reviewer_comment=text)
                 report.write()
                 continue
+            if command in ('comment', 'justified') or local_annotate:
+                eligible = [(item, entry) for item, entry in selected if item.rule in SCHOOL_RULES]
+                if len(eligible) != len(selected):
+                    print('parser/compiler diagnostics cannot be justified or annotated; fix the code or toolchain, then accept.',
+                          file=sys.stderr)
+                if not eligible and command != 'accept':
+                    continue
+                if command in ('comment', 'justified'):
+                    selected = eligible
             if command == 'comment':
                 for _, entry in selected:
                     entry['comments'].append(text)

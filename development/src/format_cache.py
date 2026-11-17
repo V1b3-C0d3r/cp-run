@@ -77,6 +77,27 @@ def format_cache_load(source, text, tools, config):
         return None
 
 
+
+def format_include_candidates(source, text, dependencies):
+    """Track local header shadows without lexing every system implementation."""
+    candidates = set()
+    quoted = re.compile(r'^[^\S\r\n]*#[^\S\r\n]*include[^\S\r\n]*"', re.M)
+    for owner in [source, *(Path(value) for value in dependencies)]:
+        try:
+            contents = text if owner == source else owner.read_text()
+        except (OSError, UnicodeDecodeError):
+            continue
+        # All source include spellings affect the project auditor. In external
+        # headers only quoted includes consult a local directory first.
+        local = owner == source or owner.is_relative_to(source.parent)
+        if not local and not quoted.search(contents):
+            continue
+        for directive in school_includes(contents):
+            if local or directive[1] == '"':
+                candidates.add(str((owner.parent / directive[2]).absolute()))
+    return candidates
+
+
 def format_cache_store(source, candidate, findings, dependencies, tools, config):
     path = format_cache_location(source, config)
     if path is None or len(candidate.encode('utf-8')) > 2 * 1024 * 1024:
@@ -84,13 +105,8 @@ def format_cache_store(source, candidate, findings, dependencies, tools, config)
     # Parent/negative dependencies cover files consulted by the project auditor.
     dependencies = set(dependencies) | {str(source.with_suffix('.h')),
                     str(source.parent / 'Makefile'), str(source.parent / 'makefile')}
-    for owner in [source, *(Path(value) for value in list(dependencies) if Path(value).suffix in ('.h', '.hpp', '.hh', '.hxx'))]:
-        try:
-            contents = candidate if owner == source else owner.read_text()
-        except (OSError, UnicodeDecodeError):
-            continue
-        for directive in school_includes(contents):
-            dependencies.add(str((owner.parent / directive[2]).absolute()))
+    headers = [value for value in dependencies if Path(value).suffix in ('.h', '.hpp', '.hh', '.hxx')]
+    dependencies.update(format_include_candidates(source, candidate, headers))
     record = dict(key=format_cache_key(candidate, tools), candidate=candidate,
                   dependencies={value: format_file_identity(value) for value in dependencies},
                   findings=[item.record() for item in findings])

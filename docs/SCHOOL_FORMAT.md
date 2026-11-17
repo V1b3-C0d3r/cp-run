@@ -9,7 +9,7 @@ This table maps all 68 numbered paragraphs of the supplied school codestyle to o
 | Component | Responsibility |
 | --- | --- |
 | Native planner | Select sources/roles and paths; keep runtime arguments opaque |
-| Clang frontend | Parse source; exclude header implementation subtrees from local policy traversal |
+| Clang frontend | Select GNU C++ headers; parse through a dependency-validated preamble; retain used enum values and exception ancestry |
 | Layout | Fixed clang-format policy, parameter/label edits, token and AST verification |
 | Policy | Structured file/line/column/rule/severity/evidence findings |
 | Project audit | Read-only header ownership, guards, necessary includes and literal Makefile targets |
@@ -138,6 +138,7 @@ Formatting compiles a staged translation unit to retain optimization-dependent w
 | Error/review decisions and temporary notes | test_format_review.py |
 | Compilation gate and source preservation | test_strict_format.py |
 | Dependency-aware result reuse and invalidation | test_format_cache.py |
+| GNU headers, small ASTs, preamble invalidation and header semantics | test_school_frontend.py |
 | Rule boundaries, semantic exclusions and exceptions | test_school_policy.py, test_school_edges.py, test_school_reviews.py |
 | Safe layout and actual unreadable code | test_school_layout.py, test_school_safety.py |
 | Failures, concurrency and publication | test_school_failures.py |
