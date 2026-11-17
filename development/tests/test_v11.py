@@ -403,19 +403,19 @@ class AdvancedCliTest(unittest.TestCase):
     @unittest.skipUnless(shutil.which("ruff"), "optional Ruff formatter")
     def test_real_python_format_only_check_and_reserved_stdout(self):
         source = self.source(content="value=1\nprint(value)\n")
-        checked = self.invoke(source, "--make-prettier=check")
+        checked = self.invoke("format", source, "--check")
         self.assertEqual(checked.returncode, 1, checked.stderr)
-        formatted = self.invoke("--make-prettier")
+        formatted = self.invoke("format")
         self.assertEqual((formatted.returncode, formatted.stdout), (0, ""), formatted.stderr)
         self.assertIn("value = 1", source.read_text())
         self.assertFalse((self.cwd / "main.out").exists())
-        self.assertEqual(self.invoke(source, "--make-prettier=check").returncode, 0)
+        self.assertEqual(self.invoke("format", source, "--check").returncode, 0)
 
     @unittest.skipUnless(shutil.which("clang-format"), "optional native formatter")
     def test_real_native_format_does_not_query_a_compiler(self):
         source = self.source("main.c", "int main(void){return 0;}\n")
         self.env["CC"] = "/missing/compiler"
-        result = self.invoke(source, "--make-prettier")
+        result = self.invoke("format", source)
         self.assertEqual((result.returncode, result.stdout), (0, ""), result.stderr)
         self.assertIn("return 0;", source.read_text())
         self.assertNotEqual(source.read_text(), "int main(void){return 0;}\n")

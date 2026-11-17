@@ -1,0 +1,125 @@
+"""Cached findings remain valid only for identical code/tools/dependencies."""
+import json
+from pathlib import Path
+import shutil
+import shlex
+import unittest
+from unittest import mock
+import test_school_format as fixtures
+
+engine = fixtures.engine
+
+
+@unittest.skipUnless(shutil.which('clang') and shutil.which('clang-format'), 'needs school tools')
+class FormatCacheTest(unittest.TestCase):
+    def setUp(self):
+        self.case = fixtures.SchoolFormatTest('runTest')
+        self.case.setUp()
+        self.addCleanup(self.case.doCleanups)
+        self.source = self.case.source
+        self.source.write_text('int\nmain(void) {\n    return 0;\n}\n')
+        self.cache = self.case.root / 'cache'
+        self.environ = mock.patch.dict(engine.os.environ, XDG_CACHE_HOME=str(self.cache))
+        self.environ.start()
+        self.addCleanup(self.environ.stop)
+        self.config = dict(format_mode='school', protected=[str(self.source)], prettier='format')
+
+    def collect_calls(self, **changes):
+        calls = []
+        original = engine.school_tool
+        def capture(argv, **kwargs):
+            calls.append(argv)
+            return original(argv, **kwargs)
+        with mock.patch.object(engine, 'school_tool', side_effect=capture):
+            result = engine.format_collect(dict(self.config, **changes))
+        return result, calls
+
+    def test_unchanged_second_pass_does_not_repeat_frontend_or_compile(self):
+        first, initial = self.collect_calls()
+        second, repeated = self.collect_calls()
+        self.assertFalse(first.errors)
+        self.assertFalse(second.errors)
+        self.assertTrue(any('-ast-dump=json' in args for args in initial))
+        self.assertFalse(any('-ast-dump=json' in args or '-c' in args for args in repeated), repeated)
+
+    def test_source_change_and_explicit_no_cache_force_fresh_checks(self):
+        self.collect_calls()
+        self.source.write_text(self.source.read_text().replace('return 0;', 'return 37;'))
+        result, calls = self.collect_calls()
+        self.assertTrue(any(item.rule == '5.1' for item in result.errors))
+        self.assertTrue(any('-ast-dump=json' in args for args in calls))
+        _, calls = self.collect_calls(format_cache=False)
+        self.assertTrue(any('-ast-dump=json' in args for args in calls))
+
+    def test_header_change_invalidates_result(self):
+        header = self.case.root / 'values.h'
+        header.write_text('#pragma once\nenum { STATUS = 0 };\n')
+        self.source.write_text('#include "values.h"\nint\nmain(void) {\n    return STATUS;\n}\n')
+        self.collect_calls()
+        _, warm = self.collect_calls()
+        self.assertFalse(any('-ast-dump=json' in args for args in warm), warm)
+        header.write_text('#pragma once\nenum { STATUS = 128 };\n')
+        result, fresh = self.collect_calls()
+        self.assertTrue(any('-ast-dump=json' in args for args in fresh))
+        self.assertTrue(any(item.rule == '5.7' for item in result.errors), result.findings)
+
+    def test_tool_identity_and_engine_revision_invalidate_result(self):
+        self.collect_calls()
+        with mock.patch.object(engine, 'SCHOOL_ENGINE_ID', 'different-policy'):
+            _, calls = self.collect_calls()
+        self.assertTrue(any('-ast-dump=json' in args for args in calls))
+        wrapper = self.case.root / 'formatter'
+        wrapper.write_text('#!/bin/sh\nexec ' + shlex.quote(shutil.which('clang-format')) + ' "$@"\n')
+        wrapper.chmod(0o755)
+        self.collect_calls(native_formatter=str(wrapper))
+        _, warm = self.collect_calls(native_formatter=str(wrapper))
+        self.assertFalse(any('-ast-dump=json' in args for args in warm))
+        wrapper.write_text(wrapper.read_text() + '# upgraded\n')
+        _, fresh = self.collect_calls(native_formatter=str(wrapper))
+        self.assertTrue(any('-ast-dump=json' in args for args in fresh))
+
+    def test_compiled_artifact_does_not_invalidate_source_checks(self):
+        self.collect_calls()
+        (self.case.root / 'program.out').write_bytes(b'compiled program')
+        _, calls = self.collect_calls()
+        self.assertFalse(any('-ast-dump=json' in args for args in calls), calls)
+
+    def test_new_makefile_invalidates_prior_missing_file_finding(self):
+        self.source.write_text('int\ncalculate(void) {\n    return 0;\n}\n')
+        (self.case.root / 'main.h').write_text('#pragma once\nint calculate(void);\n')
+        self.source.write_text('#include "main.h"\n' + self.source.read_text())
+        result, _ = self.collect_calls()
+        self.assertTrue(any(item.rule == '6.6' for item in result.errors))
+        (self.case.root / 'Makefile').write_text('all:\nclean:\n')
+        result, calls = self.collect_calls()
+        self.assertFalse(any(item.rule == '6.6' for item in result.errors), result.findings)
+        self.assertTrue(any('-ast-dump=json' in args for args in calls))
+
+    def test_corrupt_cache_is_recomputed_and_report_decisions_are_not_cached(self):
+        self.collect_calls()
+        path = next(self.cache.rglob('school-*.json'))
+        path.write_text('not JSON')
+        result, calls = self.collect_calls()
+        self.assertFalse(result.errors)
+        self.assertTrue(any('-ast-dump=json' in args for args in calls))
+        record = json.loads(path.read_text())
+        self.assertNotIn('decision', str(record['findings']))
+
+    def test_include_environment_change_forces_fresh_checks(self):
+        self.collect_calls()
+        with mock.patch.dict(engine.os.environ, CPATH=str(self.case.root / 'new-includes')):
+            _, calls = self.collect_calls()
+        self.assertTrue(any('-ast-dump=json' in args for args in calls))
+
+    def test_report_cannot_overwrite_a_related_header(self):
+        header = self.case.root / 'module.h'
+        header.write_text('#pragma once\nint calculate(void);\n')
+        self.source.write_text('#include "module.h"\nint main(void) { return 0; }\n')
+        before = header.read_bytes()
+        with self.assertRaises(engine.CheckUsageError):
+            self.collect_calls(review_report=str(header), overwrite=True)
+        self.assertEqual(header.read_bytes(), before)
+
+    def test_make_dependency_escaping(self):
+        actual = engine.format_dependency_paths('unit: /tmp/a\\ b.h /tmp/money$$.h ' + chr(92) + chr(10) + ' /tmp/hash\\#.h\n')
+        self.assertEqual(actual, ['/tmp/a b.h', '/tmp/money$.h', '/tmp/hash#.h'])

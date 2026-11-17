@@ -7,6 +7,8 @@ import test_school_layout as layout_cases
 engine = policy_cases.engine
 LAYOUT = {rule: (source, expected) for rule, source, expected in layout_cases.LAYOUT_CASES}
 ERRORS = {
+    '3.1': ('int fn(void) { return 0; }', 'int calculate(void) { return 0; }'),
+    '3.2': ('int vychislenie(void) { return 0; }', 'int calculation(void) { return 0; }'),
     '1.1': ('// forbidden control: \x7f\nint main(void) { return 0; }',
             '// ordinary comment\nint main(void) { return 0; }'),
     '3.3': ('enum { red = 0 }; int main(void) { return red; }',
@@ -28,9 +30,9 @@ ERRORS = {
               'int main(void) { int data[1] = {0}; return data[0]; }'),
     '4.7.9': ('int main(void) { int value = 0; if ((value > 0) && (!(value))) { return 1; } return 0; }',
               'int main(void) { int value = 0; if (value > 0 && !value) { return 1; } return 0; }'),
-    '5.1': ('int main(void) { return 2; }',
+    '5.1': ('int main(void) { return 3; }',
             'enum { STATUS = 2 }; int main(void) { return STATUS; }'),
-    '5.2': ('#define STATUS 2\nint main(void) { return STATUS; }',
+    '5.2': ('#define STATUS 3\nint main(void) { return STATUS; }',
             'enum { STATUS = 2 }; int main(void) { return STATUS; }'),
     '5.3': ('#include "stdio.h"\nint main(void) { return 0; }',
             '#include <stdio.h>\nint main(void) { return 0; }'),
@@ -56,14 +58,14 @@ ERRORS = {
              '#include <stdlib.h>\nint main(void) { char *data = calloc(1, sizeof(*data)); free(data); return 0; }'),
 }
 REVIEWS = {
-    '3.1': 'int calc_sqrt(void) { return 0; } int main(void) { return calc_sqrt(); }',
-    '3.2': 'int main(void) { int count = 0; return count; }',
-    '3.5': 'int main(void) { int count = 0; return count; }',
+
+
+    '3.5': 'int main(void) { int count = 0; int *p_count = &count; return *p_count; }',
     '4.6.11': 'int main(void) { goto done; done: return 0; }',
-    '5.4': '#include <stdio.h>\nint main(void) { puts("result"); return 0; }',
-    '5.9': '#include <stdlib.h>\nint main(void) { char *data = malloc(1 * sizeof(*data)); char *resized = 0; if (!data) { return 1; } resized = realloc(data, 1 * sizeof(*data)); if (!resized) { free(data); return 1; } free(resized); return 0; }',
+
+    '5.9': '#include <stdlib.h>\nchar *create_buffer(void) { char *data = malloc(1 * sizeof(*data)); return data; } int main(void) { return 0; }',
     '5.12': '// printf("debug");\nint main(void) { return 0; }',
-    '5.13': '#include <stdio.h>\nvoid print_result(void) { puts("result"); return; } int main(void) { print_result(); return 0; }',
+
     '5.14': 'int total; int main(void) { return total; }',
 }
 
@@ -98,7 +100,7 @@ class SchoolRuleMatrixTest(unittest.TestCase):
         if rule in REVIEWS:
             code = REVIEWS[rule]
             findings = self.policy_case.check(code)
-            self.assertTrue(self.policy_case.has_rule(findings, rule, 'review required'), findings)
+            self.assertTrue(self.policy_case.has_rule(findings, rule, 'warning'), findings)
             reviewed = self.policy_case.check(code, reviewed=(rule,))
             self.assertFalse(self.policy_case.has_rule(reviewed, rule), reviewed)
             exercised = True
@@ -106,6 +108,16 @@ class SchoolRuleMatrixTest(unittest.TestCase):
             getattr(self, CUSTOM[rule])()
             exercised = True
         self.assertTrue(exercised, 'Rule has no behavioral contract: ' + rule)
+
+    def manual_output_intent(self):
+        findings = self.policy_case.check('#include <stdio.h>\nint main(void) { puts("result"); return 0; }')
+        self.assertFalse(self.policy_case.has_rule(findings, '5.4'), findings)
+
+    def helper_output(self):
+        ordinary = '#include <stdio.h>\nvoid print_result(void) { puts("result"); return; }'
+        self.assertFalse(self.policy_case.has_rule(self.policy_case.check(ordinary), '5.13'))
+        prohibited = 'int puts(const char *);\nvoid getline(void) { puts("result"); return; }'
+        self.assertTrue(self.policy_case.has_rule(self.policy_case.check(prohibited), '5.13', 'error'))
 
     def width(self):
         self.layout_case.test_T2_2_unicode_width_boundary_and_controls()
@@ -155,6 +167,7 @@ class SchoolRuleMatrixTest(unittest.TestCase):
 
 
 CUSTOM = {
+    '5.4': 'manual_output_intent', '5.13': 'helper_output',
     '2.2': 'width', '2.3': 'continuation', '4.5.3': 'parameters', '4.6.12': 'catches',
     '6.1': 'module_pair', '6.2': 'guard', '6.3': 'own_header',
     '6.4': 'owner', '6.5': 'minimal', '6.6': 'makefile',

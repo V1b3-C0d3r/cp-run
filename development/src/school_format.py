@@ -9,7 +9,7 @@ SCHOOL_STYLE = {
     'AllowShortFunctionsOnASingleLine': 'None', 'AllowShortLoopsOnASingleLine': False,
     'AllowShortIfStatementsOnASingleLine': 'Never', 'BinPackParameters': False,
     'SortIncludes': 'Never', 'BreakStringLiterals': False, 'AllowShortEnumsOnASingleLine': False,
-    'CommentPragmas': '^ *school-reviewed',
+    'CommentPragmas': '^ *school-(reviewed|justified|warning)',
 }
 
 
@@ -104,7 +104,7 @@ def school_publish(jobs, identities=None):
                 os.unlink(temporary)
 
 
-def execute_school_format(config):
+def school_analyze(config):
     """Publish safe layout first; unresolved obligations still return failure."""
     clang = shutil.which('clang')
     formatter = shutil.which(config.get('native_formatter', 'clang-format'))
@@ -114,8 +114,8 @@ def execute_school_format(config):
     banner = school_tool([gcc, '--version'], capture_output=True, text=True)
     if banner.returncode or 'clang' in banner.stdout.lower() or not re.search(r'GNU|gcc|g\+\+', banner.stdout):
         raise CheckSetupError('school needs GNU GCC; set CP_RUN_GCC to its executable.')
-    jobs, diagnostics, identities = [], [], {}
-    for value in dict.fromkeys(config.get('protected', [])):
+    jobs, diagnostics, identities, cache_jobs, inputs = [], [], {}, [], set()
+    for value in dict.fromkeys(format_source_list(config)):
         source = Path(value).resolve()
         if source.suffix not in ('.c', '.h', '.hpp', '.cc', '.cpp', '.cxx', '.C'):
             raise CheckUsageError('school supports C and C++ sources only')
@@ -126,10 +126,19 @@ def execute_school_format(config):
             text = original.decode('utf-8')
         except UnicodeDecodeError as error:
             raise CheckSetupError(str(source) + ': school: expected UTF-8 source: ' + str(error)) from error
-        original_tree, parse_issues = school_parse(source, text, clang)
-        candidate, issues = text, []
+        clean = format_strip_automatic(text)
+        cpp_driver = shutil.which(str(Path(gcc).with_name(Path(gcc).name.replace('gcc', 'g++')))) or gcc
+        tools = [clang, formatter, gcc, cpp_driver]
+        cached = format_cache_load(source, clean, tools, config)
+        if cached is not None:
+            diagnostics.extend(cached[0])
+            inputs.update(cached[1])
+            jobs.append((source, original, clean.encode('utf-8')))
+            continue
+        original_tree, parse_issues = school_parse(source, clean, clang)
+        candidate, issues = clean, []
         if original_tree is not None:
-            candidate, issues = school_prepare(source, text, clang, original_tree)
+            candidate, issues = school_prepare(source, clean, clang, original_tree)
         style = dict(SCHOOL_STYLE)
         if original_tree is None:
             style['InsertBraces'] = False
@@ -140,49 +149,52 @@ def execute_school_format(config):
         candidate = formatted.stdout
         tree = None
         if original_tree is not None:
-            candidate, tree, final_parse = school_apply_layout(source, candidate, clang)
+            candidate, tree, final_parse = school_apply_layout(source, candidate, clang, original_tree if candidate == clean else None)
             if tree is None:
                 raise CheckSetupError(str(source) + ': school: candidate failed parsing:\n' + '\n'.join(final_parse))
-            school_verify_layout(source, text, original_tree, candidate, tree)
-            issues.extend(SchoolPolicy(source, candidate, tree).run())
+            school_verify_layout(source, clean, original_tree, candidate, tree)
+            policy = SchoolPolicy(source, candidate, tree)
+            issues.extend(policy.run())
         else:
-            if [token for token, _ in school_tokens(text)] != [token for token, _ in school_tokens(candidate)]:
+            if [token for token, _ in school_tokens(clean)] != [token for token, _ in school_tokens(candidate)]:
                 raise CheckSetupError(str(source) + ': school: unsupported syntax prevents verifying token changes.')
-            issues.append(str(source) + ': school frontend error: token layout only; rewrite the GNU-only construct to enable all AST checks.\n' +
-                          '\n'.join(parse_issues))
+            issues.append(FormatFinding(source, 1, 1, 'frontend', 'error',
+                          'token layout only; rewrite the GNU-only construct to enable all AST checks.\n' + '\n'.join(parse_issues)))
+        dependency_identities = original_tree.get('school_dependency_identities', {}) if original_tree else {}
+        dependencies = list(tree.get('school_dependencies', [])) if tree is not None else []
         with tempfile.TemporaryDirectory(prefix='cp-school-') as directory:
             path = Path(directory) / source.name
             path.write_text(candidate)
             argv, flags, main, input_path, includes = school_gcc_arguments(source, path, directory, gcc, tree)
             output = str(Path(directory) / 'verify.out')
-            checked = school_tool([*argv, *flags, *([] if main else ['-c']), '-o', output],
+            dependency = Path(directory) / 'gcc.d'
+            checked = school_tool([*argv, *flags, '-c', '-MD', '-MF', str(dependency), '-MT', 'cp_source', '-o', output],
                                   capture_output=True, text=True)
+            if dependency.exists():
+                dependencies.extend(value for value in format_dependency_paths(dependency.read_text())
+                                    if not Path(value).is_relative_to(directory))
             if checked.returncode:
                 syntax = school_syntax_gate(argv, flags)
                 if syntax.returncode:
                     raise CheckSetupError(str(source) + ': school: syntax prevents safe publication:\n' +
                                           syntax.stderr.replace(str(path), str(source)))
-                issues.append(str(source) + ': school GCC policy error: fix compiler diagnostics:\n' +
-                              checked.stderr.replace(str(path), str(source)))
-            if tree is not None:
-                issues.extend(school_resource_analysis(source, path, input_path, clang, includes))
+                issues.append(FormatFinding(source, 1, 1, 'GCC', 'error', 'fix compiler diagnostics:\n' +
+                              checked.stderr.replace(str(path), str(source))))
+            if tree is not None and school_needs_resource_analysis(source, candidate, tree):
+                for finding in school_resource_analysis(source, path, input_path, clang, includes):
+                    if finding.source != str(source) or (finding.rule, finding.line) not in policy.error_justifications:
+                        issues.append(finding)
+        for dependency_name, identity in dependency_identities.items():
+            if format_file_identity(dependency_name) != identity:
+                raise CheckSetupError('dependency changed during formatting: ' + dependency_name)
+        inputs.update(dependencies)
+        inputs.update(str(value) for value in (source.with_suffix('.h'), source.parent / 'Makefile', source.parent / 'makefile'))
+        if tree is not None:
+            cache_jobs.append((source, candidate, list(issues), dependencies, tools))
         diagnostics.extend(issues)
         jobs.append((source, original, candidate.encode('utf-8')))
-    changed = [job for job in jobs if job[1] != job[2]]
-    check = config.get('prettier') == 'check'
-    if check:
-        for source, _, _ in changed:
-            print(str(source) + ': formatting differs; run cp-run format --school FILE. Policy locations below refer to the formatted candidate.', file=sys.stderr)
-    else:
-        school_publish(jobs, identities)
-        for source, _, _ in changed:
-            print(str(source) + ': school layout applied', file=sys.stderr)
-    for diagnostic in school_compact_diagnostics(diagnostics):
-        print(diagnostic, file=sys.stderr)
-    if diagnostics:
-        print('school: resolve the reported errors/reviews and run format again.', file=sys.stderr)
-        if any('review required:' in item for item in diagnostics):
-            print('After inspecting a review, add a file comment: // school-reviewed RULE: specific reason', file=sys.stderr)
-    else:
-        print('school: automatic checks passed; required author reviews are explicit in source comments.', file=sys.stderr)
-    return int(bool(diagnostics) or check and bool(changed))
+    return FormatResult(diagnostics, jobs, identities, cache_jobs, list(inputs))
+
+
+def execute_school_format(config):
+    return execute_format_review(dict(config, format_mode='school'))
