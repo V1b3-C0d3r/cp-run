@@ -33,7 +33,14 @@ class School151PolicyTest(unittest.TestCase):
     def test_enum_N_is_allowed_in_c_and_cpp(self):
         for extension in ('main.c', 'main.cpp'):
             findings = self.case.check('enum { N = 16 }; int main(void) { return N != 0; }', extension)
-            self.assertFalse(any(item.rule in ('3.1', '3.3', '3.7') for item in findings), findings)
+            self.assertFalse(any(item.rule in ('3.1', '3.3', '3.7', '5.2') for item in findings), findings)
+
+    def test_enum_number_name_warning_requires_literal_number_words(self):
+        for name, expected in (('ONE_HUNDRED', True), ('MINUS_ONE', True), ('ZERO', True),
+                               ('STATUS', False), ('MAX_COUNT', False), ('ONE_SECOND', False),
+                               ('MINUS', False), ('N', False)):
+            findings = self.case.check('enum { ' + name + ' = 0 }; int main(void) { return 0; }')
+            self.assertEqual(self.case.has_rule(findings, '5.2', 'warning'), expected, name)
 
     def test_ambiguous_constants_are_rejected_in_each_declaration_form(self):
         for name in ('I', 'O'):

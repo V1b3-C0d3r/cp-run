@@ -585,8 +585,17 @@ class SchoolPolicy:
             if not any(parent.get('kind') == 'EnumConstantDecl' for parent in ancestors):
                 self.emit('5.1', 'confirm -1 is an error sentinel; otherwise use a named constant.', node, review=True)
         if kind == 'EnumConstantDecl':
-            self.emit('5.2', 'enum name spells a number rather than its use: ' + node.get('name', ''),
-                      node, review=True)
+            # Report lexical evidence, never infer an identifier's meaning.
+            words = node.get('name', '').upper().split('_')
+            if words[0] in ('MINUS', 'PLUS', 'NEGATIVE', 'POSITIVE'):
+                words = words[1:]
+            numbers = {'ZERO', 'ONE', 'TWO', 'THREE', 'FOUR', 'FIVE', 'SIX', 'SEVEN', 'EIGHT', 'NINE',
+                       'TEN', 'ELEVEN', 'TWELVE', 'THIRTEEN', 'FOURTEEN', 'FIFTEEN', 'SIXTEEN',
+                       'SEVENTEEN', 'EIGHTEEN', 'NINETEEN', 'TWENTY', 'THIRTY', 'FORTY', 'FIFTY',
+                       'SIXTY', 'SEVENTY', 'EIGHTY', 'NINETY', 'HUNDRED', 'THOUSAND', 'MILLION', 'BILLION'}
+            if words and all(word in numbers for word in words):
+                self.emit('5.2', 'enum name spells a number rather than its use: ' + node.get('name', ''),
+                          node, review=True)
         if kind == 'UnaryOperator' and node.get('opcode') == '*' and inner:
             base = school_unwrap(inner[0])
             if base.get('kind') == 'BinaryOperator' and base.get('opcode') == '+':
