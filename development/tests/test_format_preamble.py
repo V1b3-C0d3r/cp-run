@@ -116,6 +116,20 @@ class PreambleCacheTest(unittest.TestCase):
             self.assertTrue(any('c++-header' in args for args in calls))
             self.assertIn(128, tree['school_external_values'].values())
 
+    def test_failed_first_header_reports_lines_without_dumping_a_partial_ast(self):
+        (self.source.parent / 'bad.hpp').write_text('#error unsupported header\n')
+        code = '#include "bad.hpp"\nint main(void) { return 0; }\n'
+        real = engine.school_tool
+        calls = []
+        def capture(argv, **options):
+            calls.append(argv)
+            return real(argv, **options)
+        with mock.patch.object(engine, 'school_tool', side_effect=capture):
+            tree, issues = engine.school_parse(self.source, code, shutil.which('clang'))
+        self.assertIsNone(tree)
+        self.assertTrue(issues[0].split('school parser error:', 1)[1].startswith('\n'))
+        self.assertFalse(any('-ast-dump=json' in args for args in calls))
+
     def test_bad_later_header_keeps_a_small_partial_preamble_and_revalidates_it(self):
         (self.source.parent / 'bad.hpp').write_text('#error unsupported header\n')
         code = '#include "values.hpp"\n#include "bad.hpp"\nint main(void) { return STATUS; }\n'

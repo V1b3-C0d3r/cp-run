@@ -303,7 +303,7 @@ def school_frontend_parse(source, text, clang, cpp):
                                 input=text, text=True, capture_output=True)
             if probe.returncode:
                 dependencies = format_dependency_paths(dependency.read_text()) if dependency.exists() else []
-                return None, SchoolParseIssues([str(source) + ': school parser error:\\n' + probe.stderr], dependencies)
+                return None, SchoolParseIssues([str(source) + ': school parser error:\n' + probe.stderr], dependencies)
         result = school_tool([*invocation, *(['-include-pch', entry['pch']] if entry else []), '-'],
                              input=school_preamble_input(text, entry) if entry else text,
                              text=True, capture_output=True)

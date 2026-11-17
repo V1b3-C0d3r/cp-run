@@ -4523,7 +4523,7 @@ def format_clang_analyze(config):
 
 # Source: format_cache.py
 """Bounded result cache; unchanged source, tools and dependencies are mandatory."""
-SCHOOL_ENGINE_ID = 'c976214c03682016d172b19c4bf3555b68e3ae3598bb3ded7682951e38dbf08c'
+SCHOOL_ENGINE_ID = '65a6bc3ef7632db50164ad78867a5579fe8f2bb47ec26aa314cb9cb01e568412'
 
 
 def format_file_identity(value):
@@ -5544,7 +5544,7 @@ def school_frontend_parse(source, text, clang, cpp):
                                 input=text, text=True, capture_output=True)
             if probe.returncode:
                 dependencies = format_dependency_paths(dependency.read_text()) if dependency.exists() else []
-                return None, SchoolParseIssues([str(source) + ': school parser error:\\n' + probe.stderr], dependencies)
+                return None, SchoolParseIssues([str(source) + ': school parser error:\n' + probe.stderr], dependencies)
         result = school_tool([*invocation, *(['-include-pch', entry['pch']] if entry else []), '-'],
                              input=school_preamble_input(text, entry) if entry else text,
                              text=True, capture_output=True)
