@@ -160,6 +160,23 @@ def school_ast_signature(text, tree, void_names=()):
         if local(node) and node.get('kind') == 'LabelStmt':
             labels.setdefault(node.get('declId'), len(labels))
 
+    # Clang embeds source coordinates in closure type spellings, including
+    # instantiated library function signatures. Assign each closure a stable
+    # ordinal; two distinct lambdas must remain two distinct types.
+    closure_pattern = re.compile(r'\(lambda at <stdin>:\d+:\d+\)')
+    closure_types = {}
+    for node in school_nodes(tree):
+        if node.get('kind') == 'LambdaExpr':
+            for match in closure_pattern.finditer(node.get('type', {}).get('qualType', '')):
+                closure_types.setdefault(match[0], len(closure_types))
+
+    def stable_type(value):
+        if not value:
+            return value
+        return closure_pattern.sub(
+            lambda match: '<source-lambda-{}>'.format(closure_types[match[0]])
+            if match[0] in closure_types else match[0], value)
+
     properties = ('name', 'opcode', 'value', 'isPostfix', 'isArrow', 'castKind',
                   'storageClass', 'tagUsed', 'variadic', 'hasElse', 'init', 'valueCategory')
     wrappers = {'ImplicitCastExpr', 'ParenExpr', 'ConstantExpr', 'ExprWithCleanups',
@@ -187,12 +204,12 @@ def school_ast_signature(text, tree, void_names=()):
             if name in void_names and (kind in ('FunctionDecl', 'CXXMethodDecl', 'CXXConversionDecl')
                                        or reference.get('kind') == 'FunctionDecl'):
                 typ = typ.replace('()', '(void)', 1)
-            values.append(('type', typ))
+            values.append(('type', stable_type(typ)))
         if reference:
             target = declarations.get(reference.get('id'))
             values.append(('reference', target if target is not None else
                            (reference.get('kind'), reference.get('name'),
-                            reference.get('type', {}).get('qualType'))))
+                            stable_type(reference.get('type', {}).get('qualType')))))
         if kind == 'GotoStmt':
             values.append(('target', labels.get(node.get('targetLabelDeclId'))))
         # Formatting naturally updates __LINE__ values. Preserve its invocation

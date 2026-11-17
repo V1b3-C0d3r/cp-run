@@ -3,6 +3,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import copy
 import unittest
 import test_school_format as cli_cases
 import test_school_layout as layout_cases
@@ -23,6 +24,28 @@ class SchoolAstSafetyTest(unittest.TestCase):
         tree, issues = engine.school_parse(self.source, text, self.case.clang)
         self.assertEqual(issues, [], issues)
         return tree
+
+    def test_lambda_coordinates_change_without_changing_closure_identity(self):
+        original = ('template<class Fn> int apply(Fn fn){return fn();}'
+                    'int main(){auto first=[](){return 0;};auto second=[](){return 1;};'
+                    'return apply(first)+apply(second);}')
+        before = self.parsed(original, 'main.cpp')
+        candidate = engine.school_tool(
+            [shutil.which('clang-format'), '--style=' + engine.json.dumps(engine.SCHOOL_STYLE)],
+            input=original, capture_output=True, text=True).stdout
+        after = self.parsed(candidate, 'main.cpp')
+        engine.school_verify_layout(self.source, original, before, candidate, after)
+        signature = engine.school_ast_signature(candidate, after)
+        self.assertIn('<source-lambda-0>', repr(signature))
+        self.assertIn('<source-lambda-1>', repr(signature))
+        changed = copy.deepcopy(after)
+        second = next(node for node in engine.school_nodes(changed)
+                      if node.get('kind') == 'VarDecl' and node.get('name') == 'second')
+        for node in engine.school_nodes(changed):
+            reference = node.get('referencedDecl', {})
+            if reference.get('kind') == 'VarDecl' and reference.get('name') == 'first':
+                reference['id'] = second['id']
+        self.assertNotEqual(signature, engine.school_ast_signature(candidate, changed))
 
     def test_ugly_dangling_else_and_literal_data_are_preserved(self):
         text = 'int main(){int first=0,second=1;char text[]="x;a+b{ else }";if(first)if(second)return text[0];else return 0;return 0;}'
@@ -95,6 +118,16 @@ class SchoolPracticalCliTest(unittest.TestCase):
         self.case = cli_cases.SchoolFormatTest('runTest')
         self.case.setUp()
         self.addCleanup(self.case.doCleanups)
+
+    def test_real_sort_lambda_can_be_formatted_and_checked(self):
+        source = self.case.root / 'main.cpp'
+        source.write_text('#include <algorithm>\nenum{LENGTH=3};'
+                          'int main(){int values[LENGTH]={2,1,0};'
+                          'std::sort(values,values+LENGTH,[](int lhs,int rhs){return lhs<rhs;});return 0;}')
+        result = self.case.invoke('--school', source)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        checked = self.case.invoke('--school', source, '--check')
+        self.assertEqual(checked.returncode, 0, checked.stderr)
 
     def test_real_ugly_code_is_beautified_without_unverifiable_reviews(self):
         text = '#include <stdio.h>\nint main(){int n=0;scanf("%d",&n);if(n)printf("%d\\n",n);return 0;}'
