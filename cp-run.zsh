@@ -8,7 +8,7 @@
 emulate -LR zsh
 setopt NO_UNSET PIPE_FAIL EXTENDED_GLOB
 unsetopt ALIASES
-typeset -r PROGRAM=cp-run VERSION=1.5.0
+typeset -r PROGRAM=cp-run VERSION=1.5.1
 typeset -r SCRIPT_PATH=${0:A} # Settings follow the real script when invoked through a symlink.
 
 # CP_RUN_SETTINGS_BEGIN
@@ -148,8 +148,9 @@ Language and build:
                           Auto in configure: redirect saved input/output files
                           Auto accepts optional IN [OUT] operands after -f
   format [--clang|--school] [FILE] [--check]  Format source and stop
-  --make-prettier         Alias for format
-  --make-prettier=check   Check formatting without editing; never compile or run
+  --review --annotate     Review findings; optionally annotate accepted warnings
+  --report=FILE           Export formatter findings and decisions
+  --strict-format[=MODE]  Require error-free formatting before compilation
 
 Routing and checking:
   --wsp-dir=DIR           Workspace path; default ./; value is required
@@ -278,7 +279,9 @@ parse_cli() {
                     bundle_stream=${arg#*=}
                     case "$bundle_stream" in in|ans) ;; *) fail 'pack/unpack accepts =in, =ans, or no selector for both' ;; esac
                 fi ;;
-            format) action=ordinary; prettier=format; shift ;;
+            format)
+                action=ordinary; prettier=format; shift
+                if [[ ${1-} == stress ]]; then action=stress; shift; fi ;;
             compile|run|stress|companion|configure) action=$1; shift ;;
             debug|debug=*)
                 action=debug; value=${1#debug}; value=${value#=}
@@ -403,6 +406,15 @@ parse_cli() {
                 else minimize=sequence; fi
                 case "$minimize" in sequence|lines|cases) ;; *) fail '--minimize accepts sequence, lines or cases' ;; esac ;;
             --validator|--validator=*) take_value "$@"; (( ! consumed )) || shift; validator=$value ;;
+            --strict-format|--strict-format=*|--sctrict-format|--sctrict-format=*)
+                strict_formatter=$FORMAT_MODE
+                [[ $arg != *=* || -z ${arg#*=} ]] || strict_formatter=${arg#*=}
+                case $strict_formatter in clang|school) ;; *) fail '--strict-format accepts clang or school' ;; esac ;;
+            --no-cache) format_cache=0 ;;
+            --review) review=1 ;;
+            --annotate|--anotate) annotate=1; review=1 ;;
+            --report|--report=*)
+                take_value "$@"; (( ! consumed )) || shift; review_report=$value ;;
             --doctor) doctor_requested=1 ;;
             --clang|--school)
                 [[ -n $prettier ]] || fail 'use format --clang or format --school'
@@ -410,11 +422,7 @@ parse_cli() {
             --check)
                 [[ -n $prettier ]] || fail '--check requires format'
                 prettier=check ;;
-            --make-prettier|--make-prettier=*)
-                if [[ $arg == *=* ]]; then
-                    [[ ${arg#*=} == check ]] || fail '--make-prettier accepts check; omit its value to format'
-                    prettier=check
-                else prettier=format; fi ;;
+            --make-prettier|--make-prettier=*) fail "unknown option: $arg" ;;
             --port|--port=*|--wait|--wait=*)
                 take_value "$@"; (( ! consumed )) || shift
                 companion_controls=1
@@ -1380,6 +1388,7 @@ main() {
     local test_folder=$DEFAULT_TEST_FOLDER
     local bundle_format=legacy bundle_stream=both report_tests=$DEFAULT_REPORT_TESTS
     local minimize= validator=
+    local format_cache=1 strict_formatter= review=0 annotate=0 review_report=
     local format_mode=$FORMAT_MODE prettier= companion_port=$COMPANION_PORT companion_wait=$COMPANION_WAIT
     local -i doctor_requested=0 interpreter_given=0 compiler_given=0
     local -i data_controls=0 layout_controls=0 companion_controls=0 report_controls=0 bundle_given=0
@@ -1411,6 +1420,17 @@ main() {
         config=(interpreter "$interpreter_choice" native_formatter "$NATIVE_FORMATTER" python_formatter "$PYTHON_FORMATTER")
         python_action doctor; return $?
     fi
+    if (( ! format_cache )); then
+        [[ -n $prettier || -n $strict_formatter ]] || fail '--no-cache requires format or --strict-format'
+    fi
+    if (( review || annotate )); then
+        [[ -n $prettier ]] || fail '--review and --annotate require format'
+    fi
+    if (( annotate )); then (( review )) || fail '--annotate requires --review'; fi
+    if [[ -n $review_report && -z $prettier && -z $strict_formatter ]]; then
+        fail '--report requires format or --strict-format'
+    fi
+    [[ -z $prettier || -z $strict_formatter ]] || fail '--strict-format is a compilation option'
     # Formatting is a terminal action, before artifact planning or any compiler
     # lookup. A successful formatter can never fall through into preparation/run.
     if [[ -n $prettier ]]; then
@@ -1436,7 +1456,9 @@ main() {
                 workspace_file_path "$role"; protected_files+=("${value:A}")
             done
         fi
-        config=(format_mode "$format_mode" prettier "$prettier" native_formatter "$NATIVE_FORMATTER" python_formatter "$PYTHON_FORMATTER")
+        if [[ -n $review_report ]]; then workspace_file_path "$review_report"; review_report=$value; fi
+        config=(format_mode "$format_mode" prettier "$prettier" native_formatter "$NATIVE_FORMATTER" python_formatter "$PYTHON_FORMATTER"
+                review "$review" annotate "$annotate" review_report "$review_report" overwrite "$overwrite" script "$SCRIPT_PATH" format_cache "$format_cache")
         python_action format; return $?
     fi
     if [[ -n $transfer_action ]]; then
@@ -1459,7 +1481,7 @@ main() {
     if (( version_requested )); then printf '%s %s\n' "$PROGRAM" "$VERSION"; resolve_compiler; "$compiler" --version; return $?; fi
 
     (( ! companion_controls )) || [[ $action == companion ]] || fail '--port/--wait require companion'
-    (( ! data_controls )) || [[ $action == pack || $action == unpack || $action == companion ]] || fail 'import controls require pack/unpack/companion'
+    (( ! data_controls )) || [[ $action == pack || $action == unpack || $action == companion || -n $strict_formatter && -n $review_report ]] || fail 'import controls require pack/unpack/companion'
     (( ! layout_controls )) || (( mult )) || [[ $action == pack || $action == unpack || $action == companion ]] || fail 'layout options require mult/pack/unpack/companion'
     (( ! report_controls )) || [[ $action == test || $action == stress ]] || fail '--report-tests requires test/stress'
     (( ! stop_on_failure )) || [[ $action == stress ]] || fail '--stop-on-failure requires stress'
@@ -1620,6 +1642,17 @@ main() {
             done
         done
         protected_files=("${sources[@]}" "${artifacts[@]}")
+    fi
+    if [[ -n $strict_formatter ]]; then
+        (( ! binary_mode )) || fail '--strict-format needs source files'
+        local -a all_protected=("${protected_files[@]}")
+        protected_files=("${sources[@]}" "${artifacts[@]}" "$input_file" "$answer_file" "$result_file")
+        if [[ -n $review_report ]]; then workspace_file_path "$review_report"; review_report=$value; fi
+        config=(format_mode "$strict_formatter" prettier check native_formatter "$NATIVE_FORMATTER" python_formatter "$PYTHON_FORMATTER"
+                review_report "$review_report" overwrite "$overwrite" script "$SCRIPT_PATH" format_cache "$format_cache" format_source_count "${#sources}")
+        for (( value=1; value<=${#sources}; ++value )); do config[format_source_$value]=${sources[value]}; done
+        python_action strict-format || return $?
+        protected_files=("${all_protected[@]}")
     fi
     output_abs=${artifacts[1]}
     config=(operation "$action" auto "$auto" mult "$mult" workspace "${workspace:-$cwd}" destination "$destination"
@@ -4051,6 +4084,549 @@ def execute_companion(config):
     return 0
 
 
+# Source: format_review.py
+"""Structured findings, temporary annotations and two-phase interactive review."""
+from dataclasses import dataclass, field
+import difflib
+import hashlib
+
+
+def format_source_list(config):
+    return config.get('format_sources', config.get('protected', []))
+
+
+class FormatFinding(str):
+    """Render findings without making callers parse text to discover severity."""
+    def __new__(cls, source, line, column, rule, severity, message):
+        value = str.__new__(cls, '{}:{}:{}: school {} {}: {}'.format(
+            source, line, column, rule, severity, message))
+        value.source, value.line, value.column = str(source), int(line), int(column)
+        value.rule, value.severity, value.message = rule, severity, message
+        return value
+
+    def record(self):
+        return dict(file=self.source, line=self.line, column=self.column, rule=self.rule,
+                    severity=self.severity, message=self.message)
+
+
+@dataclass
+class FormatResult:
+    findings: list = field(default_factory=list)
+    jobs: list = field(default_factory=list)
+    identities: dict = field(default_factory=dict)
+    cache_jobs: list = field(default_factory=list)
+    inputs: list = field(default_factory=list)
+
+    @property
+    def errors(self):
+        return [item for item in self.findings if item.severity == 'error']
+
+    @property
+    def warnings(self):
+        return [item for item in self.findings if item.severity != 'error']
+
+
+FORMAT_MARKER = re.compile(
+    r'/\*\s*(school-(?:error-justified|justified|error-comment|warning-comment|error|warning))'
+    r'\s+([0-9.]+)(?:\s*:\s*(.*?))?\s*\*/', re.S)
+
+
+def format_annotations(text):
+    """Only real comments create annotations; consecutive markers share a target."""
+    tokens = list(SCHOOL_LEXER.finditer(text))
+    for token in tokens:
+        if not token.group('comment'):
+            continue
+        marker = FORMAT_MARKER.fullmatch(token[0])
+        if not marker:
+            continue
+        end = token.end()
+        while True:
+            while end < len(text) and text[end].isspace():
+                end += 1
+            following = next((item for item in tokens if item.start() == end), None)
+            if following and FORMAT_MARKER.fullmatch(following[0]):
+                end = following.end()
+            else:
+                break
+        yield token, marker, text[:end].count('\n') + 1
+
+
+def format_strip_automatic(text):
+    """Remove only managed temporary notes, including leftovers after SIGKILL."""
+    edits = []
+    for token, marker, _ in format_annotations(text):
+        if marker[1] not in ('school-error', 'school-warning'):
+            continue
+        start, end = token.span()
+        left = text.rfind('\n', 0, start) + 1
+        right = text.find('\n', end)
+        right = len(text) if right < 0 else right + 1
+        if not text[left:start].strip() and not text[end:right].strip():
+            edits.append((left, right))
+        else:
+            if text[end:end + 1] == ' ':
+                end += 1
+            edits.append((start, end))
+    for start, end in sorted(set(edits), reverse=True):
+        text = text[:start] + text[end:]
+    return text
+
+
+def format_report_target(value, protected, overwrite=False):
+    target = Path(value).expanduser().absolute()
+    for name in protected:
+        source = Path(name)
+        if target.resolve() == source.resolve() or target.exists() and source.exists() and os.path.samefile(target, source):
+            raise CheckUsageError('report collides with a protected file: ' + str(target))
+    if target.is_symlink() or target.exists() and not target.is_file():
+        raise CheckUsageError('report must be a regular file: ' + str(target))
+    if target.exists() and not overwrite:
+        raise CheckUsageError('report exists; use --overwrite: ' + str(target))
+    if not target.parent.is_dir():
+        raise CheckUsageError('report directory not found: ' + str(target.parent))
+    return target
+
+
+class FormatReport:
+    """Write initial snapshots before decisions and update the final audit trail."""
+    def __init__(self, config):
+        self.protected = config.get('protected', [])
+        self.overwrite = config.get('overwrite', False)
+        value = config.get('review_report')
+        self.target = format_report_target(value, self.protected, self.overwrite) if value else None
+        self.owned = {}
+        self.initial, self.records = [], []
+        self.build_interrupted = False
+        self.state, self.phase = 'pending', ''
+
+    def write(self, target=None):
+        target = target or self.target
+        if target is None:
+            return
+        if target in self.owned and target.read_bytes() != self.owned[target]:
+            raise CheckSetupError('report changed during review: ' + str(target))
+        data = (json.dumps(dict(schema=1, state=self.state, phase=self.phase, build_interrupted=self.build_interrupted,
+                               initial=self.initial, findings=self.records),
+                           ensure_ascii=False, indent=2) + '\n').encode('utf-8')
+        descriptor, temporary = tempfile.mkstemp(prefix='.cp-review-', dir=target.parent)
+        try:
+            with os.fdopen(descriptor, 'wb') as stream:
+                stream.write(data)
+            if target in self.owned or self.overwrite:
+                os.replace(temporary, target)
+            else:
+                os.link(temporary, target)  # Exclusive creation closes a preflight race.
+            self.owned[target] = data
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+
+
+def format_comment(source, finding, text='', kind='comment'):
+    """Place metadata before the affected physical line without touching tokens."""
+    if any(ord(char) < 32 for char in text) or '*/' in text:
+        raise CheckUsageError('comment contains a control character or */')
+    original = source.read_bytes()
+    decoded = original.decode('utf-8')
+    lines = decoded.splitlines(keepends=True)
+    if not 1 <= finding.line <= len(lines):
+        raise CheckSetupError('annotation location changed: ' + str(source))
+    position = sum(len(line) for line in lines[:finding.line - 1])
+    for token in SCHOOL_LEXER.finditer(decoded):
+        if token.start() < position < token.end():
+            raise CheckSetupError('cannot annotate inside a multiline literal/comment: ' + str(source))
+    if any(left < position < right for left, right in school_directive_spans(decoded)):
+        raise CheckSetupError('cannot annotate inside a continued directive: ' + str(source))
+    if kind == 'justified':
+        marker = 'school-error-justified' if finding.severity == 'error' else 'school-justified'
+    else:
+        marker = 'school-' + ('error' if finding.severity == 'error' else 'warning')
+        if kind == 'comment':
+            marker += '-comment'
+    line = lines[finding.line - 1]
+    indent = line[:len(line) - len(line.lstrip(' '))]
+    note = indent + '/* {} {}{} */\n'.format(marker, finding.rule, ': ' + text.strip() if text.strip() else '')
+    candidate = decoded[:position] + note + decoded[position:]
+    if [value for value, _ in school_tokens(decoded)] != [value for value, _ in school_tokens(candidate)]:
+        raise CheckSetupError('annotation would change source tokens')
+    school_publish([(source, original, candidate.encode('utf-8'))])
+
+
+def format_cleanup(paths):
+    jobs = []
+    for value in dict.fromkeys(paths):
+        source = Path(value)
+        if source.is_file():
+            original = source.read_bytes()
+            try:
+                candidate = format_strip_automatic(original.decode('utf-8')).encode('utf-8')
+            except UnicodeDecodeError:
+                continue
+            jobs.append((source, original, candidate))
+    school_publish(jobs)
+
+
+def format_map_line(before, after, line):
+    old, new = before.splitlines(), after.splitlines()
+    for tag, start, end, other, finish in difflib.SequenceMatcher(None, old, new, autojunk=False).get_opcodes():
+        if start <= line - 1 < end:
+            return other + (line - 1 - start if tag == 'equal' else 0) + 1
+    return max(1, min(line, len(new)))
+
+
+def format_snapshot(config):
+    return {str(Path(value).resolve()): Path(value).read_bytes().decode('utf-8', errors='replace')
+            for value in [*format_source_list(config), *config.get('review_related', [])] if Path(value).is_file()}
+
+
+def format_collect(config):
+    """Analyze all roles, then publish safe layout; check mode remains read-only."""
+    result = school_analyze(config) if config.get('format_mode') == 'school' else format_clang_analyze(config)
+    if config.get('review_report'):
+        format_report_target(config['review_report'], [*config.get('protected', []), *result.inputs], True)
+    check = config.get('prettier') == 'check'
+    if check:
+        for source, before, after in result.jobs:
+            if format_strip_automatic(before.decode('utf-8')) != format_strip_automatic(after.decode('utf-8')):
+                result.findings.append(FormatFinding(source, 1, 1, 'layout', 'error', 'formatting differs'))
+    else:
+        school_publish(result.jobs, result.identities)
+    for source, candidate, findings, dependencies, tools in result.cache_jobs:
+        format_cache_store(source, candidate, findings, dependencies, tools, config)
+    return result
+
+
+def execute_format_review(config, report=None):
+    """Resolve errors first; only then expose and process review warnings."""
+    if config.get('review') and config.get('prettier') == 'check':
+        raise CheckUsageError('--review conflicts with --check')
+    if config.get('review') and not (sys.stdin.isatty() and sys.stderr.isatty()):
+        raise CheckUsageError('--review needs a terminal')
+    report = report or FormatReport(config)
+    result, snapshots = None, format_snapshot(config)
+    active, seen_phases = [], set()
+
+    def refresh():
+        nonlocal result, snapshots, active
+        before = snapshots
+        try:
+            result = format_collect(config)
+        except (CheckSetupError, OSError) as error:
+            if not config.get('review') and not report.target:
+                raise
+            source = config.get('protected', ['format'])[0]
+            result = FormatResult([FormatFinding(source, 1, 1, 'backend', 'error', str(error))])
+        config.setdefault('review_related', set()).update(item.source for item in result.findings if Path(item.source).is_file())
+        report.protected = [*config.get('protected', []), *result.inputs]
+        snapshots = format_snapshot(config)
+        for record in report.records:
+            source = record['file']
+            if source in before and source in snapshots:
+                record['line'] = format_map_line(before[source], snapshots[source], record['line'])
+        phase = 'errors' if result.errors else 'review'
+        visible = result.errors if result.errors else result.warnings
+        active = []
+        reused = set()
+        for finding in visible:
+            candidates = [entry for entry in report.records if
+                (entry['file'], entry['rule'], entry['severity'], entry['message']) ==
+                (finding.source, finding.rule, finding.severity, finding.message)
+                and entry['decision'] not in ('fixed', 'justified') and entry['id'] not in reused]
+            record = min(candidates, key=lambda entry: abs(entry['line'] - finding.line)) if candidates else None
+            if record is not None:
+                record.update(line=finding.line, column=finding.column)
+                reused.add(record['id'])
+            if record is None:
+                record = finding.record()
+                record.update(id=len(report.records) + 1, decision='pending', reviewer_comment='', comments=[])
+                report.records.append(record)
+                reused.add(record["id"])
+            active.append((finding, record))
+        if result.jobs:  # A backend failure cannot prove that previous findings were fixed.
+            current = {(item.source, item.line, item.rule, item.severity, item.message) for item in result.findings}
+            for record in report.records:
+                identity = tuple(record[key] for key in ('file', 'line', 'rule', 'severity', 'message'))
+                if identity not in current and record['decision'] == 'pending':
+                    record['decision'] = 'fixed'
+        report.phase = phase
+        if phase not in seen_phases:
+            report.initial.append(dict(phase=phase, findings=[item.record() for item in visible]))
+            seen_phases.add(phase)
+        for finding in visible:
+            print(finding, file=sys.stderr)
+        report.state = 'errors' if result.errors else 'review'
+        report.write()
+
+    def annotate(pairs, kind, text=''):
+        # Removing temporary notes first keeps offsets unambiguous and makes cleanup idempotent.
+        old = format_snapshot(config)
+        format_cleanup([*format_source_list(config), *config.get('review_related', [])])
+        clean = format_snapshot(config)
+        for finding, record in sorted(pairs, key=lambda pair: (pair[0].source, pair[0].line), reverse=True):
+            if finding.rule not in SCHOOL_RULES:
+                print('this diagnostic cannot be annotated', file=sys.stderr)
+                continue
+            line = format_map_line(old[finding.source], clean[finding.source], finding.line)
+            location = FormatFinding(finding.source, line, 1, finding.rule, finding.severity, finding.message)
+            format_comment(Path(finding.source), location, finding.message if kind == 'auto' else text, kind)
+
+    try:
+        refresh()
+        if not config.get('review'):
+            report.state = 'errors' if result.errors else 'complete'
+            return int(bool(result.errors))
+        while True:
+            pending = [(item, record) for item, record in active if record['decision'] == 'pending']
+            if not pending:
+                report.state = 'complete'
+                return int(bool(result.errors))
+            if config.get('annotate'):
+                annotate(pending, 'auto')
+                snapshots = format_snapshot(config)
+            finding, record = pending[0]
+            print('{}> '.format('error' if result.errors else 'review'), end='', file=sys.stderr, flush=True)
+            entered = sys.stdin.readline()
+            if not entered:
+                report.state = 'incomplete'
+                return 1
+            try:
+                parts = shlex.split(entered)
+            except ValueError:
+                print('invalid quoting', file=sys.stderr)
+                continue
+            if not parts:
+                continue
+            command = {'a': 'accept', 'd': 'deny', 'j': 'justified', 'c': 'comment', 'q': 'quit'}.get(parts[0], parts[0])
+            if command == 'quit':
+                report.state = 'incomplete'
+                return 1
+            if command == 'export':
+                if len(parts) != 2:
+                    print('expected a file', file=sys.stderr)
+                    continue
+                try:
+                    requested = Path(parts[1]).expanduser().absolute()
+                    target = requested if requested in report.owned else format_report_target(
+                        parts[1], report.protected, config.get('overwrite', False))
+                    report.write(target)
+                except (CheckUsageError, CheckSetupError, OSError) as error:
+                    print(str(error), file=sys.stderr)
+                continue
+            all_remaining = command in ('accept-all', 'deny-all', 'justified-all')
+            if all_remaining:
+                command = command.removesuffix('-all')
+            elif len(parts) > 1 and parts[1] == 'all':
+                all_remaining = True
+                parts.pop(1)
+            if command not in ('accept', 'deny', 'justified', 'comment'):
+                print('invalid decision', file=sys.stderr)
+                continue
+            local_annotate = bool({'--annotate', '--anotate'} & set(parts[1:]))
+            text = ' '.join(part for part in parts[1:] if part not in ('--annotate', '--anotate'))
+            if any(ord(char) < 32 for char in text) or '*/' in text:
+                print('invalid comment', file=sys.stderr)
+                continue
+            selected = pending if all_remaining else [(finding, record)]
+            if command == 'deny' and result.errors:
+                report.state = 'stopped'
+                return 1
+            if command == 'deny':
+                for _, entry in selected:
+                    entry.update(decision='deny', reviewer_comment=text)
+                report.write()
+                continue
+            if command == 'comment':
+                for _, entry in selected:
+                    entry['comments'].append(text)
+                annotate(selected, 'comment', text)
+            elif command == 'justified':
+                eligible = [(item, entry) for item, entry in selected if item.rule in SCHOOL_RULES]
+                for _, entry in eligible:
+                    entry.update(decision='justified', reviewer_comment=text)
+                annotate(eligible, 'justified', text)
+            elif local_annotate:
+                annotate(selected, 'auto')
+            if command == 'accept':
+                for _, entry in selected:
+                    entry['reviewer_comment'] = text
+            refresh()
+    except KeyboardInterrupt:
+        report.state = 'interrupted'
+        return 130
+    finally:
+        if config.get('review'):
+            format_cleanup([*format_source_list(config), *config.get('review_related', [])])
+        report.write()
+
+
+def execute_strict_format(config):
+    read_only = dict(config, prettier='check', review=False, annotate=False)
+    report = FormatReport(config)
+    result = format_collect(read_only)
+    report.build_interrupted = bool(result.errors)
+    if result.errors and sys.stdin.isatty() and sys.stderr.isatty():
+        execute_format_review(dict(config, prettier='format', review=True), report)
+        # The original build is always interrupted, even after a clean review.
+        return 1
+    visible = result.errors if result.errors else result.warnings
+    report.phase = 'errors' if result.errors else 'check'
+    report.state = 'errors' if result.errors else 'complete'
+    report.initial = [dict(phase=report.phase, findings=[item.record() for item in visible])]
+    report.records = [dict(item.record(), decision='pending' if result.errors else 'not-reviewed',
+                           reviewer_comment='', comments=[]) for item in visible]
+    for item in result.errors:
+        print(item, file=sys.stderr)
+    report.write()
+    return int(bool(result.errors))
+
+
+def format_clang_analyze(config):
+    """Use stdin to stage project-style formatting without editing any role."""
+    tools, jobs = [], []
+    for value in dict.fromkeys(format_source_list(config)):
+        source = Path(value).resolve()
+        python = source.suffix == '.py'
+        tool = config.get('python_formatter', 'ruff') if python else config.get('native_formatter', 'clang-format')
+        executable = shutil.which(tool)
+        if not executable:
+            raise CheckSetupError('formatter not found: ' + tool)
+        if python:
+            argv = [executable, *([] if Path(tool).name.startswith('black') else ['format']),
+                    '--stdin-filename=' + str(source), '-']
+        else:
+            argv = [executable, '--style=file', '--fallback-style=LLVM', '--sort-includes=false',
+                    '--assume-filename=' + str(source)]
+        tools.append((source, argv))
+    findings, identities = [], {}
+    for source, argv in tools:
+        original = source.read_bytes()
+        metadata = source.stat()
+        identities[source] = metadata.st_dev, metadata.st_ino
+        result = school_tool(argv, input=original, capture_output=True)
+        if result.returncode:
+            findings.append(FormatFinding(source, 1, 1, 'formatter', 'error',
+                            result.stderr.decode('utf-8', errors='replace')))
+        else:
+            jobs.append((source, original, result.stdout))
+    return FormatResult(findings, jobs, identities)
+
+
+# Source: format_cache.py
+"""Bounded result cache; unchanged source, tools and dependencies are mandatory."""
+SCHOOL_ENGINE_ID = 'b4a09ad27a43fe99fa0d79b417afbf25ea991a54eb0c44ae128ba526344f6aea'
+
+
+def format_file_identity(value):
+    path = Path(value)
+    try:
+        info = path.stat()
+    except FileNotFoundError:
+        return None
+    return [str(path.resolve()), info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns]
+
+
+def format_dependency_paths(text):
+    """Decode compiler-generated Make prerequisites without shell expansion."""
+    body = text.replace('\\\n', '')
+    _, separator, prerequisites = body.partition(':')
+    if not separator:
+        raise ValueError('invalid compiler dependency record')
+    return [value.replace('$$', '$') for value in shlex.split(prerequisites, comments=False) if value != '-']
+
+
+def format_cache_location(source, config):
+    if not config.get('format_cache', True):
+        return None
+    root = os.environ.get('XDG_CACHE_HOME')
+    if not root:
+        state = os.environ.get('XDG_STATE_HOME', str(Path.home() / '.local/state'))
+        root = str(Path(state) / 'cp-run')
+    root = Path(root) / 'format-cache'
+    try:
+        root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        metadata = root.stat()
+        if root.is_symlink() or metadata.st_uid != os.getuid() or metadata.st_mode & 0o022:
+            return None
+    except OSError:
+        return None  # A cache is optional; all checks still run with a read-only home.
+    digest = hashlib.sha256(str(source).encode()).hexdigest()
+    return root / ('school-' + digest + '.json')
+
+
+def format_cache_key(text, tools):
+    record = dict(engine=SCHOOL_ENGINE_ID, cwd=str(Path.cwd()),
+                  environment={key: os.environ.get(key) for key in ('CPATH', 'C_INCLUDE_PATH', 'CPLUS_INCLUDE_PATH', 'SDKROOT', 'DEVELOPER_DIR', 'GCC_EXEC_PREFIX', 'COMPILER_PATH', 'LIBRARY_PATH', 'SOURCE_DATE_EPOCH', 'LANG', 'LC_ALL', 'TZ')}, source=hashlib.sha256(text.encode('utf-8')).hexdigest(),
+                  tools=[format_file_identity(value) for value in tools])
+    return hashlib.sha256(json.dumps(record, sort_keys=True).encode()).hexdigest()
+
+
+def format_cache_load(source, text, tools, config):
+    path = format_cache_location(source, config)
+    if path is None or any(value in text for value in ('__DATE__', '__TIME__', '__TIMESTAMP__')):
+        return None
+    try:
+        if path.is_symlink() or path.stat().st_size > 4 * 1024 * 1024:
+            return None
+        record = json.loads(path.read_text())
+        if not isinstance(record, dict) or not isinstance(record.get('dependencies'), dict) or not isinstance(record.get('findings'), list):
+            return None
+        if record['key'] != format_cache_key(text, tools) or record['candidate'] != text:
+            return None
+        if any(format_file_identity(value) != identity for value, identity in record['dependencies'].items()):
+            return None
+        allowed = set(SCHOOL_RULES) | {'review-comment', 'frontend', 'GCC'}
+        findings = []
+        for item in record['findings']:
+            if not isinstance(item, dict):
+                return None
+            if (item['rule'] not in allowed or item['severity'] not in ('error', 'warning') or
+                    item['file'] != str(source) and not Path(item['file']).is_absolute() or
+                    type(item['line']) is not int or type(item['column']) is not int or
+                    not isinstance(item['message'], str)):
+                return None
+            findings.append(FormatFinding(item['file'], item['line'], item['column'], item['rule'],
+                                          item['severity'], item['message']))
+        return findings, list(record['dependencies'])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def format_cache_store(source, candidate, findings, dependencies, tools, config):
+    path = format_cache_location(source, config)
+    if path is None or len(candidate.encode('utf-8')) > 2 * 1024 * 1024:
+        return
+    # Parent/negative dependencies cover files consulted by the project auditor.
+    dependencies = set(dependencies) | {str(source.with_suffix('.h')),
+                    str(source.parent / 'Makefile'), str(source.parent / 'makefile')}
+    for owner in [source, *(Path(value) for value in list(dependencies) if Path(value).suffix in ('.h', '.hpp', '.hh', '.hxx'))]:
+        try:
+            contents = candidate if owner == source else owner.read_text()
+        except (OSError, UnicodeDecodeError):
+            continue
+        for directive in school_includes(contents):
+            dependencies.add(str((owner.parent / directive[2]).absolute()))
+    record = dict(key=format_cache_key(candidate, tools), candidate=candidate,
+                  dependencies={value: format_file_identity(value) for value in dependencies},
+                  findings=[item.record() for item in findings])
+    temporary = None
+    try:
+        descriptor, temporary = tempfile.mkstemp(prefix='.school-cache-', dir=path.parent)
+        with os.fdopen(descriptor, 'w', encoding='utf-8') as stream:
+            json.dump(record, stream, ensure_ascii=False)
+        os.replace(temporary, path)
+        temporary = None
+        entries = sorted(path.parent.glob('school-*.json'), key=lambda item: item.stat().st_mtime_ns)
+        for old in entries[:-64]:
+            if old != path and old.is_file() and not old.is_symlink():
+                old.unlink()
+    except OSError:
+        pass  # Failed caching never substitutes for failed or skipped verification.
+    finally:
+        if temporary and os.path.exists(temporary):
+            os.unlink(temporary)
+
+
 # Source: school_format.py
 """School policy checks over Clang's parsed source; no candidate is executed."""
 
@@ -4063,7 +4639,7 @@ SCHOOL_STYLE = {
     'AllowShortFunctionsOnASingleLine': 'None', 'AllowShortLoopsOnASingleLine': False,
     'AllowShortIfStatementsOnASingleLine': 'Never', 'BinPackParameters': False,
     'SortIncludes': 'Never', 'BreakStringLiterals': False, 'AllowShortEnumsOnASingleLine': False,
-    'CommentPragmas': '^ *school-reviewed',
+    'CommentPragmas': '^ *school-(reviewed|justified|warning)',
 }
 
 
@@ -4158,7 +4734,7 @@ def school_publish(jobs, identities=None):
                 os.unlink(temporary)
 
 
-def execute_school_format(config):
+def school_analyze(config):
     """Publish safe layout first; unresolved obligations still return failure."""
     clang = shutil.which('clang')
     formatter = shutil.which(config.get('native_formatter', 'clang-format'))
@@ -4168,8 +4744,8 @@ def execute_school_format(config):
     banner = school_tool([gcc, '--version'], capture_output=True, text=True)
     if banner.returncode or 'clang' in banner.stdout.lower() or not re.search(r'GNU|gcc|g\+\+', banner.stdout):
         raise CheckSetupError('school needs GNU GCC; set CP_RUN_GCC to its executable.')
-    jobs, diagnostics, identities = [], [], {}
-    for value in dict.fromkeys(config.get('protected', [])):
+    jobs, diagnostics, identities, cache_jobs, inputs = [], [], {}, [], set()
+    for value in dict.fromkeys(format_source_list(config)):
         source = Path(value).resolve()
         if source.suffix not in ('.c', '.h', '.hpp', '.cc', '.cpp', '.cxx', '.C'):
             raise CheckUsageError('school supports C and C++ sources only')
@@ -4180,10 +4756,19 @@ def execute_school_format(config):
             text = original.decode('utf-8')
         except UnicodeDecodeError as error:
             raise CheckSetupError(str(source) + ': school: expected UTF-8 source: ' + str(error)) from error
-        original_tree, parse_issues = school_parse(source, text, clang)
-        candidate, issues = text, []
+        clean = format_strip_automatic(text)
+        cpp_driver = shutil.which(str(Path(gcc).with_name(Path(gcc).name.replace('gcc', 'g++')))) or gcc
+        tools = [clang, formatter, gcc, cpp_driver]
+        cached = format_cache_load(source, clean, tools, config)
+        if cached is not None:
+            diagnostics.extend(cached[0])
+            inputs.update(cached[1])
+            jobs.append((source, original, clean.encode('utf-8')))
+            continue
+        original_tree, parse_issues = school_parse(source, clean, clang)
+        candidate, issues = clean, []
         if original_tree is not None:
-            candidate, issues = school_prepare(source, text, clang, original_tree)
+            candidate, issues = school_prepare(source, clean, clang, original_tree)
         style = dict(SCHOOL_STYLE)
         if original_tree is None:
             style['InsertBraces'] = False
@@ -4194,52 +4779,55 @@ def execute_school_format(config):
         candidate = formatted.stdout
         tree = None
         if original_tree is not None:
-            candidate, tree, final_parse = school_apply_layout(source, candidate, clang)
+            candidate, tree, final_parse = school_apply_layout(source, candidate, clang, original_tree if candidate == clean else None)
             if tree is None:
                 raise CheckSetupError(str(source) + ': school: candidate failed parsing:\n' + '\n'.join(final_parse))
-            school_verify_layout(source, text, original_tree, candidate, tree)
-            issues.extend(SchoolPolicy(source, candidate, tree).run())
+            school_verify_layout(source, clean, original_tree, candidate, tree)
+            policy = SchoolPolicy(source, candidate, tree)
+            issues.extend(policy.run())
         else:
-            if [token for token, _ in school_tokens(text)] != [token for token, _ in school_tokens(candidate)]:
+            if [token for token, _ in school_tokens(clean)] != [token for token, _ in school_tokens(candidate)]:
                 raise CheckSetupError(str(source) + ': school: unsupported syntax prevents verifying token changes.')
-            issues.append(str(source) + ': school frontend error: token layout only; rewrite the GNU-only construct to enable all AST checks.\n' +
-                          '\n'.join(parse_issues))
+            issues.append(FormatFinding(source, 1, 1, 'frontend', 'error',
+                          'token layout only; rewrite the GNU-only construct to enable all AST checks.\n' + '\n'.join(parse_issues)))
+        dependency_identities = original_tree.get('school_dependency_identities', {}) if original_tree else {}
+        dependencies = list(tree.get('school_dependencies', [])) if tree is not None else []
         with tempfile.TemporaryDirectory(prefix='cp-school-') as directory:
             path = Path(directory) / source.name
             path.write_text(candidate)
             argv, flags, main, input_path, includes = school_gcc_arguments(source, path, directory, gcc, tree)
             output = str(Path(directory) / 'verify.out')
-            checked = school_tool([*argv, *flags, *([] if main else ['-c']), '-o', output],
+            dependency = Path(directory) / 'gcc.d'
+            checked = school_tool([*argv, *flags, '-c', '-MD', '-MF', str(dependency), '-MT', 'cp_source', '-o', output],
                                   capture_output=True, text=True)
+            if dependency.exists():
+                dependencies.extend(value for value in format_dependency_paths(dependency.read_text())
+                                    if not Path(value).is_relative_to(directory))
             if checked.returncode:
                 syntax = school_syntax_gate(argv, flags)
                 if syntax.returncode:
                     raise CheckSetupError(str(source) + ': school: syntax prevents safe publication:\n' +
                                           syntax.stderr.replace(str(path), str(source)))
-                issues.append(str(source) + ': school GCC policy error: fix compiler diagnostics:\n' +
-                              checked.stderr.replace(str(path), str(source)))
-            if tree is not None:
-                issues.extend(school_resource_analysis(source, path, input_path, clang, includes))
+                issues.append(FormatFinding(source, 1, 1, 'GCC', 'error', 'fix compiler diagnostics:\n' +
+                              checked.stderr.replace(str(path), str(source))))
+            if tree is not None and school_needs_resource_analysis(source, candidate, tree):
+                for finding in school_resource_analysis(source, path, input_path, clang, includes):
+                    if finding.source != str(source) or (finding.rule, finding.line) not in policy.error_justifications:
+                        issues.append(finding)
+        for dependency_name, identity in dependency_identities.items():
+            if format_file_identity(dependency_name) != identity:
+                raise CheckSetupError('dependency changed during formatting: ' + dependency_name)
+        inputs.update(dependencies)
+        inputs.update(str(value) for value in (source.with_suffix('.h'), source.parent / 'Makefile', source.parent / 'makefile'))
+        if tree is not None:
+            cache_jobs.append((source, candidate, list(issues), dependencies, tools))
         diagnostics.extend(issues)
         jobs.append((source, original, candidate.encode('utf-8')))
-    changed = [job for job in jobs if job[1] != job[2]]
-    check = config.get('prettier') == 'check'
-    if check:
-        for source, _, _ in changed:
-            print(str(source) + ': formatting differs; run cp-run format --school FILE. Policy locations below refer to the formatted candidate.', file=sys.stderr)
-    else:
-        school_publish(jobs, identities)
-        for source, _, _ in changed:
-            print(str(source) + ': school layout applied', file=sys.stderr)
-    for diagnostic in school_compact_diagnostics(diagnostics):
-        print(diagnostic, file=sys.stderr)
-    if diagnostics:
-        print('school: resolve the reported errors/reviews and run format again.', file=sys.stderr)
-        if any('review required:' in item for item in diagnostics):
-            print('After inspecting a review, add a file comment: // school-reviewed RULE: specific reason', file=sys.stderr)
-    else:
-        print('school: automatic checks passed; required author reviews are explicit in source comments.', file=sys.stderr)
-    return int(bool(diagnostics) or check and bool(changed))
+    return FormatResult(diagnostics, jobs, identities, cache_jobs, list(inputs))
+
+
+def execute_school_format(config):
+    return execute_format_review(dict(config, format_mode='school'))
 
 
 # Source: school_policy.py
@@ -4265,6 +4853,10 @@ SCHOOL_REVIEW_RULES = {
     '5.7', '5.8', '5.9', '5.10', '5.11', '5.12', '5.13', '5.14',
     '5.15', '5.17', '6.1', '6.4', '6.5', '6.6',
 }
+# Only these review cases have observable evidence. Semantic-only obligations
+# remain documented; they must not produce blanket warnings.
+SCHOOL_WARNING_RULES = {'3.2', '3.4', '3.5', '3.7', '4.4.4', '4.5.1',
+                        '4.6.11', '5.2', '5.9', '5.12', '5.14'}
 # A scanner keeps comments and literals out of directive/code checks.
 SCHOOL_LEXER = re.compile(
     r'(?P<raw>(?:u8|[uUL])?R"(?P<raw_delimiter>[^ ()\\\t\r\n]{0,16})'
@@ -4292,11 +4884,15 @@ def school_mask(text):
 def school_parse(source, text, clang, cpp=None):
     if cpp is None:
         cpp = source.suffix not in ('.c', '.h')
-    result = school_tool(
-        [clang, '-x', 'c++' if cpp else 'c',
-         '-std=gnu++17' if cpp else '-std=gnu99', '-iquote', str(source.parent),
-         '-Xclang', '-ast-dump=json', '-fsyntax-only', '-'],
-        input=text, text=True, capture_output=True)
+    with tempfile.TemporaryDirectory(prefix='cp-format-deps-') as directory:
+        dependency = Path(directory) / 'source.d'
+        result = school_tool(
+            [clang, '-x', 'c++' if cpp else 'c',
+             '-std=gnu++17' if cpp else '-std=gnu99', '-iquote', str(source.parent),
+             '-Xclang', '-ast-dump=json', '-fsyntax-only', '-MD', '-MF', str(dependency),
+             '-MT', 'cp_source', '-'],
+            input=text, text=True, capture_output=True)
+        dependencies = format_dependency_paths(dependency.read_text()) if dependency.exists() else []
     if result.returncode:
         return None, [str(source) + ': school syntax/5.3/6.4: fix compiler diagnostics:\n' +
                       result.stderr]
@@ -4306,6 +4902,26 @@ def school_parse(source, text, clang, cpp=None):
         raise CheckSetupError('school: Clang returned invalid AST JSON: ' + str(error)) from error
     if not isinstance(tree, dict) or tree.get('kind') != 'TranslationUnitDecl':
         raise CheckSetupError('school: Clang returned an unsupported AST root')
+    # Header implementations are not part of the selected source. References
+    # retain their name/type descriptors; project headers are audited separately.
+    tree['school_dependencies'] = dependencies
+    tree['school_dependency_identities'] = {value: format_file_identity(value) for value in dependencies}
+    kept, external_enums, external_bases = [], [], {}
+    for node in tree.get('inner', []):
+        if 'includedFrom' not in school_location(node) and not node.get('isImplicit'):
+            kept.append(node)
+            continue
+        # Keep semantic summaries needed by source expressions, not complete
+        # header implementations. Enum values and exception ancestry are inputs.
+        for child in school_nodes(node):
+            if child.get('kind') == 'EnumDecl':
+                external_enums.append(child)
+            elif child.get('kind') == 'CXXRecordDecl' and child.get('completeDefinition'):
+                external_bases[child.get('name')] = [
+                    base.get('type', {}).get('qualType', '') for base in child.get('bases', [])]
+    tree['school_external_enums'] = external_enums
+    tree['school_external_bases'] = external_bases
+    tree['inner'] = kept
     return tree, []
 
 
@@ -4364,6 +4980,20 @@ def school_integer(node, constants):
     return None
 
 
+def school_transliteration(name):
+    """Whole-word evidence; deliberately avoid broad substrings and dictionaries."""
+    words = re.findall(r'[a-z]+', re.sub(r'([a-z])([A-Z])', r'\1_\2', name).lower())
+    distinctive = {'vychislenie', 'vychislit', 'kolichestvo', 'znachenie', 'sleduyushchiy', 'predydushchiy'}
+    russian = distinctive | {'chislo', 'chisla', 'massiv', 'razmer', 'dlina', 'kornya', 'poluchit', 'dobavit', 'udalit'}
+    return bool(set(words) & distinctive) or len(set(words) & russian) >= 2
+
+
+def school_policy_nodes(tree):
+    for node in tree.get('school_external_enums', []):
+        yield from school_nodes(node)
+    yield from school_nodes(tree)
+
+
 class SchoolPolicy:
     def __init__(self, source, text, tree, cpp=None):
         self.source, self.text, self.tree = source, text, tree
@@ -4372,18 +5002,20 @@ class SchoolPolicy:
         self.code = school_mask(text)
         self.findings = []
         self.reviews = {}
+        self.justifications = {}
+        self.error_justifications = {}
         self.accepted = set()
         self.constants = {}
         self.labels = {}
         self.functions = []
         self.symbols = {node['id']: node for node in school_nodes(tree)
                         if 'id' in node and node.get('kind', '').endswith('Decl')}
-        self.record_bases = {
+        self.record_bases = {**tree.get('school_external_bases', {}), **{
             node.get('name'): [base.get('type', {}).get('qualType', '')
                                for base in node.get('bases', [])]
             for node in school_nodes(tree) if node.get('kind') == 'CXXRecordDecl'
-            and node.get('completeDefinition')}
-        for node in school_nodes(tree):
+            and node.get('completeDefinition')}}
+        for node in school_policy_nodes(tree):
             if node.get('kind') == 'EnumDecl':
                 value = -1
                 for member in node.get('inner', []):
@@ -4438,17 +5070,22 @@ class SchoolPolicy:
     def emit(self, rule, message, node=None, line=None, review=False, source=None):
         if rule not in SCHOOL_RULES:
             raise ValueError('unregistered school rule: ' + rule)
-        if review and rule in self.reviews and (source is None or source == self.source):
-            self.accepted.add(rule)
-            return
         if line is None:
             line = self.data[:self.offset(node or {})].count(b'\n') + 1
-        severity = 'review required' if review else 'error'
+        if not review and (rule, line) in self.error_justifications:
+            self.accepted.add(rule)
+            return
+        if review:
+            if rule not in SCHOOL_WARNING_RULES or rule == '4.4.4' and self.cpp:
+                return
+            if rule in self.reviews or (rule, line) in self.justifications:
+                self.accepted.add(rule)
+                return
         offset = self.offset(node or {})
         start = self.data.rfind(b'\n', 0, offset) + 1
         column = len(self.data[start:offset].decode('utf-8', errors='replace')) + 1 if node else 1
-        self.findings.append('{}:{}:{}: school {} {}: {}'.format(
-            source or self.source, line, column, rule, severity, message))
+        self.findings.append(FormatFinding(source or self.source, line, column, rule,
+                             'warning' if review else 'error', message))
 
     def callee_declaration(self, node):
         children = node.get('inner', [])
@@ -4488,6 +5125,15 @@ class SchoolPolicy:
         return identifier
 
     def read_reviews(self):
+        for token, marker, associated in format_annotations(self.text):
+            if marker[2] not in SCHOOL_RULES:
+                self.findings.append(FormatFinding(self.source, self.text[:token.start()].count('\n') + 1,
+                                     1, 'review-comment', 'error', 'unknown annotated rule'))
+                continue
+            if marker[1] == 'school-error-justified':
+                self.error_justifications[marker[2], associated] = marker[3] or ''
+            elif marker[1] == 'school-justified':
+                self.justifications[marker[2], associated] = marker[3] or ''
         for token in SCHOOL_LEXER.finditer(self.text):
             if not token.group('comment'):
                 continue
@@ -4503,8 +5149,8 @@ class SchoolPolicy:
                 elif len(match[2].strip()) < 12:
                     problem = 'provide a specific rationale of at least 12 characters'
                 if problem:
-                    self.findings.append('{}:{}:1: school-review error: {}'.format(
-                        self.source, line_number + index, problem))
+                    self.findings.append(FormatFinding(self.source, line_number + index, 1,
+                                         'review-comment', 'error', problem))
                     continue
                 for rule in (value.strip() for value in match[1].split(',')):
                     if rule not in SCHOOL_RULES:
@@ -4514,8 +5160,8 @@ class SchoolPolicy:
                     else:
                         self.reviews[rule] = match[2].strip()
                         continue
-                    self.findings.append('{}:{}:1: school-review error: {}'.format(
-                        self.source, line_number + index, problem))
+                    self.findings.append(FormatFinding(self.source, line_number + index, 1,
+                                         'review-comment', 'error', problem))
 
     def declarations(self, node, ancestors):
         kind, name = node.get('kind'), node.get('name', '')
@@ -4527,17 +5173,15 @@ class SchoolPolicy:
         if kind == 'CXXMethodDecl' and name.startswith('operator'):
             declaration = False  # Operator spellings are imposed by the language.
         if declaration and name and name not in ('main', 'argc', 'argv'):
-            forbidden = (not name.isascii() or name == 'vychislenie_kornya' or
-                         kind in ('FunctionDecl', 'CXXMethodDecl') and name == 'f')
-            if forbidden:
-                self.emit('3.2', 'use an English identifier; this spelling is explicitly prohibited by the policy.', node)
-            self.emit('3.2', 'confirm that "{}" is English or a conventional abbreviation, not transliteration.'.format(name),
-                      node, review=True)
-        if kind in ('FunctionDecl', 'VarDecl') and name and name != 'main':
-            global_decl = kind == 'FunctionDecl' or not any(
+            if not name.isascii():
+                self.emit('3.2', 'use ASCII identifier spelling.', node)
+            elif school_transliteration(name):
+                self.emit('3.2', 'replace the high-confidence transliterated identifier: ' + name, node)
+        if kind in ('FunctionDecl', 'CXXMethodDecl', 'VarDecl') and name and name != 'main':
+            global_decl = kind != 'VarDecl' or not any(
                 p.get('kind') in ('FunctionDecl', 'CXXMethodDecl', 'LambdaExpr') for p in ancestors)
-            if global_decl:
-                self.emit('3.1', 'justify the meaning and length of global name "{}".'.format(name), node, review=True)
+            if global_decl and len(name.strip('_')) < 3:
+                self.emit('3.1', 'use at least three characters for a function/global name: ' + name, node)
         constant = kind == 'EnumConstantDecl' or kind == 'VarDecl' and 'const' in typ and '*' not in typ
         if declaration and name:
             if constant:
@@ -4555,16 +5199,22 @@ class SchoolPolicy:
             elif re.search(r'[IlO0]{2,}', name):
                 self.emit('3.7', 'verify visual readability of ' + name, node, review=True)
         if kind in ('VarDecl', 'ParmVarDecl', 'FieldDecl') and name not in ('argc', 'argv') and name:
-            self.emit('3.5', 'confirm "{}" does not encode its type in a prefix or suffix.'.format(name),
-                      node, review=True)
+            prefix = re.match(r'^(p|ptr|i|int|str|dbl|double)_', name)
+            matches_type = prefix and (
+                prefix[1] in ('p', 'ptr') and '*' in typ or
+                prefix[1] in ('i', 'int') and re.search(r'\bint\b', typ) or
+                prefix[1] == 'str' and 'char' in typ and '*' in typ or
+                prefix[1] in ('dbl', 'double') and 'double' in typ)
+            if matches_type:
+                self.emit('3.5', 'identifier prefix matches its declared type: ' + name, node, review=True)
         if kind == 'FieldDecl' and name and self.cpp and (name.startswith('m_') or name.endswith('_')):
             self.emit('4.1', 'remove the m_ prefix or trailing underscore from this class field.', node)
         if kind == 'VarDecl':
             local = any(p.get('kind') in ('FunctionDecl', 'CXXMethodDecl', 'LambdaExpr') for p in ancestors)
-            if constant and re.search(r'\b(char|short|int|long|bool)\b', typ):
+            if constant and re.search(r'\b(char|short|int|long|bool)\b', typ) and school_integer(next(reversed(node.get('inner', [])), {}), self.constants) not in (-1, 2):
                 self.emit('5.2', 'define integer constants with enum, not const.', node)
             if not local and node.get('storageClass') != 'extern' and not constant:
-                self.emit('5.14', 'justify this global variable or pass state as a parameter.', node, review=True)
+                self.emit('5.14', 'mutable global state: consider passing this value as a parameter.', node, review=True)
             if local and '[' in typ and not re.search(r'\(\s*\*[^)]*\)\s*\[', typ):
                 dimensions = re.findall(r'\[([^]]*)\]', typ)
                 if any(not dimension.isdecimal() for dimension in dimensions):
@@ -4765,7 +5415,7 @@ class SchoolPolicy:
             constant_context = generated_in_header or any(n.get('kind') == 'EnumConstantDecl' or
                 n.get('kind') == 'VarDecl' and 'const' in n.get('type', {}).get('qualType', '') and
                 '*' not in n.get('type', {}).get('qualType', '') for n in ancestors)
-            if not constant_context and str(node.get('value')) not in ('0', '1'):
+            if not constant_context and str(node.get('value')) not in ('0', '1', '2'):
                 stderr_descriptor = False
                 for parent in reversed(ancestors):
                     if parent.get('kind') == 'CallExpr':
@@ -4782,7 +5432,7 @@ class SchoolPolicy:
             if not any(parent.get('kind') == 'EnumConstantDecl' for parent in ancestors):
                 self.emit('5.1', 'confirm -1 is an error sentinel; otherwise use a named constant.', node, review=True)
         if kind == 'EnumConstantDecl':
-            self.emit('5.2', 'verify this enum name describes its purpose rather than spelling a number.',
+            self.emit('5.2', 'enum name spells a number rather than its use: ' + node.get('name', ''),
                       node, review=True)
         if kind == 'UnaryOperator' and node.get('opcode') == '*' and inner:
             base = school_unwrap(inner[0])
@@ -4938,7 +5588,7 @@ class SchoolPolicy:
         for use in school_nodes(function):
             references = [n for n in school_nodes(use) if n.get('kind') == 'DeclRefExpr'
                           and n.get('referencedDecl', {}).get('id') == identifier]
-            if references and use.get('kind') == 'ReturnStmt':
+            if references and use.get('kind') == 'ReturnStmt' and any('*' in child.get('type', {}).get('qualType', '') for child in use.get('inner', [])):
                 escaping = True
             if references and use.get('kind') == 'CallExpr' and use is not node and self.callee(use) not in safe_calls:
                 escaping = True
@@ -4989,8 +5639,18 @@ class SchoolPolicy:
             linked = any(field.get('kind') == 'FieldDecl' and '*' in field.get('type', {}).get('qualType', '') and
                          re.search(r'\b' + re.escape(record_name) + r'\b', field.get('type', {}).get('qualType', ''))
                          for field in record.get('inner', []))
-            self.emit('5.9', 'use calloc for list/tree nodes; malloc is only allowed for a justified realloc-based array.',
-                      node, review=not linked)
+            function = next((parent for parent in ancestors if parent.get('kind') == 'FunctionDecl'), {})
+            grown = False
+            for call in school_nodes(function):
+                arguments = call.get('inner', [])[1:]
+                if call.get('kind') == 'CallExpr' and self.callee(call) == 'realloc' and arguments:
+                    grown = any(child.get('referencedDecl', {}).get('id') == owner.get('id')
+                                for child in school_nodes(arguments[0]))
+                    if grown:
+                        break
+            if linked or not grown:
+                self.emit('5.9', 'use calloc for list/tree nodes; no matching realloc was found for this allocation.',
+                          node, review=not linked)
         if name in SCHOOL_ALLOCATORS:
             size_index = 1 if name in ('calloc', 'realloc') else 0
             size = school_unwrap(args[size_index]) if len(args) > size_index else {}
@@ -5008,25 +5668,31 @@ class SchoolPolicy:
                 self.small_buffer(node, ancestors, owner)
 
     def source_rules(self):
+        measured_text = self.text
+        for token, _, _ in reversed(list(format_annotations(self.text))):
+            measured_text = measured_text[:token.start()] + ''.join(
+                '\n' if char == '\n' else ' ' for char in token[0]) + measured_text[token.end():]
+        measured_lines = measured_text.split('\n')
         for number, line in enumerate(self.text.split('\n'), 1):
             if any(ord(c) < 32 and c != '\r' or ord(c) == 127 for c in line):
                 self.emit('1.2' if '\t' in line else '1.1',
                           'replace control characters/tabs with spaces or escaped literal text.', line=number)
-            if len(line.rstrip('\r')) > 100:
+            if len(measured_lines[number - 1].rstrip()) > 100:
                 self.emit('2.2', 'split the literal/comment to at most 100 characters.', line=number)
         for match in SCHOOL_LEXER.finditer(self.text):
             comment = match.group('comment')
             if comment and re.search(r'\bclang-format\s+off\b', comment):
                 self.emit('2.1', 'remove clang-format off to validate school layout; use --clang for custom formatting.',
                           line=self.text[:match.start()].count('\n') + 1)
-            if comment and 'school-reviewed' not in comment and re.search(
+            if comment and not re.search(r'school-(?:reviewed|justified|warning)', comment) and re.search(
                     r'(?:\b(?:if|for|while|printf|return)\b.*[;{}]|\w+\s*=[^=].*;)', comment):
                 self.emit('5.12', 'remove commented-out debugging code or explain why this is documentation.',
                           line=self.text[:match.start()].count('\n') + 1, review=True)
         for number, line in enumerate(self.code.splitlines(), 1):
             macro = re.match(r'\s*#\s*define\s+\w+\s+(.+)', line)
             integer_macro = macro and re.search(r'\b(?:0[xX][\da-fA-F]+|\d+)[uUlL]*\b', macro[1]) and not re.search(r'\d\.\d|\d[eEpP][+-]?\d', macro[1])
-            if integer_macro:
+            exception = macro and re.fullmatch(r'[()\s]*(-\s*1|2)[uUlL]*[()\s]*', macro[1])
+            if integer_macro and not exception:
                 self.emit('5.2', 'replace integer #define with enum.', line=number)
             if re.match(r'\s*#\s*define\s+\w+\(', line):
                 self.emit('4.5.1', 'review function-like macros separately; prefer a typed function.',
@@ -5176,8 +5842,10 @@ def school_label_layout(text, tree):
     return data.decode('utf-8')
 
 
-def school_apply_layout(source, text, clang):
-    tree, issues = school_parse(source, text, clang)
+def school_apply_layout(source, text, clang, tree=None):
+    issues = []
+    if tree is None:
+        tree, issues = school_parse(source, text, clang)
     if issues:
         return text, tree, issues
     candidate = school_parameter_layout(source, text, tree)
@@ -5189,6 +5857,24 @@ def school_apply_layout(source, text, clang):
     if labeled != candidate:
         tree, issues = school_parse(source, labeled, clang)
     return labeled, tree, issues
+
+
+def school_needs_resource_analysis(source, text, tree):
+    policy = SchoolPolicy(source, text, tree)
+    calls = SCHOOL_ALLOCATORS | {'free', 'fopen', 'fdopen', 'freopen', 'fclose', 'open', 'close', 'socket', 'opendir', 'closedir', 'dup', 'popen', 'pclose'}
+    for node in school_nodes(tree):
+        if not policy.local(node):
+            continue
+        kind = node.get('kind')
+        if kind in ('CXXNewExpr', 'CXXDeleteExpr', 'ArraySubscriptExpr'):
+            return True
+        if kind == 'UnaryOperator' and node.get('opcode') == '*' or kind == 'MemberExpr' and node.get('isArrow'):
+            return True
+        if kind == 'CallExpr' and policy.callee(node) in calls:
+            return True
+        if kind == 'ReturnStmt' and any('*' in child.get('type', {}).get('qualType', '') for child in node.get('inner', [])):
+            return True
+    return False
 
 
 SCHOOL_ANALYZER_CAPABILITIES = {}
@@ -5232,11 +5918,13 @@ def school_resource_analysis(source, candidate_path, input_path, clang, include_
             text=True, capture_output=True)
     if result.returncode:
         raise CheckSetupError(str(source) + ': school analyzer failed:\n' + result.stderr)
-    resource_warning = re.search(r'warning:.*\[(?:(?:alpha\.)?unix\.(?:Malloc|Stream)|core\.(?:NullDereference|StackAddressEscape)|cplusplus\.NewDelete(?:Leaks)?)\]', result.stderr)
-    if resource_warning is None:
-        return []
-    diagnostic = result.stderr.replace(str(candidate_path), str(source))
-    return [str(source) + ': school 5.17 error: fix the resource/control-flow diagnostic:\n' + diagnostic]
+    pattern = re.compile(r'^(.*?):(\d+):(\d+): warning:\s*(.*?)\s*\[((?:alpha\.)?unix\.(?:Malloc|Stream)|core\.(?:NullDereference|StackAddressEscape)|cplusplus\.NewDelete(?:Leaks)?)\]', re.M)
+    findings = []
+    for match in pattern.finditer(result.stderr):
+        owner = source if Path(match[1]) == Path(candidate_path) else Path(match[1])
+        findings.append(FormatFinding(owner, int(match[2]), int(match[3]), '5.17', 'error',
+                        match[4] + ' [' + match[5] + ']'))
+    return findings
 
 
 # Source: school_project.py
@@ -5330,7 +6018,7 @@ class SchoolProjectAudit:
         text = self.policy.text if path == self.policy.source else path.read_text(encoding='utf-8')
         tree, issues = school_parse(path, text, self.clang, cpp=self.policy.cpp)
         if issues:
-            self.policy.findings.extend(issues)
+            self.policy.findings.append(FormatFinding(path, 1, 1, 'frontend', 'error', '\n'.join(issues)))
             return
         context = self.policy if path == self.policy.source else SchoolPolicy(path, text, tree, cpp=self.policy.cpp)
         self.headers[path] = context
@@ -5721,6 +6409,8 @@ def school_compact_diagnostics(findings):
 def execute_format(config):
     if config.get("format_mode") == "school":
         return execute_school_format(config)
+    if config.get("review") or config.get("review_report"):
+        return execute_format_review(config)
     sources = config.get("protected", [])
     if not sources:
         raise CheckUsageError("formatting needs a source file")
@@ -7046,12 +7736,14 @@ def _bridge_config(values):
     config['runtime_args'] = [next(values) for _ in range(runtime_count)]
     protected_count = int(next(values))
     config['protected'] = [next(values) for _ in range(protected_count)]
-    for key in ('auto', 'cin', 'cout', 'show_time', 'show_memory', 'show_command', 'warmup', 'mult', 'overwrite', 'stop_on_failure'):
+    for key in ('auto', 'cin', 'cout', 'show_time', 'show_memory', 'show_command', 'warmup', 'mult', 'overwrite', 'stop_on_failure', 'review', 'annotate', 'format_cache'):
         config[key] = config.get(key, '0') == '1'
     config['cases'] = [int(value) for value in config.get('cases', '').split(',') if value]
     for key in ('num_test', 'seed'):
         if config.get(key, '') == '':
             config.pop(key, None)
+    if 'format_source_count' in config:
+        config['format_sources'] = [config['format_source_' + str(index)] for index in range(1, int(config['format_source_count']) + 1)]
     for role in ('main', 'brute', 'generator'):
         count = int(config.get('launch_' + role + '_count', 0))
         if count:
@@ -7071,6 +7763,7 @@ def _bridge_main():
     config = _bridge_config(sys.argv[2:])
     if action == 'companion': return execute_companion(config)
     if action == 'format': return execute_format(config)
+    if action == 'strict-format': return execute_strict_format(config)
     if action == 'doctor': return execute_doctor(config)
     if action in ('pack', 'unpack'): return execute_bundle(config)
     if action == 'ce': return compilation_report(config)

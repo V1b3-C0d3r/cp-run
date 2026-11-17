@@ -10,12 +10,14 @@ def _bridge_config(values):
     config['runtime_args'] = [next(values) for _ in range(runtime_count)]
     protected_count = int(next(values))
     config['protected'] = [next(values) for _ in range(protected_count)]
-    for key in ('auto', 'cin', 'cout', 'show_time', 'show_memory', 'show_command', 'warmup', 'mult', 'overwrite', 'stop_on_failure'):
+    for key in ('auto', 'cin', 'cout', 'show_time', 'show_memory', 'show_command', 'warmup', 'mult', 'overwrite', 'stop_on_failure', 'review', 'annotate', 'format_cache'):
         config[key] = config.get(key, '0') == '1'
     config['cases'] = [int(value) for value in config.get('cases', '').split(',') if value]
     for key in ('num_test', 'seed'):
         if config.get(key, '') == '':
             config.pop(key, None)
+    if 'format_source_count' in config:
+        config['format_sources'] = [config['format_source_' + str(index)] for index in range(1, int(config['format_source_count']) + 1)]
     for role in ('main', 'brute', 'generator'):
         count = int(config.get('launch_' + role + '_count', 0))
         if count:
@@ -35,6 +37,7 @@ def _bridge_main():
     config = _bridge_config(sys.argv[2:])
     if action == 'companion': return execute_companion(config)
     if action == 'format': return execute_format(config)
+    if action == 'strict-format': return execute_strict_format(config)
     if action == 'doctor': return execute_doctor(config)
     if action in ('pack', 'unpack'): return execute_bundle(config)
     if action == 'ce': return compilation_report(config)

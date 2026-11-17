@@ -20,6 +20,10 @@ SCHOOL_REVIEW_RULES = {
     '5.7', '5.8', '5.9', '5.10', '5.11', '5.12', '5.13', '5.14',
     '5.15', '5.17', '6.1', '6.4', '6.5', '6.6',
 }
+# Only these review cases have observable evidence. Semantic-only obligations
+# remain documented; they must not produce blanket warnings.
+SCHOOL_WARNING_RULES = {'3.2', '3.4', '3.5', '3.7', '4.4.4', '4.5.1',
+                        '4.6.11', '5.2', '5.9', '5.12', '5.14'}
 # A scanner keeps comments and literals out of directive/code checks.
 SCHOOL_LEXER = re.compile(
     r'(?P<raw>(?:u8|[uUL])?R"(?P<raw_delimiter>[^ ()\\\t\r\n]{0,16})'
@@ -47,11 +51,15 @@ def school_mask(text):
 def school_parse(source, text, clang, cpp=None):
     if cpp is None:
         cpp = source.suffix not in ('.c', '.h')
-    result = school_tool(
-        [clang, '-x', 'c++' if cpp else 'c',
-         '-std=gnu++17' if cpp else '-std=gnu99', '-iquote', str(source.parent),
-         '-Xclang', '-ast-dump=json', '-fsyntax-only', '-'],
-        input=text, text=True, capture_output=True)
+    with tempfile.TemporaryDirectory(prefix='cp-format-deps-') as directory:
+        dependency = Path(directory) / 'source.d'
+        result = school_tool(
+            [clang, '-x', 'c++' if cpp else 'c',
+             '-std=gnu++17' if cpp else '-std=gnu99', '-iquote', str(source.parent),
+             '-Xclang', '-ast-dump=json', '-fsyntax-only', '-MD', '-MF', str(dependency),
+             '-MT', 'cp_source', '-'],
+            input=text, text=True, capture_output=True)
+        dependencies = format_dependency_paths(dependency.read_text()) if dependency.exists() else []
     if result.returncode:
         return None, [str(source) + ': school syntax/5.3/6.4: fix compiler diagnostics:\n' +
                       result.stderr]
@@ -61,6 +69,26 @@ def school_parse(source, text, clang, cpp=None):
         raise CheckSetupError('school: Clang returned invalid AST JSON: ' + str(error)) from error
     if not isinstance(tree, dict) or tree.get('kind') != 'TranslationUnitDecl':
         raise CheckSetupError('school: Clang returned an unsupported AST root')
+    # Header implementations are not part of the selected source. References
+    # retain their name/type descriptors; project headers are audited separately.
+    tree['school_dependencies'] = dependencies
+    tree['school_dependency_identities'] = {value: format_file_identity(value) for value in dependencies}
+    kept, external_enums, external_bases = [], [], {}
+    for node in tree.get('inner', []):
+        if 'includedFrom' not in school_location(node) and not node.get('isImplicit'):
+            kept.append(node)
+            continue
+        # Keep semantic summaries needed by source expressions, not complete
+        # header implementations. Enum values and exception ancestry are inputs.
+        for child in school_nodes(node):
+            if child.get('kind') == 'EnumDecl':
+                external_enums.append(child)
+            elif child.get('kind') == 'CXXRecordDecl' and child.get('completeDefinition'):
+                external_bases[child.get('name')] = [
+                    base.get('type', {}).get('qualType', '') for base in child.get('bases', [])]
+    tree['school_external_enums'] = external_enums
+    tree['school_external_bases'] = external_bases
+    tree['inner'] = kept
     return tree, []
 
 
@@ -119,6 +147,20 @@ def school_integer(node, constants):
     return None
 
 
+def school_transliteration(name):
+    """Whole-word evidence; deliberately avoid broad substrings and dictionaries."""
+    words = re.findall(r'[a-z]+', re.sub(r'([a-z])([A-Z])', r'\1_\2', name).lower())
+    distinctive = {'vychislenie', 'vychislit', 'kolichestvo', 'znachenie', 'sleduyushchiy', 'predydushchiy'}
+    russian = distinctive | {'chislo', 'chisla', 'massiv', 'razmer', 'dlina', 'kornya', 'poluchit', 'dobavit', 'udalit'}
+    return bool(set(words) & distinctive) or len(set(words) & russian) >= 2
+
+
+def school_policy_nodes(tree):
+    for node in tree.get('school_external_enums', []):
+        yield from school_nodes(node)
+    yield from school_nodes(tree)
+
+
 class SchoolPolicy:
     def __init__(self, source, text, tree, cpp=None):
         self.source, self.text, self.tree = source, text, tree
@@ -127,18 +169,20 @@ class SchoolPolicy:
         self.code = school_mask(text)
         self.findings = []
         self.reviews = {}
+        self.justifications = {}
+        self.error_justifications = {}
         self.accepted = set()
         self.constants = {}
         self.labels = {}
         self.functions = []
         self.symbols = {node['id']: node for node in school_nodes(tree)
                         if 'id' in node and node.get('kind', '').endswith('Decl')}
-        self.record_bases = {
+        self.record_bases = {**tree.get('school_external_bases', {}), **{
             node.get('name'): [base.get('type', {}).get('qualType', '')
                                for base in node.get('bases', [])]
             for node in school_nodes(tree) if node.get('kind') == 'CXXRecordDecl'
-            and node.get('completeDefinition')}
-        for node in school_nodes(tree):
+            and node.get('completeDefinition')}}
+        for node in school_policy_nodes(tree):
             if node.get('kind') == 'EnumDecl':
                 value = -1
                 for member in node.get('inner', []):
@@ -193,17 +237,22 @@ class SchoolPolicy:
     def emit(self, rule, message, node=None, line=None, review=False, source=None):
         if rule not in SCHOOL_RULES:
             raise ValueError('unregistered school rule: ' + rule)
-        if review and rule in self.reviews and (source is None or source == self.source):
-            self.accepted.add(rule)
-            return
         if line is None:
             line = self.data[:self.offset(node or {})].count(b'\n') + 1
-        severity = 'review required' if review else 'error'
+        if not review and (rule, line) in self.error_justifications:
+            self.accepted.add(rule)
+            return
+        if review:
+            if rule not in SCHOOL_WARNING_RULES or rule == '4.4.4' and self.cpp:
+                return
+            if rule in self.reviews or (rule, line) in self.justifications:
+                self.accepted.add(rule)
+                return
         offset = self.offset(node or {})
         start = self.data.rfind(b'\n', 0, offset) + 1
         column = len(self.data[start:offset].decode('utf-8', errors='replace')) + 1 if node else 1
-        self.findings.append('{}:{}:{}: school {} {}: {}'.format(
-            source or self.source, line, column, rule, severity, message))
+        self.findings.append(FormatFinding(source or self.source, line, column, rule,
+                             'warning' if review else 'error', message))
 
     def callee_declaration(self, node):
         children = node.get('inner', [])
@@ -243,6 +292,15 @@ class SchoolPolicy:
         return identifier
 
     def read_reviews(self):
+        for token, marker, associated in format_annotations(self.text):
+            if marker[2] not in SCHOOL_RULES:
+                self.findings.append(FormatFinding(self.source, self.text[:token.start()].count('\n') + 1,
+                                     1, 'review-comment', 'error', 'unknown annotated rule'))
+                continue
+            if marker[1] == 'school-error-justified':
+                self.error_justifications[marker[2], associated] = marker[3] or ''
+            elif marker[1] == 'school-justified':
+                self.justifications[marker[2], associated] = marker[3] or ''
         for token in SCHOOL_LEXER.finditer(self.text):
             if not token.group('comment'):
                 continue
@@ -258,8 +316,8 @@ class SchoolPolicy:
                 elif len(match[2].strip()) < 12:
                     problem = 'provide a specific rationale of at least 12 characters'
                 if problem:
-                    self.findings.append('{}:{}:1: school-review error: {}'.format(
-                        self.source, line_number + index, problem))
+                    self.findings.append(FormatFinding(self.source, line_number + index, 1,
+                                         'review-comment', 'error', problem))
                     continue
                 for rule in (value.strip() for value in match[1].split(',')):
                     if rule not in SCHOOL_RULES:
@@ -269,8 +327,8 @@ class SchoolPolicy:
                     else:
                         self.reviews[rule] = match[2].strip()
                         continue
-                    self.findings.append('{}:{}:1: school-review error: {}'.format(
-                        self.source, line_number + index, problem))
+                    self.findings.append(FormatFinding(self.source, line_number + index, 1,
+                                         'review-comment', 'error', problem))
 
     def declarations(self, node, ancestors):
         kind, name = node.get('kind'), node.get('name', '')
@@ -282,17 +340,15 @@ class SchoolPolicy:
         if kind == 'CXXMethodDecl' and name.startswith('operator'):
             declaration = False  # Operator spellings are imposed by the language.
         if declaration and name and name not in ('main', 'argc', 'argv'):
-            forbidden = (not name.isascii() or name == 'vychislenie_kornya' or
-                         kind in ('FunctionDecl', 'CXXMethodDecl') and name == 'f')
-            if forbidden:
-                self.emit('3.2', 'use an English identifier; this spelling is explicitly prohibited by the policy.', node)
-            self.emit('3.2', 'confirm that "{}" is English or a conventional abbreviation, not transliteration.'.format(name),
-                      node, review=True)
-        if kind in ('FunctionDecl', 'VarDecl') and name and name != 'main':
-            global_decl = kind == 'FunctionDecl' or not any(
+            if not name.isascii():
+                self.emit('3.2', 'use ASCII identifier spelling.', node)
+            elif school_transliteration(name):
+                self.emit('3.2', 'replace the high-confidence transliterated identifier: ' + name, node)
+        if kind in ('FunctionDecl', 'CXXMethodDecl', 'VarDecl') and name and name != 'main':
+            global_decl = kind != 'VarDecl' or not any(
                 p.get('kind') in ('FunctionDecl', 'CXXMethodDecl', 'LambdaExpr') for p in ancestors)
-            if global_decl:
-                self.emit('3.1', 'justify the meaning and length of global name "{}".'.format(name), node, review=True)
+            if global_decl and len(name.strip('_')) < 3:
+                self.emit('3.1', 'use at least three characters for a function/global name: ' + name, node)
         constant = kind == 'EnumConstantDecl' or kind == 'VarDecl' and 'const' in typ and '*' not in typ
         if declaration and name:
             if constant:
@@ -310,16 +366,22 @@ class SchoolPolicy:
             elif re.search(r'[IlO0]{2,}', name):
                 self.emit('3.7', 'verify visual readability of ' + name, node, review=True)
         if kind in ('VarDecl', 'ParmVarDecl', 'FieldDecl') and name not in ('argc', 'argv') and name:
-            self.emit('3.5', 'confirm "{}" does not encode its type in a prefix or suffix.'.format(name),
-                      node, review=True)
+            prefix = re.match(r'^(p|ptr|i|int|str|dbl|double)_', name)
+            matches_type = prefix and (
+                prefix[1] in ('p', 'ptr') and '*' in typ or
+                prefix[1] in ('i', 'int') and re.search(r'\bint\b', typ) or
+                prefix[1] == 'str' and 'char' in typ and '*' in typ or
+                prefix[1] in ('dbl', 'double') and 'double' in typ)
+            if matches_type:
+                self.emit('3.5', 'identifier prefix matches its declared type: ' + name, node, review=True)
         if kind == 'FieldDecl' and name and self.cpp and (name.startswith('m_') or name.endswith('_')):
             self.emit('4.1', 'remove the m_ prefix or trailing underscore from this class field.', node)
         if kind == 'VarDecl':
             local = any(p.get('kind') in ('FunctionDecl', 'CXXMethodDecl', 'LambdaExpr') for p in ancestors)
-            if constant and re.search(r'\b(char|short|int|long|bool)\b', typ):
+            if constant and re.search(r'\b(char|short|int|long|bool)\b', typ) and school_integer(next(reversed(node.get('inner', [])), {}), self.constants) not in (-1, 2):
                 self.emit('5.2', 'define integer constants with enum, not const.', node)
             if not local and node.get('storageClass') != 'extern' and not constant:
-                self.emit('5.14', 'justify this global variable or pass state as a parameter.', node, review=True)
+                self.emit('5.14', 'mutable global state: consider passing this value as a parameter.', node, review=True)
             if local and '[' in typ and not re.search(r'\(\s*\*[^)]*\)\s*\[', typ):
                 dimensions = re.findall(r'\[([^]]*)\]', typ)
                 if any(not dimension.isdecimal() for dimension in dimensions):
@@ -520,7 +582,7 @@ class SchoolPolicy:
             constant_context = generated_in_header or any(n.get('kind') == 'EnumConstantDecl' or
                 n.get('kind') == 'VarDecl' and 'const' in n.get('type', {}).get('qualType', '') and
                 '*' not in n.get('type', {}).get('qualType', '') for n in ancestors)
-            if not constant_context and str(node.get('value')) not in ('0', '1'):
+            if not constant_context and str(node.get('value')) not in ('0', '1', '2'):
                 stderr_descriptor = False
                 for parent in reversed(ancestors):
                     if parent.get('kind') == 'CallExpr':
@@ -537,7 +599,7 @@ class SchoolPolicy:
             if not any(parent.get('kind') == 'EnumConstantDecl' for parent in ancestors):
                 self.emit('5.1', 'confirm -1 is an error sentinel; otherwise use a named constant.', node, review=True)
         if kind == 'EnumConstantDecl':
-            self.emit('5.2', 'verify this enum name describes its purpose rather than spelling a number.',
+            self.emit('5.2', 'enum name spells a number rather than its use: ' + node.get('name', ''),
                       node, review=True)
         if kind == 'UnaryOperator' and node.get('opcode') == '*' and inner:
             base = school_unwrap(inner[0])
@@ -693,7 +755,7 @@ class SchoolPolicy:
         for use in school_nodes(function):
             references = [n for n in school_nodes(use) if n.get('kind') == 'DeclRefExpr'
                           and n.get('referencedDecl', {}).get('id') == identifier]
-            if references and use.get('kind') == 'ReturnStmt':
+            if references and use.get('kind') == 'ReturnStmt' and any('*' in child.get('type', {}).get('qualType', '') for child in use.get('inner', [])):
                 escaping = True
             if references and use.get('kind') == 'CallExpr' and use is not node and self.callee(use) not in safe_calls:
                 escaping = True
@@ -744,8 +806,18 @@ class SchoolPolicy:
             linked = any(field.get('kind') == 'FieldDecl' and '*' in field.get('type', {}).get('qualType', '') and
                          re.search(r'\b' + re.escape(record_name) + r'\b', field.get('type', {}).get('qualType', ''))
                          for field in record.get('inner', []))
-            self.emit('5.9', 'use calloc for list/tree nodes; malloc is only allowed for a justified realloc-based array.',
-                      node, review=not linked)
+            function = next((parent for parent in ancestors if parent.get('kind') == 'FunctionDecl'), {})
+            grown = False
+            for call in school_nodes(function):
+                arguments = call.get('inner', [])[1:]
+                if call.get('kind') == 'CallExpr' and self.callee(call) == 'realloc' and arguments:
+                    grown = any(child.get('referencedDecl', {}).get('id') == owner.get('id')
+                                for child in school_nodes(arguments[0]))
+                    if grown:
+                        break
+            if linked or not grown:
+                self.emit('5.9', 'use calloc for list/tree nodes; no matching realloc was found for this allocation.',
+                          node, review=not linked)
         if name in SCHOOL_ALLOCATORS:
             size_index = 1 if name in ('calloc', 'realloc') else 0
             size = school_unwrap(args[size_index]) if len(args) > size_index else {}
@@ -763,25 +835,31 @@ class SchoolPolicy:
                 self.small_buffer(node, ancestors, owner)
 
     def source_rules(self):
+        measured_text = self.text
+        for token, _, _ in reversed(list(format_annotations(self.text))):
+            measured_text = measured_text[:token.start()] + ''.join(
+                '\n' if char == '\n' else ' ' for char in token[0]) + measured_text[token.end():]
+        measured_lines = measured_text.split('\n')
         for number, line in enumerate(self.text.split('\n'), 1):
             if any(ord(c) < 32 and c != '\r' or ord(c) == 127 for c in line):
                 self.emit('1.2' if '\t' in line else '1.1',
                           'replace control characters/tabs with spaces or escaped literal text.', line=number)
-            if len(line.rstrip('\r')) > 100:
+            if len(measured_lines[number - 1].rstrip()) > 100:
                 self.emit('2.2', 'split the literal/comment to at most 100 characters.', line=number)
         for match in SCHOOL_LEXER.finditer(self.text):
             comment = match.group('comment')
             if comment and re.search(r'\bclang-format\s+off\b', comment):
                 self.emit('2.1', 'remove clang-format off to validate school layout; use --clang for custom formatting.',
                           line=self.text[:match.start()].count('\n') + 1)
-            if comment and 'school-reviewed' not in comment and re.search(
+            if comment and not re.search(r'school-(?:reviewed|justified|warning)', comment) and re.search(
                     r'(?:\b(?:if|for|while|printf|return)\b.*[;{}]|\w+\s*=[^=].*;)', comment):
                 self.emit('5.12', 'remove commented-out debugging code or explain why this is documentation.',
                           line=self.text[:match.start()].count('\n') + 1, review=True)
         for number, line in enumerate(self.code.splitlines(), 1):
             macro = re.match(r'\s*#\s*define\s+\w+\s+(.+)', line)
             integer_macro = macro and re.search(r'\b(?:0[xX][\da-fA-F]+|\d+)[uUlL]*\b', macro[1]) and not re.search(r'\d\.\d|\d[eEpP][+-]?\d', macro[1])
-            if integer_macro:
+            exception = macro and re.fullmatch(r'[()\s]*(-\s*1|2)[uUlL]*[()\s]*', macro[1])
+            if integer_macro and not exception:
                 self.emit('5.2', 'replace integer #define with enum.', line=number)
             if re.match(r'\s*#\s*define\s+\w+\(', line):
                 self.emit('4.5.1', 'review function-like macros separately; prefer a typed function.',
@@ -931,8 +1009,10 @@ def school_label_layout(text, tree):
     return data.decode('utf-8')
 
 
-def school_apply_layout(source, text, clang):
-    tree, issues = school_parse(source, text, clang)
+def school_apply_layout(source, text, clang, tree=None):
+    issues = []
+    if tree is None:
+        tree, issues = school_parse(source, text, clang)
     if issues:
         return text, tree, issues
     candidate = school_parameter_layout(source, text, tree)
@@ -944,6 +1024,24 @@ def school_apply_layout(source, text, clang):
     if labeled != candidate:
         tree, issues = school_parse(source, labeled, clang)
     return labeled, tree, issues
+
+
+def school_needs_resource_analysis(source, text, tree):
+    policy = SchoolPolicy(source, text, tree)
+    calls = SCHOOL_ALLOCATORS | {'free', 'fopen', 'fdopen', 'freopen', 'fclose', 'open', 'close', 'socket', 'opendir', 'closedir', 'dup', 'popen', 'pclose'}
+    for node in school_nodes(tree):
+        if not policy.local(node):
+            continue
+        kind = node.get('kind')
+        if kind in ('CXXNewExpr', 'CXXDeleteExpr', 'ArraySubscriptExpr'):
+            return True
+        if kind == 'UnaryOperator' and node.get('opcode') == '*' or kind == 'MemberExpr' and node.get('isArrow'):
+            return True
+        if kind == 'CallExpr' and policy.callee(node) in calls:
+            return True
+        if kind == 'ReturnStmt' and any('*' in child.get('type', {}).get('qualType', '') for child in node.get('inner', [])):
+            return True
+    return False
 
 
 SCHOOL_ANALYZER_CAPABILITIES = {}
@@ -987,8 +1085,10 @@ def school_resource_analysis(source, candidate_path, input_path, clang, include_
             text=True, capture_output=True)
     if result.returncode:
         raise CheckSetupError(str(source) + ': school analyzer failed:\n' + result.stderr)
-    resource_warning = re.search(r'warning:.*\[(?:(?:alpha\.)?unix\.(?:Malloc|Stream)|core\.(?:NullDereference|StackAddressEscape)|cplusplus\.NewDelete(?:Leaks)?)\]', result.stderr)
-    if resource_warning is None:
-        return []
-    diagnostic = result.stderr.replace(str(candidate_path), str(source))
-    return [str(source) + ': school 5.17 error: fix the resource/control-flow diagnostic:\n' + diagnostic]
+    pattern = re.compile(r'^(.*?):(\d+):(\d+): warning:\s*(.*?)\s*\[((?:alpha\.)?unix\.(?:Malloc|Stream)|core\.(?:NullDereference|StackAddressEscape)|cplusplus\.NewDelete(?:Leaks)?)\]', re.M)
+    findings = []
+    for match in pattern.finditer(result.stderr):
+        owner = source if Path(match[1]) == Path(candidate_path) else Path(match[1])
+        findings.append(FormatFinding(owner, int(match[2]), int(match[3]), '5.17', 'error',
+                        match[4] + ' [' + match[5] + ']'))
+    return findings

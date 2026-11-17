@@ -36,18 +36,18 @@ class SchoolPolicyTest(unittest.TestCase):
 
     def test_naming_rules_and_review_cannot_hide_mechanical_error(self):
         cases = [
-            ('3.1', 'int calc_sqrt(void) { return 0; }', 'review required'),
-            ('3.2', 'int main(void) { int vychislenie = 0; return vychislenie; }', 'review required'),
+            ('3.1', 'int fn(void) { return 0; }', 'error'),
+            ('3.2', 'int main(void) { int vychislenie = 0; return vychislenie; }', 'error'),
             ('3.3', 'enum { red = 0 }; int main(void) { return red; }', 'error'),
             ('3.4', 'int main(void) { int BadName = 0; return BadName; }', 'error'),
-            ('3.5', 'int main(void) { int p_count = 0; return p_count; }', 'review required'),
+            ('3.5', 'int main(void) { int value = 0; int *p_count = &value; return *p_count; }', 'warning'),
             ('3.6', 'struct node { int value; }; int main(void) { return 0; }', 'error'),
             ('3.7', 'int main(void) { int l = 0; return l; }', 'error'),
         ]
         for rule, code, category in cases:
             with self.subTest(rule=rule):
                 self.assertTrue(self.has_rule(self.check(code), rule, category))
-                if category == 'review required':
+                if category == 'warning':
                     self.assertFalse(self.has_rule(self.check(code, reviewed=(rule,)), rule))
                 else:
                     findings = self.check(code, reviewed=(rule,))
@@ -55,7 +55,7 @@ class SchoolPolicyTest(unittest.TestCase):
 
     def test_teacher_exception_only_applies_to_functions(self):
         code = 'int Calc(void) { return 0; } int main(void) { return Calc(); }'
-        self.assertTrue(self.has_rule(self.check(code), '3.4', 'review required'))
+        self.assertTrue(self.has_rule(self.check(code), '3.4', 'warning'))
         self.assertFalse(self.has_rule(self.check(code, reviewed=('3.4',)), '3.4'))
         code = 'int main(void) { int Value = 0; return Value; }'
         self.assertTrue(self.has_rule(self.check(code, reviewed=('3.4',)), '3.4', 'error'))
@@ -94,7 +94,7 @@ class SchoolPolicyTest(unittest.TestCase):
         backward = 'int main(void) { again: if (0) { goto again; } return 0; }'
         forward = 'int main(void) { goto done; done: return 0; }'
         self.assertTrue(self.has_rule(self.check(backward), '4.6.11', 'error'))
-        self.assertTrue(self.has_rule(self.check(forward), '4.6.11', 'review required'))
+        self.assertTrue(self.has_rule(self.check(forward), '4.6.11', 'warning'))
         self.assertFalse(self.has_rule(self.check(forward, reviewed=('4.6.11',)), '4.6.11'))
 
     def test_pointer_notation_and_parentheses(self):
@@ -112,13 +112,13 @@ class SchoolPolicyTest(unittest.TestCase):
             'int main(void) { int value = 0; return sizeof(value); }'), '4.7.9'))
 
     def test_literal_contexts(self):
-        self.assertTrue(self.has_rule(self.check('int main(void) { return 2; }'), '5.1', 'error'))
+        self.assertTrue(self.has_rule(self.check('int main(void) { return 3; }'), '5.1', 'error'))
         self.assertFalse(self.has_rule(self.check(
             '#include <unistd.h>\nint main(void) { write(2, "", 0); return 0; }'), '5.1'))
         self.assertFalse(self.has_rule(self.check(
             'enum { STATUS = 2 }; int main(void) { return STATUS; }'), '5.1'))
         self.assertTrue(self.has_rule(self.check(
-            '#define STATUS 2\nint main(void) { return STATUS; }'), '5.2', 'error'))
+            '#define STATUS 3\nint main(void) { return STATUS; }'), '5.2', 'error'))
         self.assertFalse(self.has_rule(self.check(
             'int main(void) { const char *text = ""; return text[0]; }'), '5.2'))
 
@@ -132,12 +132,12 @@ class SchoolPolicyTest(unittest.TestCase):
         code = '#include <string.h>\nint main(void) { char *(*copy)(char *, const char *) = strcpy; char data[1]; copy(data, ""); return 0; }'
         self.assertTrue(self.has_rule(self.check(code), '5.8', 'error'))
         code = 'void run(void (*operation)(void)) { operation(); return; }'
-        self.assertTrue(self.has_rule(self.check(code), '5.8', 'review required'))
+        self.assertFalse(self.has_rule(self.check(code), '5.8'))
 
     def test_output_review_and_known_newlines(self):
         code = '#include <stdio.h>\nint main(void) { printf("value"); return 0; }'
         findings = self.check(code)
-        self.assertTrue(self.has_rule(findings, '5.4', 'review required'))
+        self.assertFalse(self.has_rule(findings, '5.4'))
         self.assertTrue(self.has_rule(findings, '5.6', 'error'))
         code = '#include <stdio.h>\nint main(void) { printf("value\\n"); return 0; }'
         self.assertFalse(self.has_rule(self.check(code), '5.6'))
@@ -158,7 +158,7 @@ class SchoolPolicyTest(unittest.TestCase):
         code = '#include <stdlib.h>\nint main(void) { int value = 0; value++; char *buffer = 0; free(buffer); return value; }'
         self.assertTrue(self.has_rule(self.check(code), '5.17', 'error'))
         code = '#include <stdlib.h>\nint main(void) { char *buffer = 0; free(buffer); return 0; }'
-        self.assertTrue(self.has_rule(self.check(code), '5.17', 'review required'))
+        self.assertFalse(self.has_rule(self.check(code), '5.17'))
 
     def test_vla_multidimensional_and_parameter_exception(self):
         for array in ('values[size]', 'values[size][4]'):
@@ -178,7 +178,7 @@ class SchoolPolicyTest(unittest.TestCase):
         header = '#ifndef MODULE_H\n#define MODULE_H\nint run(void);\n#endif\n'
         findings = self.check(code, 'module.c', {'module.h': header, 'Makefile': 'all:\nclean:\n'})
         self.assertFalse(self.has_rule(findings, '6.2'))
-        self.assertTrue(self.has_rule(findings, '6.6', 'review required'))
+        self.assertFalse(self.has_rule(findings, '6.6'))
         findings = self.check('int run(void) { return 0; }', 'module.c')
         self.assertTrue(self.has_rule(findings, '6.3', 'error'))
         findings = self.check('int main(void) { return 0; }')
@@ -223,8 +223,8 @@ class SchoolPolicyTest(unittest.TestCase):
         self.assertEqual((self.root / 'victim').read_text(), 'keep')
 
     def test_review_markers_in_strings_do_not_acknowledge_rules(self):
-        code = 'int main(void) { const char *text = "// school-reviewed 3.2: all names verified"; return text[0]; }'
-        self.assertTrue(self.has_rule(self.check(code), '3.2', 'review required'))
+        code = 'int main(void) { int vychislenie = 0; const char *text = "// school-reviewed 3.2: all names verified"; return text[vychislenie]; }'
+        self.assertTrue(self.has_rule(self.check(code), '3.2', 'error'))
         findings = self.check('int main(void) { return 0; }', reviewed=('1.1',))
         self.assertTrue(any('cannot waive' in finding for finding in findings))
 

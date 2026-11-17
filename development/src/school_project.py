@@ -88,7 +88,7 @@ class SchoolProjectAudit:
         text = self.policy.text if path == self.policy.source else path.read_text(encoding='utf-8')
         tree, issues = school_parse(path, text, self.clang, cpp=self.policy.cpp)
         if issues:
-            self.policy.findings.extend(issues)
+            self.policy.findings.append(FormatFinding(path, 1, 1, 'frontend', 'error', '\n'.join(issues)))
             return
         context = self.policy if path == self.policy.source else SchoolPolicy(path, text, tree, cpp=self.policy.cpp)
         self.headers[path] = context

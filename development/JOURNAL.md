@@ -169,3 +169,13 @@ The updated reference job passed all school contracts on GNU 11.3.0. A final mul
 - The local installation was updated after backup. Personal school formatting, workspace/output routing and unrelated profile settings were preserved; canonical school flags were synchronized. Installed formatting and native school-profile execution passed.
 - GitHub supplied no macOS ARM runner under either documented standard label. That hosted job remains queued and unverified; the complete archive suite passed locally on Apple Silicon. No checks were disabled or marked successful to hide the infrastructure limitation.
 - Rollback: restore the locally saved pre-upgrade script, which contains its original settings. Published older releases remain unchanged.
+
+## 1.5.1 — Interactive review and formatter performance
+
+Implemented a structured error-first repair loop, then warning review. accept rechecks actual edits; deny stops on errors; justified stores a source-local, severity-specific exception; comment stores text without suppressing. Batch aliases, empty justifications, temporary annotations and initial/final JSON reports are covered. Strict compilation ignores warnings, opens the full formatter on errors in a terminal and always interrupts the original build.
+
+Removed blanket semantic proof obligations and retained observable rule evidence. Values 2/-1 are exempt from enum conversion. Added conservative whole-word transliteration checks and explicit forbidden-name coverage. Removed the --make-prettier action; format is the entry point, including format stress for multiple roles.
+
+Rewrote formatting documentation and the numbered architecture table. Added a dependency-aware private result cache with source/tool/policy/environment keys, negative project dependencies, bounded storage and --no-cache. Avoided linking, unnecessary resource analysis and repeated unchanged AST parsing. Retained external enum values and exception ancestry while pruning header implementations.
+
+Verification checkpoint: the pre-cache full suite passed 735 tests (one reference-version skip). The latest focused formatting/review/PTY/strict/cache suite passed 40 tests. Final full/archive verification and current CI are pending. On this Mac, a standard-vector example measured about 14.9 s before changes, about 6.3 s cold after changes and 0.26 s cached; the C example measured 0.60 s before and 0.17 s cached. These are local sample measurements, not judge-time guarantees.

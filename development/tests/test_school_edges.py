@@ -36,9 +36,9 @@ class SchoolPolicyEdgeTest(unittest.TestCase):
         findings = self.case.check(code, 'main.cpp', reviewed=('3.2', '3.5'))
         self.assertFalse(self.case.has_rule(findings, '3.4'), findings)
 
-    def test_T5_1_minus_one_requires_error_sentinel_rationale(self):
+    def test_T5_1_minus_one_needs_no_rationale(self):
         code = 'int error_code(void) { return -1; } int main(void) { return 0; }'
-        self.assertTrue(self.case.has_rule(self.case.check(code), '5.1', 'review required'))
+        self.assertFalse(self.case.has_rule(self.case.check(code), '5.1'))
         self.assertFalse(self.case.has_rule(self.case.check(code, reviewed=('5.1',)), '5.1'))
 
     def test_T5_2_parenthesized_integer_macro(self):
@@ -75,4 +75,4 @@ class SchoolPolicyEdgeTest(unittest.TestCase):
         code = 'int main(void) { return __LINE__ != 0; }'
         findings = self.case.check(code)
         self.assertFalse(self.case.has_rule(findings, '5.1', 'error'), findings)
-        self.assertTrue(self.case.has_rule(findings, '4.5.1', 'review required'), findings)
+        self.assertTrue(self.case.has_rule(findings, '4.5.1', 'warning'), findings)

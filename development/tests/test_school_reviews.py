@@ -1,8 +1,8 @@
-"""Review obligations are explicit, file-scoped and never waive proven violations."""
+"""Only source-local, severity-specific exceptions mute concrete findings."""
 import shutil
 import unittest
-import test_school_format as cli_cases
 import test_school_policy as policy_cases
+import test_school_format as cli_cases
 
 
 @unittest.skipUnless(shutil.which('clang'), 'needs Clang')
@@ -12,84 +12,72 @@ class SchoolReviewPolicyTest(unittest.TestCase):
         self.case.setUp()
         self.addCleanup(self.case.doCleanups)
 
-    def test_missing_and_specific_review(self):
-        code = 'int main(void) { int count = 0; return count; }'
-        findings = self.case.check(code)
-        self.assertTrue(self.case.has_rule(findings, '3.2', 'review required'))
-        reviewed = self.case.check(code, reviewed=('3.2', '3.5', '5.7'))
-        self.assertFalse(reviewed, reviewed)
+    def test_ordinary_names_and_unknown_meaning_need_no_review(self):
+        findings = self.case.check('int calculate(void) { int count = 0; return count; }')
+        self.assertFalse(any(item.severity == 'warning' for item in findings), findings)
 
-    def test_known_english_violations_cannot_be_reviewed_away(self):
-        for name in ('f', 'vychislenie_kornya', 'переменная'):
+    def test_known_name_violations_remain_errors_with_legacy_reviews(self):
+        for name, rule in (('f', '3.1'), ('vychislenie_kornya', '3.2'), ('переменная', '3.2')):
             with self.subTest(name=name):
                 code = 'int ' + name + '(void) { return 0; } int main(void) { return ' + name + '(); }'
                 findings = self.case.check(code, reviewed=('3.1', '3.2', '3.4'))
-                self.assertTrue(self.case.has_rule(findings, '3.2', 'error'))
+                self.assertTrue(self.case.has_rule(findings, rule, 'error'))
 
-    def test_invalid_markers_fail_even_without_review_obligations(self):
-        markers = [
-            '// school-reviewed 99.1: This number is not a known rule.',
-            '// school-reviewed 3.2: checked',
-            '// school-reviewed 1.1: Controls cannot be approved by the author.',
-            '// school-reviewed 3.2 no colon or reason',
-        ]
+    def test_invalid_legacy_markers_have_structured_errors(self):
+        markers = ['// school-reviewed 99.1: This is an unknown rule.',
+                   '// school-reviewed 3.2: checked',
+                   '// school-reviewed 1.1: Controls cannot be approved by a legacy marker.',
+                   '// school-reviewed 3.2 no colon']
         for marker in markers:
-            with self.subTest(marker=marker):
-                findings = self.case.check(marker + '\nint main(void) { return 0; }')
-                self.assertTrue(any('school-review error:' in item for item in findings), findings)
+            findings = self.case.check(marker + '\nint main(void) { return 0; }')
+            self.assertTrue(any(item.rule == 'review-comment' and item.severity == 'error'
+                                for item in findings), findings)
 
-    def test_block_comment_review_and_literal_spoof(self):
-        code = ('/*\n * school-reviewed 3.2: count denotes the number of items.\n'
-                ' * school-reviewed 3.5: count contains no Hungarian type marker.\n'
-                ' */\nint main(void) { int count = 0; if (count) { return 1; } return 0; }')
-        findings = self.case.check(code)
-        self.assertFalse(self.case.has_rule(findings, '3.2'))
-        self.assertFalse(self.case.has_rule(findings, '3.5'))
-        self.case.test_review_markers_in_strings_do_not_acknowledge_rules()
+    def test_literal_cannot_create_an_exception(self):
+        code = ('int main(void) { const char *text = "/* school-error-justified 3.4 */";'
+                ' int BadName = 0; return text[BadName]; }')
+        self.assertTrue(self.case.has_rule(self.case.check(code), '3.4', 'error'))
 
-    def test_source_cannot_review_a_header_requirement(self):
+    def test_warning_justification_does_not_mute_error(self):
+        code = 'int main(void) {\n/* school-justified 3.4 */\nint BadName = 0; return BadName;\n}'
+        self.assertTrue(self.case.has_rule(self.case.check(code), '3.4', 'error'))
+        code = code.replace('school-justified', 'school-error-justified')
+        self.assertFalse(self.case.has_rule(self.case.check(code), '3.4'))
+
+    def test_source_cannot_justify_a_header_error(self):
+        header = 'int calculate(void);\n'
+        code = '/* school-error-justified 6.2 */\n#include "module.h"\nint main(void) { return 0; }'
+        findings = self.case.check(code, headers={'module.h': header})
+        errors = [item for item in findings if item.rule == '6.2' and item.severity == 'error']
+        self.assertTrue(errors, findings)
+        self.assertTrue(all('module.h' in item.source for item in errors))
+
+    def test_unknown_project_obligations_do_not_emit_blanket_warnings(self):
+        code = '#include "module.h"\nint main(void) { return 0; }'
         header = '#pragma once\n#include <stdio.h>\n#if defined(BUFSIZ)\nvoid consume(FILE *stream);\n#endif\n'
-        source = '#include "module.h"\nint main(void) { return 0; }'
-        findings = self.case.check(source, headers={'module.h': header}, reviewed=('6.5',))
-        pending = [item for item in findings if 'school 6.5 review required:' in item]
-        self.assertTrue(pending, findings)
-        self.assertTrue(all('module.h:' in item for item in pending))
-        reviewed_header = '// school-reviewed 6.5: FILE in this public interface requires stdio under the guard.\n' + header
-        findings = self.case.check(source, headers={'module.h': reviewed_header})
-        self.assertFalse(self.case.has_rule(findings, '6.5', 'review required'), findings)
+        findings = self.case.check(code, headers={'module.h': header})
+        self.assertFalse(any(item.severity == 'warning' and item.rule.startswith('6.') for item in findings), findings)
 
 
-@unittest.skipUnless(shutil.which('clang-format') and shutil.which('clang'), 'needs school tools')
+@unittest.skipUnless(shutil.which('clang') and shutil.which('clang-format'), 'needs formatters')
 class SchoolReviewCliTest(unittest.TestCase):
     def setUp(self):
         self.case = cli_cases.SchoolFormatTest('runTest')
         self.case.setUp()
         self.addCleanup(self.case.doCleanups)
 
-    def test_pending_review_allows_layout_but_blocks_success_until_resolved(self):
-        source = self.case.source
-        code = 'int main(void){int count=0;if(count)return 1;return 0;}'
-        source.write_text(code)
-        result = self.case.invoke('--school', source)
-        self.assertEqual(result.returncode, 1, result.stderr)
-        self.assertIn('review required', result.stderr)
-        self.assertNotEqual(source.read_text(), code)
-        comments = ('// school-reviewed 3.2: count is the English count of items.\n'
-                    '// school-reviewed 3.5: count has no type-encoding prefix or suffix.\n')
-        source.write_text(comments + code)
-        result = self.case.invoke('--school', source)
+    def test_plain_program_formats_without_name_assertions(self):
+        self.case.source.write_text('int main(void){int count=0;if(count)return 1;return 0;}')
+        result = self.case.invoke('--school', self.case.source)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn('if (count) {', source.read_text())
-        checked = self.case.invoke('--school', source, '--check')
+        self.assertNotIn('review', result.stderr)
+        self.assertIn('if (count) {', self.case.source.read_text())
+        checked = self.case.invoke('--school', self.case.source, '--check')
         self.assertEqual(checked.returncode, 0, checked.stderr)
 
-    def test_unsafe_call_and_real_leak_stay_errors(self):
-        source = self.case.source
-        code = ('// school-reviewed 5.8: This assertion cannot authorize strcpy.\n'
-                '#include <string.h>\nint main(void) { char data[1]; strcpy(data, ""); return 0; }')
-        source.write_text(code)
-        result = self.case.invoke('--school', source)
+    def test_unsafe_call_and_real_leak_are_errors_without_explicit_exception(self):
+        self.case.source.write_text('#include <string.h>\nint main(void) { char data[1]; strcpy(data, ""); return 0; }')
+        result = self.case.invoke('--school', self.case.source)
         self.assertEqual(result.returncode, 1, result.stderr)
-        self.assertIn('5.8 error:', result.stderr)
-        self.assertNotEqual(source.read_text(), code)
+        self.assertIn('5.8 error', result.stderr)
         self.case.test_resource_analyzer_finds_leak_despite_author_review()

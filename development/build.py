@@ -2,6 +2,7 @@
 """Build the single installable script in a workspace or source release."""
 from pathlib import Path
 import os
+import hashlib
 import subprocess
 import tempfile
 import importlib.util
@@ -16,7 +17,7 @@ RELEASE = ROOT.parent.parent / 'Versions' / VERSION if ROOT.parent.name == 'Work
 ZSH_MODULES = ('bootstrap.zsh', 'options.zsh', 'paths.zsh', 'languages.zsh', 'toolchain.zsh',
                'profiles.zsh', 'artifacts.zsh', 'history.zsh', 'dispatch.zsh', 'launcher.zsh')
 PYTHON_MODULES = ('memory.py', 'runtime.py', 'measurements.py', 'cases.py', 'test_layout.py', 'bundles.py', 'comparison.py', 'reporting.py',
-                  'checking.py', 'stress.py', 'minimization.py', 'companion.py', 'school_format.py', 'school_policy.py', 'school_project.py', 'school_safety.py', 'integrations.py', 'settings_schema.py', 'settings.py',
+                  'checking.py', 'stress.py', 'minimization.py', 'companion.py', 'format_review.py', 'format_cache.py', 'school_format.py', 'school_policy.py', 'school_project.py', 'school_safety.py', 'integrations.py', 'settings_schema.py', 'settings.py',
                   'preferences.py', 'bridge.py')
 
 
@@ -27,6 +28,8 @@ def build():
     shell = shell.replace('# Source: bootstrap.zsh\n', '', 1)
     support = '\n\n'.join('# Source: ' + name + '\n' + (ROOT / 'src' / name).read_text()
                            for name in PYTHON_MODULES)
+    engine_id = hashlib.sha256(support.encode('utf-8')).hexdigest()
+    support = support.replace('@SCHOOL_ENGINE_ID@', engine_id)
     support = re.sub(r'# @SOURCE_IMPORT_BEGIN@\n.*?# @SOURCE_IMPORT_END@\n', '', support, flags=re.S)
     spec = importlib.util.spec_from_file_location('cp_run_schema', ROOT / 'src/settings_schema.py')
     schema = importlib.util.module_from_spec(spec)

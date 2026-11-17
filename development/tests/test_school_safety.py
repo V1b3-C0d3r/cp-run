@@ -96,17 +96,16 @@ class SchoolPracticalCliTest(unittest.TestCase):
         self.case.setUp()
         self.addCleanup(self.case.doCleanups)
 
-    def test_real_ugly_code_is_beautified_while_reviews_remain(self):
+    def test_real_ugly_code_is_beautified_without_unverifiable_reviews(self):
         text = '#include <stdio.h>\nint main(){int n=0;scanf("%d",&n);if(n)printf("%d\\n",n);return 0;}'
         self.case.source.write_text(text)
         result = self.case.invoke('--school', self.case.source)
-        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertEqual(result.returncode, 0, result.stderr)
         actual = self.case.source.read_text()
         self.assertNotEqual(actual, text)
         self.assertIn('main(void)', actual)
         self.assertIn('    if (n) {', actual)
-        self.assertIn('review required', result.stderr)
-        self.assertIn('layout applied', result.stderr)
+        self.assertNotIn('review required', result.stderr)
         self.assertIn('scanf("%d", &n);', actual)
 
     def test_syntax_error_never_overwrites_source(self):

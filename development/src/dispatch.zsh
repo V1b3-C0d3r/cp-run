@@ -33,6 +33,7 @@ main() {
     local test_folder=$DEFAULT_TEST_FOLDER
     local bundle_format=legacy bundle_stream=both report_tests=$DEFAULT_REPORT_TESTS
     local minimize= validator=
+    local format_cache=1 strict_formatter= review=0 annotate=0 review_report=
     local format_mode=$FORMAT_MODE prettier= companion_port=$COMPANION_PORT companion_wait=$COMPANION_WAIT
     local -i doctor_requested=0 interpreter_given=0 compiler_given=0
     local -i data_controls=0 layout_controls=0 companion_controls=0 report_controls=0 bundle_given=0
@@ -64,6 +65,17 @@ main() {
         config=(interpreter "$interpreter_choice" native_formatter "$NATIVE_FORMATTER" python_formatter "$PYTHON_FORMATTER")
         python_action doctor; return $?
     fi
+    if (( ! format_cache )); then
+        [[ -n $prettier || -n $strict_formatter ]] || fail '--no-cache requires format or --strict-format'
+    fi
+    if (( review || annotate )); then
+        [[ -n $prettier ]] || fail '--review and --annotate require format'
+    fi
+    if (( annotate )); then (( review )) || fail '--annotate requires --review'; fi
+    if [[ -n $review_report && -z $prettier && -z $strict_formatter ]]; then
+        fail '--report requires format or --strict-format'
+    fi
+    [[ -z $prettier || -z $strict_formatter ]] || fail '--strict-format is a compilation option'
     # Formatting is a terminal action, before artifact planning or any compiler
     # lookup. A successful formatter can never fall through into preparation/run.
     if [[ -n $prettier ]]; then
@@ -89,7 +101,9 @@ main() {
                 workspace_file_path "$role"; protected_files+=("${value:A}")
             done
         fi
-        config=(format_mode "$format_mode" prettier "$prettier" native_formatter "$NATIVE_FORMATTER" python_formatter "$PYTHON_FORMATTER")
+        if [[ -n $review_report ]]; then workspace_file_path "$review_report"; review_report=$value; fi
+        config=(format_mode "$format_mode" prettier "$prettier" native_formatter "$NATIVE_FORMATTER" python_formatter "$PYTHON_FORMATTER"
+                review "$review" annotate "$annotate" review_report "$review_report" overwrite "$overwrite" script "$SCRIPT_PATH" format_cache "$format_cache")
         python_action format; return $?
     fi
     if [[ -n $transfer_action ]]; then
@@ -112,7 +126,7 @@ main() {
     if (( version_requested )); then printf '%s %s\n' "$PROGRAM" "$VERSION"; resolve_compiler; "$compiler" --version; return $?; fi
 
     (( ! companion_controls )) || [[ $action == companion ]] || fail '--port/--wait require companion'
-    (( ! data_controls )) || [[ $action == pack || $action == unpack || $action == companion ]] || fail 'import controls require pack/unpack/companion'
+    (( ! data_controls )) || [[ $action == pack || $action == unpack || $action == companion || -n $strict_formatter && -n $review_report ]] || fail 'import controls require pack/unpack/companion'
     (( ! layout_controls )) || (( mult )) || [[ $action == pack || $action == unpack || $action == companion ]] || fail 'layout options require mult/pack/unpack/companion'
     (( ! report_controls )) || [[ $action == test || $action == stress ]] || fail '--report-tests requires test/stress'
     (( ! stop_on_failure )) || [[ $action == stress ]] || fail '--stop-on-failure requires stress'
@@ -273,6 +287,17 @@ main() {
             done
         done
         protected_files=("${sources[@]}" "${artifacts[@]}")
+    fi
+    if [[ -n $strict_formatter ]]; then
+        (( ! binary_mode )) || fail '--strict-format needs source files'
+        local -a all_protected=("${protected_files[@]}")
+        protected_files=("${sources[@]}" "${artifacts[@]}" "$input_file" "$answer_file" "$result_file")
+        if [[ -n $review_report ]]; then workspace_file_path "$review_report"; review_report=$value; fi
+        config=(format_mode "$strict_formatter" prettier check native_formatter "$NATIVE_FORMATTER" python_formatter "$PYTHON_FORMATTER"
+                review_report "$review_report" overwrite "$overwrite" script "$SCRIPT_PATH" format_cache "$format_cache" format_source_count "${#sources}")
+        for (( value=1; value<=${#sources}; ++value )); do config[format_source_$value]=${sources[value]}; done
+        python_action strict-format || return $?
+        protected_files=("${all_protected[@]}")
     fi
     output_abs=${artifacts[1]}
     config=(operation "$action" auto "$auto" mult "$mult" workspace "${workspace:-$cwd}" destination "$destination"

@@ -47,8 +47,9 @@ Language and build:
                           Auto in configure: redirect saved input/output files
                           Auto accepts optional IN [OUT] operands after -f
   format [--clang|--school] [FILE] [--check]  Format source and stop
-  --make-prettier         Alias for format
-  --make-prettier=check   Check formatting without editing; never compile or run
+  --review --annotate     Review findings; optionally annotate accepted warnings
+  --report=FILE           Export formatter findings and decisions
+  --strict-format[=MODE]  Require error-free formatting before compilation
 
 Routing and checking:
   --wsp-dir=DIR           Workspace path; default ./; value is required
@@ -177,7 +178,9 @@ parse_cli() {
                     bundle_stream=${arg#*=}
                     case "$bundle_stream" in in|ans) ;; *) fail 'pack/unpack accepts =in, =ans, or no selector for both' ;; esac
                 fi ;;
-            format) action=ordinary; prettier=format; shift ;;
+            format)
+                action=ordinary; prettier=format; shift
+                if [[ ${1-} == stress ]]; then action=stress; shift; fi ;;
             compile|run|stress|companion|configure) action=$1; shift ;;
             debug|debug=*)
                 action=debug; value=${1#debug}; value=${value#=}
@@ -302,6 +305,15 @@ parse_cli() {
                 else minimize=sequence; fi
                 case "$minimize" in sequence|lines|cases) ;; *) fail '--minimize accepts sequence, lines or cases' ;; esac ;;
             --validator|--validator=*) take_value "$@"; (( ! consumed )) || shift; validator=$value ;;
+            --strict-format|--strict-format=*|--sctrict-format|--sctrict-format=*)
+                strict_formatter=$FORMAT_MODE
+                [[ $arg != *=* || -z ${arg#*=} ]] || strict_formatter=${arg#*=}
+                case $strict_formatter in clang|school) ;; *) fail '--strict-format accepts clang or school' ;; esac ;;
+            --no-cache) format_cache=0 ;;
+            --review) review=1 ;;
+            --annotate|--anotate) annotate=1; review=1 ;;
+            --report|--report=*)
+                take_value "$@"; (( ! consumed )) || shift; review_report=$value ;;
             --doctor) doctor_requested=1 ;;
             --clang|--school)
                 [[ -n $prettier ]] || fail 'use format --clang or format --school'
@@ -309,11 +321,7 @@ parse_cli() {
             --check)
                 [[ -n $prettier ]] || fail '--check requires format'
                 prettier=check ;;
-            --make-prettier|--make-prettier=*)
-                if [[ $arg == *=* ]]; then
-                    [[ ${arg#*=} == check ]] || fail '--make-prettier accepts check; omit its value to format'
-                    prettier=check
-                else prettier=format; fi ;;
+            --make-prettier|--make-prettier=*) fail "unknown option: $arg" ;;
             --port|--port=*|--wait|--wait=*)
                 take_value "$@"; (( ! consumed )) || shift
                 companion_controls=1
