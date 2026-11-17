@@ -52,7 +52,7 @@ class School151PolicyTest(unittest.TestCase):
             ('struct Value { void reset() { delete this; } };', True),
             ('struct Value { int count = 0; auto closure() { return [this] { return count; }; } };', True),
             ('struct Value { int count = 0; ~Value() {} int stop() { this->~Value(); return count; } };', True),
-            ('#include <vector>\\nstruct Value { std::vector<int> data; int get() { return data[0]; } };', True),
+            ('#include <vector>\nstruct Value { std::vector<int> data; int get() { return data[0]; } };', True),
         ):
             tree, errors = engine.school_parse(source, code, self.case.clang)
             self.assertFalse(errors, errors)
